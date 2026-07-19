@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+
+<html lang="de">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width,initial-scale=1" name="viewport"/>
+<title>BorgBackup Manager</title>
+<meta content="#174c46" name="theme-color"/>
+<link href="/static/favicon.svg" rel="icon" type="image/svg+xml"/>
+<script src="/static/theme-init.js?v=1.0.43"></script>
+<link href="/static/style.css?v=1.0.43" rel="stylesheet"/>
+</head>
+<body>
+<div class="login-shell" id="login">
+<form class="login-card" id="login-form">
+<img alt="" class="brand-mark" src="/static/favicon.svg"/>
+<p class="eyebrow">BorgBackup Manager</p>
+<h1>Zentrale für deine Backups.</h1>
+<label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
+<label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
+<button type="submit">Verwaltung öffnen</button>
+<p class="login-version">Version <b id="login-version">v1.0.43</b></p>
+<p class="error" id="login-error"></p>
+</form>
+</div>
+<div class="app-shell hidden" id="app">
+<aside>
+<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
+<nav id="main-navigation">
+<span class="nav-label">Betrieb</span>
+<button class="active" data-view="dashboard">Übersicht</button>
+<button data-view="jobs">Backup-Jobs</button>
+<button data-view="schedules">Zeitpläne</button>
+<button data-view="runs">Ausführungen</button>
+<span class="nav-label">Daten</span>
+<button data-admin-only="" data-view="archives">Archive</button>
+<button data-admin-only="" data-view="restore">Wiederherstellen</button>
+<button data-admin-only="" data-view="repositories">Repositories</button>
+<span class="nav-label">Infrastruktur</span>
+<button data-admin-only="" data-view="hosts">Geräte</button>
+<button data-admin-only="" data-view="backups">Manager-Backup</button>
+<button data-admin-only="" data-view="settings">Einstellungen</button>
+<button data-admin-only="" data-view="users">Benutzer</button>
+<span class="nav-label">Information</span>
+<button data-view="help">Anleitung</button>
+<button data-view="releases">Release Notes</button>
+</nav>
+<div class="aside-foot"><span class="status-dot"></span> Dienst erreichbar <button class="link" data-target-view="releases" id="version-link">v…</button><span class="current-user" id="current-user"></span><button class="link" id="user-preferences">Darstellung &amp; Sprache</button><button class="link" id="change-password">Passwort ändern</button><button class="link" id="logout">Abmelden</button></div>
+</aside>
+<main>
+<header><div><p class="eyebrow">Kontrollzentrum</p><h1 id="page-title">Übersicht</h1></div><div class="header-actions"><div class="task-status" id="task-status"><button aria-live="polite" class="sync-state idle" id="sync-state" type="button"><span aria-hidden="true" class="sync-indicator"></span><span>Aktuell</span></button></div><button aria-label="Farbschema wechseln" class="secondary" id="theme-toggle" type="button">Dunkel</button><button class="secondary" id="refresh">Aktualisieren</button></div></header>
+<section class="view active" id="view-dashboard">
+<div class="metrics" id="metrics"></div><div class="panel attention-panel hidden" id="attention-panel"></div>
+<div class="panel"><div class="panel-head responsive-head"><h2>Backup-Jobs</h2><div class="list-controls"><label>Sortierung<select id="dashboard-job-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="host-asc">Gerät A–Z</option><option value="repository-asc">Repository A–Z</option><option value="status-active">Aktive zuerst</option><option value="last-newest">Letzter Lauf – neueste zuerst</option><option value="last-oldest">Letzter Lauf – älteste zuerst</option><option value="size-desc">Sicherungsgröße absteigend</option></select></label><button class="section-link" data-target-view="jobs" type="button">Alle Backup-Jobs</button></div></div><div class="bounded-list" id="dashboard-jobs"></div></div>
+<div class="panel"><div class="panel-head"><h2>Letzte Aktivitäten</h2><button class="section-link" data-target-view="runs" type="button">Alle Protokolle</button></div><div class="bounded-list" id="recent-runs"></div></div>
+<div class="panel diagnostics-panel"><div class="panel-head responsive-head"><h2>Systemdiagnose</h2><div class="table-actions"><button class="secondary" id="load-diagnostics" type="button">Diagnose laden</button><button class="secondary hidden" id="close-diagnostics" type="button">Diagnose schließen</button></div></div><div class="empty" id="system-diagnostics">Borg-Version, Repository-Speicher und Serverprotokoll bei Bedarf laden.</div></div>
+</section>
+<section class="view" id="view-hosts">
+<div class="hosts-stack"><form class="panel host-form" id="host-form"><h2 id="host-form-title">Gerät hinzufügen</h2>
+<input name="id" type="hidden"/>
+<p class="hint">Installiere zuerst diesen Controller-Schlüssel beim SSH-Benutzer des Geräts:</p>
+<div class="key-copy-row"><code class="key-box" id="controller-key">Wird geladen …</code><button class="secondary compact-copy-button" id="copy-controller-key" title="Controller-Schlüssel kopieren" type="button">Kopieren</button></div>
+<p class="hint controller-key-management-note">Die sicherheitskritische Erneuerung befindet sich unter <button class="link inline-link" id="open-controller-key-settings" type="button">Einstellungen → Controller-Schlüssel</button>.</p>
+<label>Name<input name="name" placeholder="webserver-01" required=""/></label>
+<label>Adresse<input name="address" placeholder="10.20.0.15" required=""/></label>
+<div class="row"><label>SSH-Benutzer<input name="username" placeholder="backup" required=""/></label><label>Port<input name="port" required="" type="number" value="22"/></label></div>
+<input name="host_key" type="hidden"/>
+<button class="secondary" id="scan-host-key" type="button">SSH-Fingerprint prüfen</button>
+<div aria-live="polite" class="fingerprint-box" id="host-fingerprint-box" role="status">
+<p class="hint" id="host-fingerprint">Der Hostschlüssel muss vor dem Speichern bestätigt werden.</p>
+<div class="inline-actions hidden" id="host-fingerprint-actions"><button id="accept-host-key" type="button">Fingerprint bestätigen</button><button class="secondary" id="discard-host-key" type="button">Verwerfen</button></div>
+</div>
+<label class="check"><input checked="" name="enabled" type="checkbox"/> Gerät aktivieren</label>
+<div class="form-actions"><button id="host-submit" type="submit">Gerät speichern</button><button class="secondary hidden" id="cancel-host-edit" type="button">Abbrechen</button></div></form>
+<div class="panel"><div class="panel-head responsive-head"><h2>Verbundene Geräte</h2><div class="list-controls"><label>Sortierung<select id="host-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="status-active">Aktive zuerst</option><option value="address-asc">Adresse</option><option value="borg-desc">Borg-Version absteigend</option></select></label></div></div><div class="bounded-list" id="host-list"></div></div></div>
+</section>
+<section class="view" id="view-repositories">
+<div class="repositories-stack">
+<form class="panel repository-form" data-admin-only-block="" id="repo-form">
+<div class="panel-head"><div><h2 id="repo-form-title">Repository hinzufügen</h2><span>Verwaltete Repositories neu erstellen oder ein bereits vorhandenes externes Borg-Repository anbinden.</span></div></div>
+<input name="id" type="hidden"/>
+<input name="import_directory" type="hidden"/>
+<div class="repository-form-grid basics">
+<label>Name<input name="name" placeholder="NAS Hauptspeicher" required=""/></label>
+<label>Typ<select name="managed"><option value="true">Verwaltet – neues Repository im eingebundenen Speicher</option><option value="false">Extern – vorhandenes Borg-Repository hinzufügen</option></select></label>
+<label>Verschlüsselung<select name="encryption_mode">
+<option value="repokey-blake2">repokey-blake2 – verschlüsselt, Schlüssel im Repository</option>
+<option value="repokey">repokey – verschlüsselt, SHA-256</option>
+<option value="keyfile-blake2">keyfile-blake2 – verschlüsselt, separater Schlüssel</option>
+<option value="keyfile">keyfile – verschlüsselt, separater Schlüssel</option>
+<option value="authenticated-blake2">authenticated-blake2 – unverschlüsselt, authentifiziert</option>
+<option value="authenticated">authenticated – unverschlüsselt, authentifiziert</option>
+<option value="none">none – unverschlüsselt und nicht authentifiziert</option>
+</select></label>
+</div>
+<div class="repository-form-grid storage-guard-options" id="repo-storage-guard-fields">
+<label>Speicherplatz-Sperre<select name="storage_guard_mode"><option value="inherit">Globale Einstellung übernehmen</option><option value="enabled">Für dieses Repository aktivieren</option><option value="disabled">Für dieses Repository deaktivieren</option></select></label>
+<label>Eigene Sperrgrenze in Prozent<input max="100" min="1" name="storage_guard_threshold_percent" placeholder="globale Grenze" type="number"/></label>
+</div>
+<p class="hint" id="repo-storage-guard-help">Die Prüfung verwendet das tatsächliche Dateisystem dieses Repository-Verzeichnisses. Eine leere eigene Grenze übernimmt den globalen Wert.</p>
+<div class="hidden repository-external-fields" id="repo-external-fields">
+<label>URL des vorhandenen Borg-Repositorys<input name="location" placeholder="ssh://u123456@u123456.your-storagebox.de:23/./borg-repository"/></label>
+<p class="notice">„Hinzufügen“ initialisiert oder überschreibt das externe Repository nicht. Der Manager speichert ausschließlich die Verbindungskonfiguration und öffnet das vorhandene Repository später mit <code>borg info</code>/<code>borg list</code>.</p>
+<div class="repository-form-grid ssh-options">
+<label class="check"><input checked="" name="generate_external_ssh_key" type="checkbox"/> Eigenen Ed25519-Schlüssel im Manager erzeugen</label>
+<label class="check"><input checked="" name="scan_external_host_key" type="checkbox"/> SSH-Hostkey direkt vom Manager abrufen</label>
+</div>
+<div class="repository-form-grid credentials">
+<label>Vorhandenen privaten Ed25519-Schlüssel übernehmen<textarea name="external_ssh_private_key" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----
+…" rows="5"></textarea></label>
+<label>known_hosts-Eintrag<textarea name="external_known_hosts" placeholder="[u123456.your-storagebox.de]:23 ssh-ed25519 AAAA…" rows="5"></textarea></label>
+</div>
+<div class="persistent-info hidden" id="repo-manager-key-info"></div>
+<p class="hint">Der private Schlüssel wird nicht als Klartextdatei abgelegt: verschlüsselt in <code>/data/security/security.db</code>, geschützt durch <code>/data/security/master.key</code>. Nur während eines Borg-Aufrufs entsteht eine temporäre Datei unter <code>/tmp/bbm-borg.XXXXXX/id_ed25519</code>, die danach automatisch entfernt wird.</p>
+</div>
+<div class="repository-form-grid secrets">
+<label id="repo-passphrase-field">Repository-Passphrase<input autocomplete="new-password" name="passphrase" placeholder="wird verschlüsselt gespeichert" type="password"/></label>
+<label class="hidden" id="repo-keyfile-field">Vorhandener Borg-Keyfile-Inhalt<textarea name="keyfile" placeholder="Bei vorhandenen keyfile-Repositories erforderlich" rows="5"></textarea></label>
+</div>
+<p class="hint" id="encryption-help"></p>
+<div class="form-actions"><button id="repo-submit" type="submit">Repository erstellen</button><button class="secondary hidden" id="cancel-repo-edit" type="button">Abbrechen</button></div>
+</form>
+<div class="panel repositories-panel">
+<div class="panel-head responsive-head"><div><h2>Repositories</h2><span>Verbindung, Borg-Nutzdaten, Archive und Verwaltung zentral im Manager.</span></div><div class="list-controls"><label>Sortierung<select id="repo-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="status-ready">Bereite zuerst</option><option value="type-managed">Verwaltete zuerst</option><option value="jobs-desc">Meiste Jobs zuerst</option><option value="size-desc">Größe absteigend</option></select></label></div></div>
+<div aria-live="polite" class="persistent-info hidden" id="repo-operation-status" role="status"></div>
+<div class="bounded-list" id="repo-list"></div>
+</div>
+<div class="panel"><div class="panel-head"><div><h2>Vorhandene lokale Repositories einbinden</h2><span>Durchsucht direkte Unterverzeichnisse des eingebundenen Repository-Pfads nach Borg-Konfigurationen.</span></div><button class="secondary" id="discover-repositories" type="button">Verzeichnis durchsuchen</button></div><div class="bounded-list" id="repository-discovery-list"><div class="empty">Suche bei Bedarf starten.</div></div></div>
+</div>
+</section>
+<section class="view" id="view-jobs">
+<div class="jobs-stack">
+<form class="panel job-form-compact" data-admin-only-block="" id="job-form"><div class="panel-head"><div><h2 id="job-form-title">Backup-Job erstellen</h2><span>Grunddaten kompakt festlegen; erweiterte Optionen bei Bedarf öffnen.</span></div></div>
+<input name="id" type="hidden"/>
+<div class="job-form-grid basics">
+<label>Name<input name="name" placeholder="Dokumente täglich" required=""/></label>
+<label>Gerät<select name="host_id" required=""></select></label>
+<label>Repository<select name="repository_id" required=""></select></label>
+</div>
+<p class="hint">Automatische Ausführungen werden zentral unter <button class="section-link" data-target-view="schedules" type="button">Zeitpläne</button> zugeordnet. Ohne Zuordnung bleibt dieser Job manuell.</p>
+<div class="job-form-grid paths">
+<label>Quellpfade <span>(einer pro Zeile)</span><textarea name="source_paths" placeholder="/home
+/etc" required="" rows="5"></textarea></label>
+<div class="job-exclude-column">
+<div class="exclude-template-apply">
+<label>Ausschlussvorlage<select id="job-exclude-template"><option value="">Keine Vorlage ausgewählt</option></select></label>
+<button class="secondary" id="apply-exclude-template" type="button">Vorlage zur Liste hinzufügen</button>
+</div>
+<label>Ausschlüsse <span>(einer pro Zeile)</span><textarea name="exclude_patterns" placeholder="/proc
+/sys
+/dev
+/run
+/tmp
+*/.cache" rows="5"></textarea></label>
+<p class="hint">Vorlagen ergänzen ohne Duplikate. <button class="section-link" data-target-view="settings" type="button">Vorlagen bearbeiten</button></p>
+</div>
+</div>
+<div class="job-form-grid archive-settings">
+<label>Archivnamensvorlage<input name="archive_template" required="" value="{hostname}-{now:%Y-%m-%dT%H:%M:%S}"/><span id="archive-prefix-hint">Automatisches Job-Präfix wird beim Speichern ergänzt.</span></label>
+<label>Kompression<select name="compression">
+<option value="lz4">lz4 – sehr schnell</option><option value="none">none – keine Kompression</option>
+<option value="zstd,3">zstd,3 – ausgewogen</option><option selected="" value="zstd,6">zstd,6 – stärker</option><option value="zstd,10">zstd,10</option><option value="zstd,22">zstd,22 – maximal</option>
+<option value="zlib,6">zlib,6</option><option value="lzma,6">lzma,6</option><option value="auto,zstd,6">auto,zstd,6</option><option value="auto,lzma,6">auto,lzma,6</option>
+<option value="obfuscate,110,zstd,3">obfuscate,110,zstd,3</option><option value="custom">Erweiterte Borg-Spezifikation …</option>
+</select></label>
+<label class="hidden" id="compression-custom-field">Eigene Kompressionsspezifikation<input name="compression_custom" placeholder="zstd,15 oder obfuscate,110,auto,zstd,6"/><span>Unterstützt unter Borg 1.2 bis 1.4: none, lz4, zstd, zlib, lzma, auto und obfuscate.</span></label>
+</div>
+<details class="job-options"><summary>Dateisystem- und Konsistenzoptionen</summary>
+<div class="option-grid compact-options">
+<label class="check"><input checked="" name="one_file_system" type="checkbox"/> Nur jeweiliges Quelldateisystem</label>
+<label class="check"><input checked="" name="exclude_caches" type="checkbox"/> CACHEDIR.TAG ausschließen</label>
+<label class="check"><input checked="" name="exclude_nodump" type="checkbox"/> nodump-Dateien ausschließen</label>
+<label class="check"><input name="numeric_ids" type="checkbox"/> Numerische IDs speichern</label>
+<label class="check"><input checked="" name="list_files" type="checkbox"/> Verarbeitete Dateien im Live-Protokoll anzeigen</label>
+<label>Datei-Cache<select name="files_cache"><option value="ctime,size,inode">ctime,size,inode – Standard</option><option value="mtime,size,inode">mtime,size,inode</option><option value="ctime,size">ctime,size</option><option value="mtime,size">mtime,size</option><option value="rechunk,ctime">rechunk,ctime</option><option value="rechunk,mtime">rechunk,mtime</option><option value="disabled">deaktiviert</option></select></label>
+<label>Checkpoint (Sekunden)<input max="86400" min="60" name="checkpoint_interval" type="number" value="1800"/></label>
+</div>
+</details>
+<details class="job-options"><summary>Aufbewahrung</summary>
+<div class="retention-grid">
+<label>Letzte<input min="0" name="last" type="number" value="0"/></label><label>Stündlich<input min="0" name="hourly" type="number" value="0"/></label><label>Täglich<input min="0" name="daily" type="number" value="7"/></label><label>Wöchentlich<input min="0" name="weekly" type="number" value="4"/></label><label>Monatlich<input min="0" name="monthly" type="number" value="6"/></label><label>Jährlich<input min="0" name="yearly" type="number" value="0"/></label>
+</div><p class="hint">0 deaktiviert die jeweilige Borg-Aufbewahrungsregel.</p>
+</details>
+<div class="job-form-footer"><label class="check"><input checked="" name="enabled" type="checkbox"/> Job aktivieren</label><div class="form-actions"><button id="job-submit" type="submit">Job speichern</button><button class="secondary hidden" id="cancel-job-edit" type="button">Abbrechen</button></div></div>
+</form>
+<div class="panel"><div class="panel-head responsive-head"><div><h2>Backup-Jobs</h2><span id="job-count">0 Jobs</span></div><div class="list-controls"><label>Suche<input id="job-search" placeholder="Job, Gerät, Repository oder Pfad" type="search"/></label><label>Status<select id="job-status-filter"><option value="all">Alle</option><option value="active">Aktiv</option><option value="inactive">Inaktiv</option></select></label><label>Sortierung<select id="job-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="host-asc">Gerät A–Z</option><option value="repository-asc">Repository A–Z</option><option value="status-active">Aktive zuerst</option><option value="schedule-asc">Zeitplan A–Z</option></select></label></div></div><div id="job-list"></div></div>
+</div>
+</section>
+<section class="view" id="view-schedules">
+<div class="schedules-stack">
+<form class="panel" data-admin-only-block="" id="schedule-form">
+<div class="panel-head"><div><h2 id="schedule-form-title">Zentralen Zeitplan erstellen</h2><span>Ein Zeitplan kann einzelne oder mehrere Geräte, ausgewählte Jobs oder alle Jobs eines Repositorys steuern.</span></div></div>
+<input name="id" type="hidden"/>
+<input name="expressions" type="hidden"/>
+<div class="schedule-form-grid">
+<label>Name<input maxlength="100" name="name" placeholder="Produktivsysteme nachts" required=""/></label>
+<label>Zielgruppe<select id="schedule-target-mode" name="target_mode"><option value="hosts">Ausgewählte Geräte</option><option value="repository">Alle Geräte/Jobs eines Repositorys</option><option value="jobs">Ausgewählte Backup-Jobs</option></select></label>
+<label>Rhythmus<select id="schedule-mode"><option value="daily">Täglich</option><option value="weekdays">Montag bis Freitag</option><option value="weekends">Wochenende</option><option value="selected">Ausgewählte Wochentage</option><option value="monthly">Monatlich</option><option value="custom">Erweiterter Cron-Zeitplan</option></select></label>
+<label>Maximal parallele Ausführungen<input max="64" min="0" name="parallel_limit" type="number" value="0"/><span>0 = nur globale Grenze</span></label>
+</div>
+<div class="schedule-target" id="schedule-target-hosts"><label>Geräte <span>(Mehrfachauswahl möglich)</span><select multiple="" name="target_host_ids" size="6"></select></label></div>
+<div class="schedule-target hidden" id="schedule-target-repository"><label>Repository<select name="target_repository_id"></select></label><p class="hint">Erfasst automatisch alle aktiven Backup-Jobs dieses Repositorys – auch später neu angelegte.</p></div>
+<div class="schedule-target hidden" id="schedule-target-jobs"><label>Backup-Jobs <span>(Mehrfachauswahl möglich)</span><select multiple="" name="target_job_ids" size="7"></select></label></div>
+<section class="schedule-editor" id="schedule-editor">
+<div class="schedule-editor-head"><div><b>Ausführungszeiten</b><span>Mehrere Uhrzeiten pro Tag sind möglich.</span></div><button class="secondary" id="add-schedule-time" type="button">Uhrzeit hinzufügen</button></div>
+<div class="schedule-times" id="schedule-times"></div>
+<div class="schedule-weekdays hidden" id="schedule-weekdays">
+<label class="check"><input type="checkbox" value="mon"/> Mo</label><label class="check"><input type="checkbox" value="tue"/> Di</label><label class="check"><input type="checkbox" value="wed"/> Mi</label><label class="check"><input type="checkbox" value="thu"/> Do</label><label class="check"><input type="checkbox" value="fri"/> Fr</label><label class="check"><input type="checkbox" value="sat"/> Sa</label><label class="check"><input type="checkbox" value="sun"/> So</label>
+</div>
+<label class="hidden" id="schedule-month-day">Tag im Monat<input id="schedule-day" max="28" min="1" type="number" value="1"/></label>
+<label class="hidden" id="schedule-custom-field">Cron-Ausdrücke <span>(einer pro Zeile)</span><textarea id="schedule-custom" placeholder="0 2 * * *
+30 14 * * mon-fri" rows="4"></textarea></label>
+<p class="hint" id="schedule-preview"></p>
+</section>
+<div class="job-form-footer"><label class="check"><input checked="" name="enabled" type="checkbox"/> Zeitplan aktivieren</label><div class="form-actions"><button type="submit">Zeitplan speichern</button><button class="secondary hidden" id="cancel-schedule-edit" type="button">Abbrechen</button></div></div>
+</form>
+<div class="panel"><div class="panel-head responsive-head"><div><h2>Zentrale Zeitpläne</h2><span id="schedule-count">0 Zeitpläne</span></div></div><div id="schedule-list"></div></div>
+</div>
+</section>
+<section class="view" id="view-runs"><div class="panel"><div class="panel-head responsive-head"><div><h2>Ausführungsprotokolle</h2><span><span id="runs-filter-label">Alle Ausführungen</span> · <span id="runs-count">0 angezeigt</span> · Zeitzone Europe/Berlin</span></div><div class="list-controls"><label>Status<select id="runs-filter"><option value="all">Alle</option><option value="active">Laufend/wartend</option><option value="running">Laufend</option><option value="queued">Wartend</option><option value="failed">Fehlgeschlagen</option><option value="warning">Warnungen</option><option value="success">Erfolgreich</option><option value="cancelled">Abgebrochen</option></select></label><label>Suche<input id="runs-search" placeholder="Lauf, Job, Aktion oder Diagnose" type="search"/></label><label>Anzahl<select id="runs-limit"><option>10</option><option>25</option><option>50</option><option selected="">100</option><option>250</option><option>500</option></select></label></div></div><div id="run-list"></div></div></section>
+<section class="view" id="view-archives">
+<div class="panel archive-toolbar"><div class="row"><label>Repository<select id="archive-repository"></select></label><label>Archive anzeigen<select disabled="" id="archive-device-filter"><option value="">Alle Geräte / alle Archive</option></select></label><label class="check archive-check"><input id="archive-consider-checkpoints" type="checkbox"/> Unvollständige Checkpoint-Archive anzeigen</label></div><div class="form-actions"><button id="load-archives" type="button">Archive anzeigen</button><button class="secondary" id="refresh-archives" type="button">Neu aus Repository einlesen</button><span class="hint" id="archive-summary">Die zuletzt geladene Archivliste wird persistent zwischengespeichert.</span></div><div class="archive-selection-toolbar hidden" data-admin-only-block="" id="archive-selection-toolbar"><label class="check"><input disabled="" id="archive-select-visible" type="checkbox"/> Sichtbare Archive auswählen</label><button class="danger" disabled="" id="delete-selected-archives" type="button">Ausgewählte Archive löschen</button><span class="hint" id="archive-selection-summary">0 ausgewählt</span></div><p class="hint">Nach erfolgreichen Backups, Prune-Läufen, Umbenennungen oder Löschungen wird der Zwischenspeicher automatisch verworfen. „Neu aus Repository einlesen“ ist nur für Änderungen erforderlich, die außerhalb des Managers vorgenommen wurden.</p><div class="persistent-error hidden" id="archive-error"></div></div>
+<div class="panel archive-compare"><div class="panel-head"><div><h2>Archive vergleichen</h2><span>Änderungen zwischen zwei Sicherungsständen mit Borg Diff anzeigen.</span></div></div><div class="row"><label>Älteres Archiv<select id="archive-diff-first"><option value="">Archive anzeigen</option></select></label><label>Neueres Archiv<select id="archive-diff-second"><option value="">Archive anzeigen</option></select></label><label class="check archive-check"><input id="archive-diff-content-only" type="checkbox"/> Nur Inhaltsänderungen</label></div><label>Optionale Pfade, eine Zeile je relativer Archivpfad<textarea id="archive-diff-paths" placeholder="home/user/Documents" rows="3"></textarea></label><div class="form-actions"><button id="compare-archives" type="button">Archive vergleichen</button></div></div>
+<div class="panel"><div class="panel-head"><div><h2>Archivübersicht</h2><span>Verwaltete Repositories werden direkt im Manager-Container geöffnet. SSH zum Backup-Client ist dafür nicht erforderlich.</span></div></div><div class="bounded-list" id="archive-list"><div class="empty">Zuerst ein Repository auswählen und die Archivliste anzeigen.</div></div></div>
+<div class="panel hidden" id="archive-browser-panel"><div class="panel-head"><div><h2>Archivinhalt durchsuchen</h2><span id="archive-browser-meta"></span></div><button class="secondary" id="close-archive-browser" type="button">Browser schließen</button></div><div class="persistent-error hidden" id="archive-browser-error"></div><div class="browser-toolbar"><button class="secondary" id="browser-up" type="button">Eine Ebene höher</button><code id="browser-path">/</code><button class="secondary" id="export-browser-selection" type="button">Auswahl exportieren (.tar.gz)</button><button id="use-browser-selection" type="button">Auswahl wiederherstellen</button></div><div class="persistent-info hidden" id="archive-export-status"></div><div class="archive-browser-list" id="archive-browser-list"></div><div class="selection-box"><b>Ausgewählte Pfade</b><div class="hint" id="browser-selection">Noch nichts ausgewählt.</div></div></div>
+<div class="panel hidden" id="legacy-mount-panel"><div class="panel-head"><div><h2>Alte FUSE-Mounts</h2><span>Nur für Mount-Sitzungen aus Version 0.7/0.8. Neue Archivbrowser-Sitzungen benötigen kein FUSE.</span></div></div><div class="persistent-error hidden" id="legacy-mount-error"></div><div class="bounded-list" id="legacy-mount-list"></div></div>
+</section>
+<section class="view" id="view-restore"><div class="restore-grid">
+<form class="panel form-panel" id="restore-form"><p class="eyebrow">Kontrollierter Restore</p><h2>Dateien wiederherstellen</h2>
+<label>Backup-Job<select name="job_id" required=""></select></label>
+<label>Archivname<select name="archive" required=""><option value="">Zuerst Backup-Job auswählen</option></select></label>
+<label>Pfade im Archiv <span>(einer pro Zeile; für Originalpfad erforderlich)</span><textarea name="paths" placeholder="home/user/Dokumente"></textarea></label>
+<fieldset class="restore-destination"><legend>Wiederherstellungsziel</legend>
+<label class="destination-choice"><input checked="" name="restore_mode" type="radio" value="original"/><span><b>Am ursprünglichen Speicherort</b><small>Beispiel: <code>home/user/datei.txt</code> wird wieder zu <code>/home/user/datei.txt</code>.</small></span></label>
+<label class="destination-choice"><input name="restore_mode" type="radio" value="target"/><span><b>In alternatives Zielverzeichnis</b><small>Geeignet zum Prüfen oder Kopieren an einen anderen Ort.</small></span></label>
+</fieldset>
+<div class="sub-panel hidden" id="restore-target-options">
+<label>Zielverzeichnis auf dem Gerät<input name="target_directory" placeholder="/srv/restore/2026-07-12"/></label>
+<label>Anordnung im Ziel<select name="target_layout"><option selected="" value="selection-root">Ausgewählte Datei/Ordner direkt im Ziel ablegen</option><option value="archive-paths">Vollständige Archivpfade beibehalten</option></select></label>
+</div>
+<label class="check"><input checked="" name="dry_run" type="checkbox"/> Nur testen (empfohlen)</label>
+<label class="check hidden" id="restore-overwrite-confirm"><input name="overwrite_existing" type="checkbox"/> Ich bestätige, dass vorhandene Dateien am Originalpfad ersetzt werden können.</label>
+<label class="check"><input name="allow_legacy_archive" type="checkbox"/> Legacy-/fremdes Archiv dieses Repositorys ausdrücklich zulassen</label>
+<label class="check"><input name="consider_checkpoints" type="checkbox"/> Unvollständige Checkpoint-Archive zur Auswahl anzeigen</label>
+<button id="restore-submit" type="submit">Restore testen</button><div class="persistent-info hidden" id="restore-status"></div></form>
+<div class="restore-note"><span>01</span><h3>Testlauf öffnet sofort das Protokoll.</h3><p>„Nur testen“ liest und prüft die ausgewählten Daten, schreibt aber keine Dateien.</p><span>02</span><h3>Originalpfad oder alternatives Ziel.</h3><p>Beim Originalpfad arbeitet Borg aus <code>/</code>. Beim alternativen Ziel kann das gemeinsame übergeordnete Archivverzeichnis automatisch entfernt werden, sodass nur die ausgewählte Datei oder der ausgewählte Ordner direkt im Ziel landet.</p></div>
+</div></section>
+<section class="view" id="view-backups">
+<div class="notice warning"><strong>Sensibler Inhalt:</strong> Ein Manager-Backup enthält Manager-Datenbank, Sicherheitsdatenbank, Master-Key sowie SSH-, TLS- und Borg-Schlüssel. Sicher verwahren. Repository-Nutzdaten sind nicht enthalten.</div>
+<div class="backup-manager-grid">
+<form class="panel" id="backup-form"><div class="panel-head"><div><h2>Manager-Backup erstellen</h2><span>Datenbank, Einstellungen, SSH-/TLS- und Repository-Schlüssel.</span></div></div>
+<label>Bezeichnung <span>(optional)</span><input maxlength="48" name="label" placeholder="z. B. vor-update"/></label>
+<div class="notice success"><strong>Verschlüsselung ist verpflichtend:</strong> Neue Manager-Backups werden ausschließlich als verschlüsselte <code>.bbm</code>-Dateien erstellt.</div>
+<div class="row" id="backup-passphrase-fields"><label>Backup-Passphrase<input autocomplete="new-password" minlength="12" name="passphrase" required="" type="password"/></label><label>Passphrase wiederholen<input autocomplete="new-password" minlength="12" name="passphrase_confirm" required="" type="password"/></label></div>
+<div class="form-actions"><button type="submit">Backup erstellen</button></div>
+<p class="hint">Verschlüsselte Backups erhalten die Endung <code>.bbm</code>. Die Passphrase muss mindestens 12 Zeichen lang sein und wird nicht gespeichert.</p>
+</form>
+<form class="panel" id="backup-upload-form"><div class="panel-head"><div><h2>Manager-Backup hochladen</h2><span>Vorhandene .bbm- oder historische .zip-Datei sicher übernehmen.</span></div></div>
+<label>Backup-Datei<input accept=".bbm,.zip,application/zip,application/octet-stream" name="backup_file" required="" type="file"/></label>
+<div class="persistent-info hidden" id="backup-upload-status"></div>
+<div class="form-actions"><button type="submit">Backup hochladen</button></div>
+<p class="hint">Dateiname, Größe und Format werden serverseitig geprüft. Vorhandene Dateien werden niemals überschrieben. Verschlüsselte Backups werden beim Hochladen strukturell geprüft und erst bei der Wiederherstellung mit der Passphrase authentifiziert.</p>
+</form>
+<form class="panel backup-restore-panel" id="backup-restore-form"><div class="panel-head"><div><h2>Manager-Backup wiederherstellen</h2><span>Stellt Manager-Daten wieder her und startet den Container automatisch neu.</span></div></div>
+<label>Backup<select name="name" required=""><option value="">Backup auswählen</option></select></label>
+<label>Backup-Passphrase <span>(nur für das ausgewählte verschlüsselte Backup)</span><input autocomplete="current-password" name="passphrase" type="password"/></label>
+<div class="row"><label>Passphrase für Sicherheitsbackup<input autocomplete="new-password" minlength="12" name="safety_passphrase" required="" type="password"/></label><label>Sicherheits-Passphrase wiederholen<input autocomplete="new-password" minlength="12" name="safety_passphrase_confirm" required="" type="password"/></label></div>
+<label class="check"><input name="confirm" required="" type="checkbox"/> Aktuelle Manager-Daten werden ersetzt; laufende Jobs sind vorher zu beenden.</label>
+<div class="persistent-info hidden" id="backup-restore-status"></div>
+<div class="form-actions"><button class="danger" type="submit">Wiederherstellung starten</button></div>
+<p class="hint">Vorher wird automatisch ein lokal gespeichertes und mit der gesonderten Sicherheits-Passphrase verschlüsseltes Backup erstellt. Nach dem Einspielen werden Benutzerkonten, Sitzungen und der zum Backup gehörende Master-Key übernommen; bestehende Browser-Sitzungen müssen sich anschließend neu anmelden.</p>
+</form>
+</div>
+<div class="panel"><div class="panel-head"><div><h2>Vorhandene Backups</h2><span id="backup-path"></span></div></div><div class="bounded-list" id="backup-list"></div></div>
+</section>
+<section class="view" id="view-users">
+<div class="users-layout">
+<form class="panel form-panel" id="user-form">
+<div class="panel-head"><div><h2 id="user-form-title">Benutzer anlegen</h2><span>Passwörter werden ausschließlich als scrypt-Prüfwerte gespeichert.</span></div></div>
+<input name="id" type="hidden"/>
+<label>Benutzername<input autocomplete="off" maxlength="64" minlength="3" name="username" required=""/></label>
+<label>Rolle<select name="role"><option value="user">Benutzer – operativer Zugriff</option><option value="admin">Administrator – vollständige Verwaltung</option></select></label>
+<div id="user-password-fields">
+<label>Temporäres Passwort<input autocomplete="new-password" minlength="12" name="password" type="password"/></label>
+<label>Passwort wiederholen<input autocomplete="new-password" minlength="12" name="password_confirm" type="password"/></label>
+<label class="check"><input checked="" name="must_change_password" type="checkbox"/> Passwortwechsel bei der nächsten Anmeldung erzwingen</label>
+</div>
+<label class="check hidden" id="user-enabled-field"><input checked="" name="enabled" type="checkbox"/> Benutzerkonto aktiv</label>
+<div class="form-actions"><button id="user-submit" type="submit">Benutzer anlegen</button><button class="secondary hidden" id="cancel-user-edit" type="button">Abbrechen</button></div>
+</form>
+<div class="panel"><div class="panel-head"><div><h2>Benutzerverwaltung</h2><span id="security-status">Sicherheitsdaten werden geladen …</span></div></div><div id="user-list"></div></div>
+</div>
+</section>
+<section class="view" id="view-settings">
+<form class="panel form-panel settings-form" id="settings-form"><h2>Systemweite Anzeigegrenzen</h2>
+<div class="row"><label>Darstellungsdichte<select name="density"><option value="comfortable">Komfortabel – größere Abstände</option><option value="compact">Kompakt – mehr Einträge sichtbar</option></select></label></div>
+<p class="hint settings-density-hint">Die Dichte verändert Tabellen, Formulare, Karten, Navigation und Abstände sofort sichtbar. „Kompakt“ ist für Installationen mit vielen Geräten und Jobs vorgesehen.</p>
+<div class="row"><label>Letzte Läufe im Dashboard<input max="200" min="1" name="dashboard_recent_runs_limit" type="number"/></label><label>Läufe in Protokollliste<input max="500" min="10" name="runs_list_limit" type="number"/></label></div>
+<div class="row"><label>Zusätzliche Hintergrundaktualisierung (Sekunden)<input max="300" min="5" name="auto_refresh_seconds" type="number"/></label><label>Maximale Höhe der Archivübersicht und weiterer Scrolllisten (Pixel)<input max="1200" min="240" name="list_max_height" type="number"/></label></div>
+<p class="hint">Die Listenhöhe gilt unter anderem für Archivübersicht, Repository-Suche, Manager-Backups und weitere bewusst begrenzte Listen. Tabellen mit eigener Seitenansicht bleiben vollständig sichtbar.</p>
+<section class="settings-section security-settings-section" id="settings-controller-key-section">
+<div class="panel-head"><div><h2>Controller-Schlüssel</h2><span>Öffentlichen Schlüssel kopieren oder den zentralen Controller-Zugang nach ausdrücklicher Sicherheitsbestätigung erneuern.</span></div></div>
+<div class="key-copy-row"><code class="key-box" id="settings-controller-key">Wird geladen …</code><button class="secondary compact-copy-button" id="settings-copy-controller-key" type="button">Kopieren</button></div>
+<div class="notice warning"><strong>Achtung:</strong> Eine Erneuerung unterbricht alle bestehenden Controller-SSH-Zugänge. Der neue öffentliche Schlüssel muss anschließend auf jedem Client hinterlegt werden.</div>
+<div class="settings-danger-actions"><button class="danger ghost" id="rotate-controller-key" type="button">Controller-Schlüssel erneuern</button><span class="hint" id="settings-controller-key-status">Nur verwenden, wenn der bestehende Controller-Schlüssel ersetzt werden muss.</span></div>
+</section>
+<section class="settings-section">
+<div class="panel-head"><div><h2>Parallelitätsgrenzen</h2><span>Begrenzt gleichzeitig laufende Borg-Ausführungen auch dann, wenn sie unterschiedliche Repositorys verwenden.</span></div></div>
+<label>Maximal parallele Ausführungen global<input max="64" min="0" name="max_parallel_runs" type="number"/></label>
+<p class="hint">0 bedeutet unbegrenzt. Die feste Regel „höchstens eine schreibende oder prüfende Aktion je Repository“ bleibt zusätzlich bestehen. Ein Zeitplan kann unter „Zeitpläne“ einen niedrigeren eigenen Grenzwert erhalten.</p>
+</section>
+<section class="settings-section">
+<div class="panel-head"><div><h2>Ausführungsprotokolle</h2><span>Vollständige neue Live-Protokolle liegen als Dateien; die Datenbank enthält nur begrenzte Vorschauen und Metadaten.</span></div></div>
+<div class="row"><label>Aufbewahren (Tage, 0 = unbegrenzt)<input max="3650" min="0" name="run_retention_days" type="number"/></label><label>Maximalgröße je Logdatei (MiB)<input max="2048" min="1" name="run_log_max_mib" type="number"/></label></div>
+<label>Maximal in der WebUI anzeigen (KiB)<input max="65536" min="256" name="run_log_view_kib" type="number"/></label>
+<div class="persistent-info" id="run-storage-info">Protokollspeicher wird geladen …</div>
+<div class="actions"><button class="secondary" id="cleanup-expired-runs" type="button">Abgelaufene jetzt bereinigen</button><button class="danger ghost" id="cleanup-all-runs" type="button">Alle abgeschlossenen löschen</button></div>
+<p class="hint">Die automatische Bereinigung läuft täglich um 03:30 Uhr. Aktive oder wartende Läufe werden nie gelöscht. Bei manueller Bereinigung wird SQLite zusätzlich komprimiert.</p>
+</section>
+<section class="settings-section">
+<div class="panel-head"><div><h2>Speicherplatz-Sperre</h2><span>Schreibende Backup-Läufe werden auf dem tatsächlichen Dateisystem des jeweiligen verwalteten Repositorys geprüft.</span></div></div>
+<label class="check"><input name="storage_guard_enabled" type="checkbox"/> Speicherplatz-Sperre global aktivieren</label>
+<label>Globale Sperrgrenze in Prozent<input max="100" min="1" name="storage_guard_threshold_percent" type="number"/></label>
+<p class="hint">Repositories übernehmen diese Werte standardmäßig. Unter „Repositories → Bearbeiten“ kann die Sperre pro Repository deaktiviert oder mit einer eigenen Grenze versehen werden.</p>
+</section>
+<label class="check"><input name="repository_size_after_run" type="checkbox"/> Repository-Größe nach manuellen Schreibvorgängen und nach Abschluss eines Zeitplans automatisch aktualisieren</label>
+<label class="check"><input name="compact_after_prune" type="checkbox"/> Nach erfolgreichem geplanten Prune automatisch Compact ausführen</label>
+<section class="settings-section">
+<div class="panel-head"><div><h2>Ausschlussvorlagen</h2><span>Zentrale, wiederverwendbare Ausschlusslisten für neue und bestehende Backup-Jobs.</span></div><button class="secondary" id="add-exclude-template" type="button">Vorlage zur Liste hinzufügen</button></div>
+<div class="template-editor" id="exclude-template-editor"></div>
+<p class="hint">Die Vorlage wird beim Job nur in dessen Ausschlussliste kopiert. Spätere Änderungen an einer Vorlage verändern bereits gespeicherte Jobs nicht automatisch.</p>
+</section>
+<button type="submit">Einstellungen speichern</button>
+</form>
+</section>
+<section class="view" id="view-help"><div class="help-fragment-loading" id="help-container">Anleitung wird geladen …</div></section>
+<section class="view" id="view-releases"><div class="panel"><div class="panel-head"><h2>Release Notes</h2><span id="release-version"></span></div><pre id="release-content">Wird geladen …</pre></div></section>
+<div id="toast"></div>
+<dialog class="password-dialog preferences-dialog" id="preferences-dialog">
+<form class="panel" id="preferences-form" method="dialog">
+<div class="panel-head"><div><h2>Darstellung &amp; Sprache</h2><span>Diese Auswahl gilt nur für das aktuell angemeldete Benutzerkonto.</span></div><button class="secondary" id="close-preferences-dialog" type="button">Schließen</button></div>
+<label>Sprache<select name="language"><option value="de">Deutsch</option><option value="en">English</option></select></label>
+<label>Farbschema<select name="appearance"><option value="auto">Automatisch</option><option value="light">Hell</option><option value="dark">Dunkel</option></select></label>
+<p class="hint">Sprache und Farbschema werden benutzerbezogen gespeichert und verändern keine systemweite Einstellung.</p>
+<p class="error" id="preferences-error"></p>
+<button type="submit">Persönliche Einstellungen speichern</button>
+</form>
+</dialog><dialog class="password-dialog" id="password-dialog">
+<form class="panel" id="password-form" method="dialog">
+<div class="panel-head"><div><h2>Eigenes Passwort ändern</h2><span id="password-dialog-note">Nach dem Wechsel ist eine erneute Anmeldung erforderlich.</span></div><button class="secondary" id="close-password-dialog" type="button">Schließen</button></div>
+<label>Aktuelles Passwort<input autocomplete="current-password" name="current_password" required="" type="password"/></label>
+<label>Neues Passwort<input autocomplete="new-password" minlength="12" name="new_password" required="" type="password"/></label>
+<label>Neues Passwort wiederholen<input autocomplete="new-password" minlength="12" name="new_password_confirm" required="" type="password"/></label>
+<p class="hint">Mindestens 12 Zeichen und mindestens drei Gruppen aus Groß-/Kleinbuchstaben, Zahlen und Sonderzeichen.</p>
+<p class="error" id="password-error"></p>
+<button type="submit">Passwort ändern</button>
+</form>
+</dialog>
+<dialog class="password-dialog" id="user-password-dialog">
+<form class="panel" id="user-password-form" method="dialog">
+<div class="panel-head"><div><h2>Benutzerpasswort setzen</h2><span id="user-password-dialog-user"></span></div><button class="secondary" id="close-user-password-dialog" type="button">Schließen</button></div>
+<input name="user_id" type="hidden"/>
+<label>Neues temporäres Passwort<input autocomplete="new-password" minlength="12" name="password" required="" type="password"/></label>
+<label>Passwort wiederholen<input autocomplete="new-password" minlength="12" name="password_confirm" required="" type="password"/></label>
+<label class="check"><input checked="" name="must_change_password" type="checkbox"/> Passwortwechsel bei der nächsten Anmeldung erzwingen</label>
+<p class="hint">Mindestens 12 Zeichen und mindestens drei Gruppen aus Groß-/Kleinbuchstaben, Zahlen und Sonderzeichen. Bestehende Sitzungen des Benutzers werden beendet.</p>
+<p class="error" id="user-password-error"></p>
+<button type="submit">Passwort setzen</button>
+</form>
+</dialog>
+<dialog class="password-dialog" id="controller-key-dialog">
+<form class="panel" id="controller-key-confirm-form" method="dialog">
+<div class="panel-head"><div><h2>Controller-Schlüssel erneuern</h2><span>Dieser Vorgang unterbricht alle Controller-SSH-Zugänge, bis der neue öffentliche Schlüssel auf jedem Client hinterlegt wurde.</span></div><button class="secondary" id="close-controller-key-dialog" type="button">Abbrechen</button></div>
+<div class="notice warning"><strong>Sicherheitsbestätigung:</strong> Laufende oder wartende Ausführungen blockieren den Vorgang. Der bisherige Schlüssel wird nicht weiter verwendet.</div>
+<label>Zur Bestätigung exakt eingeben:<br/><code>CONTROLLER-SCHLÜSSEL ERNEUERN</code><input autocomplete="off" name="confirmation" required=""/></label>
+<p class="error" id="controller-key-confirm-error"></p>
+<button class="danger" type="submit">Schlüssel endgültig erneuern</button>
+</form>
+</dialog>
+<dialog class="run-dialog" id="log-dialog">
+<div class="panel-head run-dialog-head"><div><p class="eyebrow">Ausführung</p><h2>Ausführungsdetails</h2><span id="log-live-state"></span></div><button class="secondary" id="close-dialog">Schließen</button></div>
+<div class="run-summary" id="log-summary"></div>
+<div class="diagnosis-box hidden" id="log-version-warning"></div>
+<div class="diagnosis-box hidden" id="log-diagnosis"></div>
+<div class="diagnosis-box warning-causes hidden" id="log-warning-causes"></div>
+<div class="log-tabs"><button class="active" data-log-tab="output" type="button">Lesbare Ausgabe</button><button data-log-tab="technical" type="button">Technische Details</button></div>
+<section class="log-view active" id="log-view-output"><pre class="log-console" id="log-content"></pre></section>
+<section class="log-view" id="log-view-technical"><details><summary>Ausgeführter Befehl</summary><pre class="log-console technical" id="log-command"></pre></details><details><summary>Standardausgabe</summary><pre class="log-console technical" id="log-stdout"></pre></details><details><summary>Fehlerausgabe (gefiltert)</summary><pre class="log-console technical" id="log-stderr"></pre></details></section>
+</dialog>
+</main>
+</div>
+<script src="/static/i18n.js?v=1.0.43"></script><script src="/static/app.js?v=1.0.43"></script>
+</body>
+</html>
