@@ -1,6 +1,6 @@
 <article class="panel help-guide" data-i18n-skip>
   <header class="help-hero">
-    <div><p class="eyebrow">Operations manual</p><h2>Using BorgBackup Manager</h2><p>This manual covers all features in version 1.0.49, from installation and sign-in through devices, repositories, jobs and schedules to archive management, restore, user permissions and diagnostics.</p></div>
+    <div><p class="eyebrow">Operations manual</p><h2>Using BorgBackup Manager</h2><p>This manual covers all features in version 1.0.51, from installation and sign-in through devices, repositories, jobs and schedules to archive management, restore, user permissions and diagnostics.</p></div>
     <div class="help-version">Debian 13 · Borg 1.2–1.4 · Europe/Berlin</div>
   </header>
   <nav class="help-toc" aria-label="Table of contents">
@@ -20,7 +20,7 @@
   </section>
 
   <section id="help-dashboard" class="help-section"><h3>3. Dashboard and active tasks</h3>
-    <p>The dashboard shows job counts, running, queued and failed runs, plus repository count and total size. The Backup Jobs panel includes status, device, repository, sources, schedule, latest run, size of the latest successful backup, and a direct start button. It can be sorted by name, status, device, repository, latest run or backup size.</p>
+    <p>The dashboard shows job counts, running, queued and failed runs, plus repository count and total size. The Backup Jobs panel includes status, device, repository, sources, schedule, latest run, size of the latest successful backup, and a direct start button. Source statistics and latest-run details use two compact rows; deduplicated, original and compressed sizes use three tightly spaced label/value rows. It can be sorted by name, status, device, repository, latest run or backup size.</p>
     <p>The status control next to the theme button always represents the current running task. Clicking it opens that task's live log directly, without an intermediate menu. If no task is running but one is queued, it opens the next queued run. After completion, the same area briefly shows the action result.</p>
     <p>Attention highlights critical or outdated Borg versions, missing repository access and failed runs. System diagnostics are loaded, refreshed and closed under <b>System → System diagnostics</b>.</p>
   </section>
@@ -75,7 +75,7 @@
   </section>
 
   <section id="help-notifications" class="help-section"><h3>12. Notification center</h3>
-    <p>Administrators can send backup, repository, schedule and other run events through SMTP, a generic JSON webhook, Discord or Telegram. Failures and warnings are selected by default; successful events can be enabled optionally.</p>
+    <p>Administrators can send backup, repository, schedule and other run events through SMTP, a generic JSON webhook, Discord or Telegram. Failures and warnings are selected by default; successful events can be enabled optionally. Warning messages include the concrete affected files or paths stored in the structured Borg warning summary.</p>
     <ul><li><b>Secrets:</b> SMTP password, webhook URL and Telegram token are encrypted in the security database and are never returned to the Web UI.</li><li><b>Testing:</b> every enabled channel has its own test action.</li><li><b>Delivery log:</b> records success or the concrete delivery error without changing the Borg run result.</li><li><b>Diagnostic excerpt:</b> filtered and bounded, and can be disabled completely.</li><li><b>Webhook:</b> generic JSON containing event, severity, title, message, run ID and timestamp, or a Discord-compatible embed.</li></ul>
     <p>Delivery starts only after repository and concurrency queue slots have been released. A slow or unavailable notification service therefore does not hold up subsequent backups.</p>
   </section>

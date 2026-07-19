@@ -703,7 +703,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.49`, {cache: 'no-store'});
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.51`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -942,15 +942,15 @@ function syncRunFilterControls() {
 
 function sourceStatsLine(job, refreshable = false) {
   const hasStats = job.source_size_bytes != null || job.source_file_count != null;
-  const sourceLabel = job.source_stats_origin === 'scan' ? 'Live-Scan vor Ausschlüssen' : 'letztes Backup';
+  const sourceLabel = job.source_stats_origin === 'scan' ? 'Live-Scan vor Ausschlüssen' : 'Letztes Backup';
   const values = hasStats
     ? `${formatBytes(job.source_size_bytes)} · ${job.source_file_count == null ? '–' : Number(job.source_file_count).toLocaleString(currentLocale())} Dateien`
     : 'noch nicht ermittelt';
-  const checked = job.source_stats_checked_at ? ` · ${formatDate(job.source_stats_checked_at)}` : '';
+  const checked = job.source_stats_checked_at ? formatDate(job.source_stats_checked_at) : '–';
   const refresh = refreshable && state.currentUser?.role === 'admin'
     ? `<button type="button" class="inline-action" ${bbmAction('action', job.id, 'source-stats')}>Aktualisieren</button>`
     : '';
-  return `<span class="source-stat-line"><span><b>Quellenstatistik:</b> ${values}${hasStats ? ` · ${sourceLabel}` : ''}${checked}</span>${refresh}</span>`;
+  return `<span class="source-stat-line"><span class="source-stat-copy"><span><b>Quellenstatistik:</b> ${values}</span><small>${hasStats ? `${sourceLabel} · ${esc(checked)}` : 'Noch keine Quellenstatistik gespeichert'}</small></span>${refresh}</span>`;
 }
 
 function dashboardJobTable(jobs) {
@@ -961,16 +961,16 @@ function dashboardJobTable(jobs) {
       ? job.schedule_names.join(', ') : 'Manuell';
     const admin = state.currentUser?.role === 'admin';
     const lastRun = last
-      ? `${admin ? `<button class="entity-link" ${bbmAction('showRun', last.id)}>#${last.id} · ${esc(formatDate(last.created_at))} · ${esc(formatDuration(last.duration_seconds))}</button>` : `<b>#${last.id} · ${esc(formatDate(last.created_at))} · ${esc(formatDuration(last.duration_seconds))}</b>`}<small><span class="badge ${esc(last.status)}">${esc(runStatusLabel(last.status))}</span> · ${last.trigger_type === 'schedule' ? `Zeitplan: ${esc(last.schedule_name || schedule)}` : 'Manuell'}</small>`
-      : '<span>noch kein Backup</span><small>–</small>';
+      ? `<span class="dashboard-run-stack"><span>${admin ? `<button class="entity-link" ${bbmAction('showRun', last.id)}>#${last.id} · ${esc(formatDate(last.created_at))}</button>` : `<b>#${last.id} · ${esc(formatDate(last.created_at))}</b>`}</span><small><span>Dauer</span> ${esc(formatDuration(last.duration_seconds))} · <span class="badge ${esc(last.status)}">${esc(runStatusLabel(last.status))}</span> · ${last.trigger_type === 'schedule' ? `Zeitplan: ${esc(last.schedule_name || schedule)}` : 'Manuell'}</small></span>`
+      : '<span class="dashboard-run-stack"><span>noch kein Backup</span><small>–</small></span>';
     const sizeRun = job.last_successful_backup || last;
     const deduplicated = sizeRun?.backup_deduplicated_size_bytes;
     const original = sizeRun?.backup_original_size_bytes;
     const compressed = sizeRun?.backup_compressed_size_bytes;
     const sizeSource = sizeRun && last && sizeRun.id !== last.id ? ` · aus Lauf #${sizeRun.id}` : '';
     const size = [deduplicated, original, compressed].some((value) => value != null)
-      ? `<b>${formatBytes(deduplicated)}</b><small>Dedupliziert${sizeSource} · Original ${formatBytes(original)} · Komprimiert ${formatBytes(compressed)}</small>`
-      : '<span>–</span><small>keine Statistik gespeichert</small>';
+      ? `<span class="dashboard-size-stack"><span><span class="dashboard-size-label">Dedupliziert${sizeSource}</span><b>${formatBytes(deduplicated)}</b></span><span><span class="dashboard-size-label">Original</span><b>${formatBytes(original)}</b></span><span><span class="dashboard-size-label">Komprimiert</span><b>${formatBytes(compressed)}</b></span></span>`
+      : '<span class="dashboard-size-stack"><span><span class="dashboard-size-label">Statistik</span><b>–</b></span><small>keine Statistik gespeichert</small></span>';
     const accessBlocked = job.repository_managed && !job.repository_access_ready;
     const startTitle = !job.enabled ? 'Backup-Job ist deaktiviert' : !job.host_enabled ? 'Gerät ist deaktiviert' : accessBlocked ? 'Repository-Zugang zuerst im Backup-Job einrichten' : 'Backup jetzt manuell starten';
     const startAction = admin

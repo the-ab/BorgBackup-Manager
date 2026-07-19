@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.0.49
+# Installation und Betrieb – BorgBackup Manager 1.0.51
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.0.49.zip
+BorgBackup-Manager-1.0.51.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.49.zip
+unzip /pfad/BorgBackup-Manager-1.0.51.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -133,7 +133,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.49.zip
+unzip /pfad/BorgBackup-Manager-1.0.51.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build
@@ -610,7 +610,7 @@ Geheimnisse werden nicht in `notifications.json` abgelegt, sondern mit dem Manag
 
 Für SMTP sollte STARTTLS oder direktes TLS verwendet werden. Die Einstellung **Keine** ist ausschließlich für bewusst isolierte interne Mail-Relays vorgesehen. Ausgehende Verbindungen zu SMTP, Webhook und Telegram müssen durch Firewall, DNS und gegebenenfalls den Reverse-Proxy-Host erlaubt sein.
 
-Fehlgeschlagene Zustellungen werden im Benachrichtigungsprotokoll gespeichert, verändern aber weder den Borg-Rückgabecode noch den Status der Sicherung. Der Manager gibt den Repository- und Parallelitätsplatz frei, bevor er externe Dienste kontaktiert.
+Warnungsbenachrichtigungen übernehmen aus der strukturierten Borg-Warnungszusammenfassung zusätzlich die konkret betroffenen Dateien beziehungsweise Pfade. Bis zu zehn Einträge werden vollständig ausgegeben; weitere Einträge werden gezählt. Fehlgeschlagene Zustellungen werden im Benachrichtigungsprotokoll gespeichert, verändern aber weder den Borg-Rückgabecode noch den Status der Sicherung. Der Manager gibt den Repository- und Parallelitätsplatz frei, bevor er externe Dienste kontaktiert.
 
 ## 18. Manager-Backup und Sicherheitsdaten
 
@@ -660,7 +660,7 @@ Neue 0.9.x-Backups enthalten Sicherheitsdatenbank und Master-Key vollständig. A
 
 ## 19. Zeitzone, Dashboard und Systembereich
 
-Der Compose-Stack setzt standardmäßig `TZ=Europe/Berlin`. Das Dashboard zeigt Repository-Anzahl und summierte Repository-Größe gemeinsam in einer Kachel. Darüber hinaus steht oberhalb der letzten Aktivitäten eine sortierbare Backup-Job-Tabelle mit Status, Gerät, Repository, Quellen, Zeitplan, letztem Lauf und den gespeicherten Größen der letzten Sicherung. Ein fehlgeschlagener letzter Lauf ersetzt dabei nicht die Größenwerte der vorherigen erfolgreichen Sicherung. Die Systemdiagnose befindet sich unter **System → Systemdiagnose** und lässt sich nach dem Laden ohne Seitenreload wieder schließen. Das Dashboard zeigt neben laufenden auch wartende Ausführungen; beide Kacheln öffnen die entsprechend gefilterte Protokollansicht. Die WebUI stellt serverseitige UTC-Zeitwerte in dieser Zeitzone dar. Borg-Archivzeitpunkte ohne Offset werden als lokale Zeit dieser Zeitzone interpretiert und nicht ein zweites Mal um zwei Stunden verschoben. Cron-Zeitpläne werden in dieser Zeitzone ausgewertet und remote gestartete Borg-Befehle erhalten dieselbe TZ-Variable.
+Der Compose-Stack setzt standardmäßig `TZ=Europe/Berlin`. Das Dashboard zeigt Repository-Anzahl und summierte Repository-Größe gemeinsam in einer Kachel. Darüber hinaus steht oberhalb der letzten Aktivitäten eine sortierbare Backup-Job-Tabelle mit Status, Gerät, Repository, Quellen, Zeitplan, letztem Lauf und den gespeicherten Größen der letzten Sicherung. Quellenstatistik und letzter Lauf werden jeweils in zwei kompakten Zeilen dargestellt; Dedupliziert, Original und Komprimiert stehen als drei eng gesetzte Beschriftungs-/Wertzeilen untereinander. Ein fehlgeschlagener letzter Lauf ersetzt dabei nicht die Größenwerte der vorherigen erfolgreichen Sicherung. Die Systemdiagnose befindet sich unter **System → Systemdiagnose** und lässt sich nach dem Laden ohne Seitenreload wieder schließen. Das Dashboard zeigt neben laufenden auch wartende Ausführungen; beide Kacheln öffnen die entsprechend gefilterte Protokollansicht. Die WebUI stellt serverseitige UTC-Zeitwerte in dieser Zeitzone dar. Borg-Archivzeitpunkte ohne Offset werden als lokale Zeit dieser Zeitzone interpretiert und nicht ein zweites Mal um zwei Stunden verschoben. Cron-Zeitpläne werden in dieser Zeitzone ausgewertet und remote gestartete Borg-Befehle erhalten dieselbe TZ-Variable.
 
 
 - Darstellung hell, dunkel oder automatisch
@@ -722,25 +722,6 @@ Die WebUI bestätigt Änderungen unmittelbar über den betätigten Button, eine 
 Das unter **Einstellungen** konfigurierbare Aktualisierungsintervall ist nur eine zusätzliche Hintergrundaktualisierung. Die Bestätigung und Übernahme einer Aktion ist nicht von diesem Zeitwert abhängig. Ein manuelles Neuladen der gesamten Browserseite ist im Normalfall nicht erforderlich.
 
 ## 22. Update
-
-### Einmaliger Übergang der Dokumentnamen von v1.0.48 oder älter
-
-Updater bis einschließlich v1.0.48 verlangen noch die frühere Datei `RELEASE_NOTES.en.md`. Version 1.0.49 entfernt diesen Alt-Namen bewusst. Vor dem normalen Update muss deshalb einmalig der neue Updater übernommen werden:
-
-```bash
-cd /opt/BorgBackup-Manager
-cp /pfad/BorgBackup-Manager-1.0.49.zip updates/
-cp /pfad/BorgBackup-Manager-1.0.49.zip.sha256 updates/
-sha256sum -c updates/BorgBackup-Manager-1.0.49.zip.sha256
-unzip -p updates/BorgBackup-Manager-1.0.49.zip BorgBackup-Manager/update.sh > update.sh.new
-chmod 755 update.sh.new
-mv update.sh.new update.sh
-bash update.sh \
-  --file updates/BorgBackup-Manager-1.0.49.zip \
-  --sha256 VERÖFFENTLICHTE_SHA256
-```
-
-Nach diesem Übergang gilt für spätere Versionen wieder der normale Updateablauf.
 
 ### Eingefrorene WebUI nach Version 1.0.26/1.0.27
 

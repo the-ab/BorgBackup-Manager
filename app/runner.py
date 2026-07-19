@@ -299,8 +299,12 @@ if [ "$passphrase_b64" != "-" ]; then
   passphrase="$tmpdir/passphrase"
   printf '%s' "$passphrase_b64" | base64 -d > "$passphrase"
   chmod 600 "$passphrase"
-  exec 3<"$passphrase"
-  export BORG_PASSPHRASE_FD=3
+  # A shared BORG_PASSPHRASE_FD is consumed by the first Borg process. Commands
+  # that invoke Borg repeatedly (for example bulk archive deletion followed by
+  # compact) would therefore receive EOF and report an incorrect passphrase on
+  # the second invocation. BORG_PASSCOMMAND opens the protected file anew for
+  # every Borg process while keeping the secret itself out of argv and env.
+  export BORG_PASSCOMMAND="cat '$passphrase'"
 fi
 
 # The manager deliberately leaves stdin open after the four payload lines.

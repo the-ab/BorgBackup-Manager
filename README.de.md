@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.49
+# BorgBackup Manager 1.0.51
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -30,7 +30,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.0.49.zip
+BorgBackup-Manager-1.0.51.zip
 ```
 
 ## Sicherheit und Härtung
@@ -143,8 +143,9 @@ Das Dashboard zeigt:
 - fehlgeschlagene Ausführungen
 - eine gemeinsame Repository-Kachel mit Anzahl und summierter Repository-Größe
 - eine vollständige Backup-Job-Tabelle mit Status, Gerät, Repository, Quellen und Zeitplan
-- den letzten Backup-Lauf je Job mit Laufnummer, Datum, Uhrzeit, Dauer und Ausführungsart
-- die Original-, komprimierte und deduplizierte Größe der letzten Sicherung
+- den letzten Backup-Lauf je Job mit Laufnummer und Datum/Uhrzeit in der ersten sowie Dauer, Status und Ausführungsart in der zweiten Zeile
+- die Quellenstatistik mit Größe/Dateianzahl und Herkunft/Zeitpunkt in zwei kompakten Zeilen
+- die Original-, komprimierte und deduplizierte Größe der letzten Sicherung als drei eng gesetzte Beschriftungs-/Wertzeilen
 - einen direkten **Starten**-Button für jeden nutzbaren Backup-Job
 - eine persistente Sortierung des Dashboard-Jobblocks nach Name, Status, Gerät, Repository, letztem Lauf oder Sicherungsgröße
 - letzte Ausführungen
@@ -618,7 +619,7 @@ Unter **System → Benachrichtigungen** konfigurieren Administratoren eine zentr
 - Discord-Webhook
 - Telegram-Bot mit Chat-ID oder Kanalname
 
-Die Ereignisauswahl umfasst fehlgeschlagene, mit Warnungen beendete und optional erfolgreiche Backups, abgebrochene Läufe, Repository-Aktionen, Zeitplanfehler sowie sonstige Manager-Ausführungen. Erfolgsereignisse sind standardmäßig deaktiviert, damit Installationen mit vielen täglichen Backups nicht unnötig viele Meldungen erzeugen.
+Die Ereignisauswahl umfasst fehlgeschlagene, mit Warnungen beendete und optional erfolgreiche Backups, abgebrochene Läufe, Repository-Aktionen, Zeitplanfehler sowie sonstige Manager-Ausführungen. Bei strukturierten Borg-Warnungen enthält die Nachricht zusätzlich die konkret betroffene Datei beziehungsweise den Pfad; bis zu zehn Einträge werden ausgegeben, weitere als Anzahl zusammengefasst. Erfolgsereignisse sind standardmäßig deaktiviert, damit Installationen mit vielen täglichen Backups nicht unnötig viele Meldungen erzeugen.
 
 SMTP-Passwort, Webhook-URL und Telegram-Bot-Token liegen ausschließlich verschlüsselt in der Sicherheitsdatenbank. Die nicht geheimen Einstellungen werden unter `/data/notifications.json` gespeichert und sind Bestandteil eines Manager-Backups. Leere Geheimnisfelder behalten den bereits gespeicherten Wert; separate Löschoptionen entfernen ihn ausdrücklich.
 
@@ -669,7 +670,7 @@ Release Notes werden passend zur persönlichen Spracheinstellung auf Deutsch ode
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.49.zip
+unzip /pfad/BorgBackup-Manager-1.0.51.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -695,25 +696,6 @@ Container:      borgbackup-manager
 ```
 
 ## Update
-
-### Einmaliger Übergang der Dokumentnamen von v1.0.48 oder älter
-
-Updater bis einschließlich v1.0.48 verlangen noch die frühere Datei `RELEASE_NOTES.en.md`. Version 1.0.49 entfernt diesen Alt-Namen bewusst. Vor dem normalen Update muss deshalb einmalig der neue Updater übernommen werden:
-
-```bash
-cd /opt/BorgBackup-Manager
-cp /pfad/BorgBackup-Manager-1.0.49.zip updates/
-cp /pfad/BorgBackup-Manager-1.0.49.zip.sha256 updates/
-sha256sum -c updates/BorgBackup-Manager-1.0.49.zip.sha256
-unzip -p updates/BorgBackup-Manager-1.0.49.zip BorgBackup-Manager/update.sh > update.sh.new
-chmod 755 update.sh.new
-mv update.sh.new update.sh
-bash update.sh \
-  --file updates/BorgBackup-Manager-1.0.49.zip \
-  --sha256 VERÖFFENTLICHTE_SHA256
-```
-
-Nach diesem Übergang gilt für spätere Versionen wieder der normale Updateablauf.
 
 ### WebUI friert nach Version 1.0.26/1.0.27 ein
 

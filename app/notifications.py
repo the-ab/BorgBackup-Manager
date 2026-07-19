@@ -281,7 +281,7 @@ def _severity(status: str) -> str:
     return {"success": "success", "warning": "warning", "failed": "error", "cancelled": "warning"}.get(status, "info")
 
 
-def _warning_text(run: Run) -> str:
+def _warning_text(run: Run, language: str = "de") -> str:
     if not run.warning_summary_json:
         return ""
     try:
@@ -291,15 +291,35 @@ def _warning_text(run: Run) -> str:
     causes = (summary.get("items") or summary.get("causes")) if isinstance(summary, dict) else None
     if not isinstance(causes, list):
         return ""
+
+    path_label = "Affected file/path" if language == "en" else "Betroffene Datei/Pfad"
+    more_label = "additional warning entries" if language == "en" else "weitere Warnungseinträge"
     values: list[str] = []
+    shown = 0
     for cause in causes[:10]:
         if not isinstance(cause, dict):
             continue
-        detail = cause.get("detail") or cause.get("reason") or cause.get("path") or cause.get("message")
+        reason = cause.get("detail") or cause.get("reason") or cause.get("message")
+        path = str(cause.get("path") or "").strip()
         kind = cause.get("kind") or cause.get("type")
-        text = " – ".join(str(item) for item in (kind, detail) if item)
-        if text:
-            values.append(text)
+        text = " – ".join(str(item) for item in (kind, reason) if item)
+        if not text and path:
+            text = str(kind or "warning")
+        if not text:
+            continue
+        values.append(text)
+        if path:
+            values.append(f"  {path_label}: {path}")
+        shown += 1
+
+    total = 0
+    try:
+        total = int(summary.get("total_count") or len(causes)) if isinstance(summary, dict) else len(causes)
+    except (TypeError, ValueError):
+        total = len(causes)
+    hidden = max(0, total - shown)
+    if hidden:
+        values.append(f"  … {hidden} {more_label}")
     return "\n".join(values)
 
 
@@ -352,7 +372,7 @@ def build_run_message(run_id: int, *, test: bool = False) -> NotificationMessage
                 lines.append(f"Zeitplan: {run.schedule_name_snapshot or '-'}")
         if run.finished_at:
             lines.append(("Finished: " if language == "en" else "Beendet: ") + run.finished_at.astimezone(timezone.utc).isoformat())
-        warning = _warning_text(run)
+        warning = _warning_text(run, language)
         if warning:
             lines.extend(["", "Warnings:" if language == "en" else "Warnungsursachen:", warning])
         if settings["include_error_excerpt"]:

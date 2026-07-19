@@ -25,3 +25,17 @@ def test_dashboard_job_table_and_run_details_show_requested_metadata():
     assert "trigger_type === 'schedule'" in javascript
     assert "Backup-Größe" in javascript
     assert "Dedupliziert" in javascript
+
+
+def test_dashboard_uses_compact_stacked_job_metadata_blocks():
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    stylesheet = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+
+    assert 'class="dashboard-size-stack"' in javascript
+    assert 'class="dashboard-run-stack"' in javascript
+    assert 'class="source-stat-copy"' in javascript
+    assert "<span>Dauer</span> ${esc(formatDuration(last.duration_seconds))}" in javascript
+    assert "const sourceLabel = job.source_stats_origin === 'scan' ? 'Live-Scan vor Ausschlüssen' : 'Letztes Backup'" in javascript
+    assert "${sourceLabel} · ${esc(checked)}" in javascript
+    assert ".dashboard-size-stack > span" in stylesheet
+    assert "grid-template-columns: minmax(6.8rem, 1fr) auto" in stylesheet

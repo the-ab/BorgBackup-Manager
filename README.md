@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.49
+# BorgBackup Manager 1.0.51
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -29,7 +29,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.0.49.zip
+BorgBackup-Manager-1.0.51.zip
 ```
 
 The documentation naming convention is:
@@ -152,7 +152,9 @@ The dashboard provides:
 - repository count and cached size summary,
 - a sortable backup-job overview,
 - direct start buttons for usable jobs,
-- the latest execution per job with duration and size statistics,
+- the latest execution per job with run ID/date on the first line and duration/status directly below,
+- compact source statistics with size/file count and the value timestamp on a second line,
+- deduplicated, original and compressed backup sizes as three compact label/value rows,
 - recent activities,
 - attention items for failed runs, outdated Borg clients and incomplete access configuration.
 
@@ -326,7 +328,7 @@ The notification center supports:
 - Discord webhooks,
 - Telegram bots.
 
-Events can be selected independently for backup failures, warnings, successes, cancellations, schedule results, repository operations and other manager executions. Delivery failures never change the Borg result. Notification dispatch starts only after execution slots have been released.
+Events can be selected independently for backup failures, warnings, successes, cancellations, schedule results, repository operations and other manager executions. Structured Borg warning notifications include the concrete affected file or path for every stored warning cause, up to ten entries plus a count of additional causes. Delivery failures never change the Borg result. Notification dispatch starts only after execution slots have been released.
 
 Secrets are encrypted and are not returned to the browser. A bounded delivery log records channel, event, result and sanitized error details.
 
@@ -353,7 +355,7 @@ System diagnostics cover:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.49.zip
+unzip /path/BorgBackup-Manager-1.0.51.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -387,25 +389,6 @@ bash update.sh \
 ```
 
 The updater validates the checksum before opening the ZIP, validates package paths and required files, stops the container for a consistent manager-data backup, excludes repositories and regenerable caches, applies the project files, builds, starts and verifies readiness. On failure it rolls back the project and restarts the previous container where possible.
-
-### One-time documentation-name transition from v1.0.48 or older
-
-Updater versions through v1.0.48 require the former `RELEASE_NOTES.en.md` filename. Version 1.0.49 intentionally removes that legacy name. Replace the updater once before running the normal update:
-
-```bash
-cd /opt/BorgBackup-Manager
-cp /path/BorgBackup-Manager-1.0.49.zip updates/
-cp /path/BorgBackup-Manager-1.0.49.zip.sha256 updates/
-sha256sum -c updates/BorgBackup-Manager-1.0.49.zip.sha256
-unzip -p updates/BorgBackup-Manager-1.0.49.zip BorgBackup-Manager/update.sh > update.sh.new
-chmod 755 update.sh.new
-mv update.sh.new update.sh
-bash update.sh \
-  --file updates/BorgBackup-Manager-1.0.49.zip \
-  --sha256 PUBLISHED_SHA256
-```
-
-After this transition, future updates use the normal procedure again.
 
 ### Historical transitions
 

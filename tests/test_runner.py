@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import shlex
@@ -661,6 +662,41 @@ async def test_remote_wrapper_ignores_non_gnu_env_implementation(tmp_path):
     assert return_code == 0
     assert stdout == "portable"
     assert "unrecognized option" not in stderr
+
+
+@pytest.mark.asyncio
+async def test_secret_wrapper_reopens_passphrase_for_each_borg_process(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_borg = fake_bin / "borg"
+    fake_borg.write_text(
+        "#!/bin/sh\n"
+        "actual=$(sh -c \"$BORG_PASSCOMMAND\")\n"
+        "[ \"$actual\" = \"bulk-delete-secret\" ] || { "
+        "printf 'wrong passphrase: %s\n' \"$actual\" >&2; exit 2; }\n"
+        "printf 'borg-ok\n'\n",
+        encoding="utf-8",
+    )
+    fake_borg.chmod(0o755)
+    secret_payload = base64.b64encode(b"bulk-delete-secret") + b"\n"
+    command = Command(
+        argv=[
+            "sh", "-c", _SECRET_WRAPPER, "--", "0", "-",
+            "sh", "-c", "borg delete first && borg delete second && borg compact",
+        ],
+        preview="bulk delete passphrase reuse test",
+        stdin_data=b"-\n-\n-\n" + secret_payload,
+        env={"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+        stdin_controlled_cancel=True,
+    )
+
+    return_code, stdout, stderr = await execute(command)
+
+    assert return_code == 0
+    assert stdout.splitlines() == ["borg-ok", "borg-ok", "borg-ok"]
+    assert stderr == ""
+    assert "BORG_PASSCOMMAND" in _SECRET_WRAPPER
+    assert "BORG_PASSPHRASE_FD=3" not in _SECRET_WRAPPER
 
 
 @pytest.mark.asyncio

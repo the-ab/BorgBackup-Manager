@@ -1,5 +1,42 @@
 # Release Notes
 
+## v1.0.51
+
+### Bulk archive deletion with encrypted repositories
+
+- Fixed multi-selection archive deletion for passphrase-protected repositories.
+- The previous supervised wrapper exposed the passphrase through one shared `BORG_PASSPHRASE_FD`. The first Borg process consumed that descriptor, so the second archive deletion or the following Compact received EOF and reported an incorrect passphrase.
+- The wrapper now uses a protected temporary passphrase file through `BORG_PASSCOMMAND`. Borg opens that file anew for every delete and Compact invocation; the passphrase itself is not placed in argv or a normal environment variable.
+- Single archive deletion, multi-selection, optional one-time Compact, controlled cancellation and temporary-file cleanup use the same corrected path.
+
+### Verification
+
+- A regression test executes two Borg deletions and one Compact in sequence and verifies that all three receive the correct passphrase.
+
+## v1.0.50
+
+### Compact dashboard backup-job metadata
+
+- **Latest backup size** now shows deduplicated, original and compressed sizes as three tightly spaced label/value rows without widening the dashboard table.
+- **Latest run** keeps run ID and date/time on the first row and places duration, status and trigger information directly below it.
+- **Source statistics** now use two compact rows: size/file count first, followed by the value origin and timestamp.
+
+### Warning notifications include affected files
+
+- Backup-warning notifications now include the concrete file or path stored for every structured Borg warning cause.
+- Messages such as `changed – file changed while we backed it up` are followed by the affected path instead of only the generic reason.
+- Up to ten structured entries are included; additional entries are reported as a count.
+- The notification uses the warning summary captured during the Borg run and does not depend on a later truncated log excerpt.
+
+### Documentation and update package
+
+- English remains the default Markdown language (`.md`) and German remains available only through `.de.md` files.
+- The updater validates `RELEASE_NOTES.md` and `RELEASE_NOTES.de.md`; no `.en.md` file is required.
+
+### Verification
+
+- Dashboard layout, German/English notification text, affected warning paths, JavaScript syntax and package documentation are covered by regression tests.
+
 ## v1.0.49
 
 ### System tab active state made visually reliable

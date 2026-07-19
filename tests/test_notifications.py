@@ -101,3 +101,62 @@ def test_disabled_notification_center_does_not_contact_channels(monkeypatch):
         db.add(run); db.commit(); run_id = run.id
     assert notifications.notify_run_completion(run_id) == []
     assert called == []
+
+
+def test_warning_notification_includes_affected_paths_in_german_message():
+    Base.metadata.create_all(engine)
+    _reset_notification_state()
+    notifications.save_notification_settings(notifications.NotificationSettingsInput(
+        enabled=True,
+        language="de",
+        events=["backup_warning"],
+    ))
+    with SessionLocal() as db:
+        run = Run(
+            job_name_snapshot="Warnungsjob",
+            action="backup",
+            status="warning",
+            warning_summary_json=json.dumps({
+                "total_count": 2,
+                "items": [
+                    {"kind": "changed", "path": "/srv/data/live.db", "reason": "file changed while we backed it up"},
+                    {"kind": "changed", "path": "/srv/data/cache.db", "reason": "file changed while we backed it up"},
+                ],
+            }),
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run); db.commit(); run_id = run.id
+
+    message = notifications.build_run_message(run_id)
+    assert message is not None
+    assert "Warnungsursachen:" in message.body
+    assert "changed – file changed while we backed it up" in message.body
+    assert "Betroffene Datei/Pfad: /srv/data/live.db" in message.body
+    assert "Betroffene Datei/Pfad: /srv/data/cache.db" in message.body
+
+
+def test_warning_notification_includes_affected_path_in_english_message():
+    Base.metadata.create_all(engine)
+    _reset_notification_state()
+    notifications.save_notification_settings(notifications.NotificationSettingsInput(
+        enabled=True,
+        language="en",
+        events=["backup_warning"],
+    ))
+    with SessionLocal() as db:
+        run = Run(
+            job_name_snapshot="Warning job",
+            action="backup",
+            status="warning",
+            warning_summary_json=json.dumps({
+                "total_count": 1,
+                "items": [{"kind": "changed", "path": "/srv/data/live.db", "reason": "file changed while we backed it up"}],
+            }),
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run); db.commit(); run_id = run.id
+
+    message = notifications.build_run_message(run_id)
+    assert message is not None
+    assert "Warnings:" in message.body
+    assert "Affected file/path: /srv/data/live.db" in message.body

@@ -1,5 +1,42 @@
 # Release Notes
 
+## v1.0.51
+
+### Mehrfachlöschung von Archiven bei verschlüsselten Repositorys
+
+- Die Löschung mehrfach ausgewählter Archive in passphrasengeschützten Repositorys wurde korrigiert.
+- Der überwachte Wrapper stellte die Passphrase bisher über einen gemeinsam verwendeten `BORG_PASSPHRASE_FD` bereit. Der erste Borg-Prozess las diesen Deskriptor bis zum Dateiende; die zweite Archivlöschung oder das anschließende Compact erhielt deshalb keine Passphrase mehr und meldete eine falsche Passphrase.
+- Der Wrapper verwendet jetzt eine geschützte temporäre Passphrase-Datei über `BORG_PASSCOMMAND`. Jeder Lösch- und Compact-Aufruf öffnet die Datei neu; die Passphrase selbst wird weder in die Befehlszeile noch in eine normale Umgebungsvariable geschrieben.
+- Einzelne Archivlöschung, Mehrfachauswahl, optionales einmaliges Compact, kontrollierter Abbruch und die Bereinigung temporärer Dateien verwenden denselben korrigierten Pfad.
+
+### Prüfung
+
+- Ein Regressionstest führt zwei Borg-Löschungen und ein Compact nacheinander aus und bestätigt, dass alle drei Aufrufe die korrekte Passphrase erhalten.
+
+## v1.0.50
+
+### Kompakte Metadaten der Backup-Jobs im Dashboard
+
+- **Größe letzte Sicherung** zeigt Dedupliziert, Original und Komprimiert jetzt als drei eng gesetzte Beschriftungs-/Wertzeilen, ohne die Dashboard-Tabelle zu verbreitern.
+- **Letzter Job** zeigt Ausführungs-ID und Datum/Uhrzeit in der ersten Zeile; Dauer, Status und Auslöser stehen direkt darunter.
+- **Quellenstatistik** verwendet zwei kompakte Zeilen: zuerst Größe und Dateianzahl, darunter Herkunft und Zeitpunkt des Wertes.
+
+### Warnungsbenachrichtigungen mit betroffenen Dateien
+
+- Benachrichtigungen zu Backup-Warnungen enthalten jetzt zu jeder strukturierten Borg-Warnungsursache die konkret gespeicherte Datei beziehungsweise den Pfad.
+- Auf Meldungen wie `changed – file changed while we backed it up` folgt damit der betroffene Pfad statt nur der allgemeinen Ursache.
+- Bis zu zehn strukturierte Einträge werden ausgegeben; weitere Einträge werden als Anzahl genannt.
+- Die Benachrichtigung verwendet die bereits während des Borg-Laufs gespeicherte Warnungszusammenfassung und ist nicht von einem später gekürzten Logausschnitt abhängig.
+
+### Dokumentation und Updatepaket
+
+- Englisch bleibt die Standardsprache der Markdown-Dateien (`.md`); deutsche Fassungen verwenden ausschließlich `.de.md`.
+- Der Updater prüft `RELEASE_NOTES.md` und `RELEASE_NOTES.de.md`; eine `.en.md`-Datei wird nicht benötigt.
+
+### Prüfung
+
+- Dashboard-Darstellung, deutsche und englische Benachrichtigungstexte, betroffene Warnungspfade, JavaScript-Syntax und Paketdokumentation sind durch Regressionstests abgedeckt.
+
 ## v1.0.49
 
 ### Aktive Markierung der System-Reiter zuverlässig sichtbar

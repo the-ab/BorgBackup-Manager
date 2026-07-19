@@ -1563,7 +1563,20 @@ body.compact .job-action-buttons button { min-height: 27px !important; padding: 
 }
 
 /* 1.0.47: sticky system navigation, source statistics and file-style archive browser */
-.source-stat-line { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; margin-top: 6px; color: var(--muted); font-size: .72rem; }
+.source-stat-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 5px; color: var(--muted); font-size: .72rem; }
+.source-stat-copy,
+.dashboard-run-stack,
+.dashboard-size-stack { display: grid; gap: 2px; min-width: 0; }
+.source-stat-copy > span,
+.source-stat-copy > small,
+.dashboard-run-stack > span,
+.dashboard-run-stack > small { line-height: 1.22; }
+.source-stat-copy > small,
+.dashboard-run-stack > small { display: block; margin: 0; }
+.dashboard-size-stack { min-width: 11.5rem; gap: 1px; }
+.dashboard-size-stack > span { display: grid; grid-template-columns: minmax(6.8rem, 1fr) auto; align-items: baseline; gap: 7px; line-height: 1.18; }
+.dashboard-size-label { margin: 0; color: var(--muted); font-size: .72rem; }
+.dashboard-size-stack > span > b { text-align: right; white-space: nowrap; }
 .source-stat-line .inline-action { min-height: 24px; padding: 2px 6px; font-size: .68rem; }
 .archive-browser-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
 .archive-browser-table { min-width: 900px; }

@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.0.49
+# Installation and Operations — BorgBackup Manager 1.0.51
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.0.49.zip
+BorgBackup-Manager-1.0.51.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.49.zip
+unzip /path/BorgBackup-Manager-1.0.51.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.0.49.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.0.51.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -293,6 +293,9 @@ Save the job and run its access checks before the first backup.
 
 ### Source statistics
 
+The dashboard presents source size/file count on one compact row and the value origin/timestamp directly below. Latest-run metadata and deduplicated/original/compressed sizes use the same compact stacked layout without increasing the table width.
+
+
 The job overview shows source size and entry count.
 
 - A completed backup stores exact Borg statistics automatically.
@@ -463,25 +466,6 @@ The updater:
 
 Reload the browser with `Ctrl+F5` after a frontend update.
 
-### One-time documentation-name transition from v1.0.48 or older
-
-Updater versions through v1.0.48 require the former `RELEASE_NOTES.en.md` filename. Version 1.0.49 intentionally removes that legacy name. Replace the updater once before running the normal update:
-
-```bash
-cd /opt/BorgBackup-Manager
-cp /path/BorgBackup-Manager-1.0.49.zip updates/
-cp /path/BorgBackup-Manager-1.0.49.zip.sha256 updates/
-sha256sum -c updates/BorgBackup-Manager-1.0.49.zip.sha256
-unzip -p updates/BorgBackup-Manager-1.0.49.zip BorgBackup-Manager/update.sh > update.sh.new
-chmod 755 update.sh.new
-mv update.sh.new update.sh
-bash update.sh \
-  --file updates/BorgBackup-Manager-1.0.49.zip \
-  --sha256 PUBLISHED_SHA256
-```
-
-After this transition, future updates use the normal procedure again.
-
 ### Historical transition from v1.0.4 or older to v1.0.5
 
 The old updater did not know `recovery.sh`. Copy it once before the normal update:
@@ -585,6 +569,7 @@ The Web API runs as `borg`. Manager-side Borg commands therefore run directly as
 - Verify current backups before prune, compact, archive deletion and restore.
 - Do not use automatic `break-lock`; first prove no Borg process is active.
 - Trust forwarded headers only from the actual reverse proxy.
+- Warning notifications include the concrete affected files or paths from the structured Borg warning summary.
 - Keep success notifications optional to avoid excessive message volume.
 
 ## 27. Local account recovery
