@@ -1,5 +1,95 @@
 # Release Notes
 
+## v1.0.47
+
+### Sticky System navigation
+
+- The five System tabs now live directly inside the sticky page header and remain visible while scrolling.
+- The active area is shown as a dark filled tab; the mobile tab row remains horizontally scrollable.
+- Existing direct links, administrator authorization and the active **System** sidebar state remain unchanged.
+
+### Backup-job source statistics
+
+- The Backup Jobs overview now shows original size, file count, timestamp and value origin below the configured source paths.
+- After a successful or warning-completed backup, size and file count are taken directly from Borg's final statistics.
+- **Refresh** and **More → Checks → Source statistics** start a repository-independent live scan on the source device. It never creates an archive and counts configured sources before Borg exclusions.
+- The live scan runs as the same SSH user as the backup job, supports `one_file_system`, controlled cancellation and a `find`/`stat` fallback when Python 3 is unavailable.
+- Changes to source paths, exclusions or relevant filesystem options automatically discard stale statistics.
+- The database is migrated automatically with the source and file-count fields.
+
+### File-style archive browser
+
+- The archive browser now uses breadcrumb navigation and a file table.
+- It shows name, size, type, permissions, owner/group and modification time.
+- Directories sort first, symbolic links display their target and the visible entry count is shown.
+- Metadata comes directly from `borg list --json-lines`; no FUSE mount is required.
+
+### Verification
+
+- 403 automated tests pass, including real live-scan, persistence, database migration, UI and archive-metadata tests.
+
+## v1.0.46
+
+### Centralized system administration areas
+
+- Under **Infrastructure**, the sidebar now contains only **Devices** and **System**.
+- The former **Notifications**, **Users**, **Manager Backup** and **Settings** sidebar entries have been removed and grouped under **System**.
+- The System workspace provides a top tab row in the order **Notifications**, **Users**, **Manager Backup**, **Settings** and **System Diagnostics**.
+- Switching among these five areas keeps **System** selected in the sidebar and the page heading consistently set to **System**.
+- Existing direct hash URLs remain valid so bookmarks and internal links continue to work.
+
+### Dashboard and responsive layout
+
+- System diagnostics have been removed from the dashboard and moved into the dedicated **System Diagnostics** tab.
+- The tab row remains horizontally scrollable on narrow screens and supports compact display density.
+- Administrator authorization continues to protect all five system areas; read-only users following a direct URL are safely returned to the dashboard.
+- Controller key management, notifications, user administration, manager backups and system settings retain their existing functions and APIs.
+
+### Documentation and tests
+
+- README, installation guide and the integrated German and English manuals now describe the new navigation and relocated diagnostics.
+- New regression tests cover sidebar contents, tab order, active states, authorization, responsive behavior and the absence of diagnostics from the dashboard.
+- The complete test suite contains 391 passing tests.
+
+## v1.0.45
+
+### Central notifications for backup and system events
+
+- The new administrator-only **Notifications** area sends selected events through SMTP email, a generic JSON webhook, a Discord webhook or a Telegram bot.
+- Configurable events include backup failures, backup warnings, optional success notifications, cancellations, repository actions, schedule failures and other manager runs.
+- Every channel has a test action. Current form values are saved securely before testing, so no separate intermediate save is required.
+- The delivery log shows channel, event, title, time and success or the concrete delivery error. It can be cleared independently of Borg run logs.
+
+### Secure secret and execution handling
+
+- SMTP password, webhook URL and Telegram bot token are stored only in encrypted form in the security database and are never returned to the Web UI.
+- Stored secrets remain unchanged when their input is left blank and can be removed only through an explicit delete option.
+- Delivery failures never change the Borg return code or run status. Repository, schedule and global execution slots are released before external services are contacted.
+- Diagnostic excerpts are filtered and limited to 4,000 characters and can be disabled completely. Secrets contained in webhook or Telegram addresses are also removed from delivery errors.
+- Generic webhooks receive structured JSON containing source, event, severity, title, message, run ID and UTC timestamp.
+
+### Backup, documentation and tests
+
+- Manager backups now include the non-secret notification settings; the corresponding secrets were already included through the backed-up security database.
+- Restoring an older backup without notification configuration removes a newer local configuration so stale channels cannot remain active with a restored security database.
+- README, installation guide and the integrated German and English manuals document setup, testing, event selection, security and failure behavior.
+- The complete test suite contains 388 passing tests.
+
+## v1.0.44
+
+### Kept device and backup-job enabled states consistent
+
+- Disabling a connected device now automatically disables every currently enabled backup job assigned to that device in the same database transaction.
+- The cascade applies both to the direct **Disable** action in the device list and to saving an edited device with its enabled state cleared.
+- Active or queued runs continue to block disabling, so no running Borg or SSH process is interrupted by a configuration-state change.
+- Re-enabling the device intentionally leaves its backup jobs disabled. This prevents schedules from resuming unexpectedly after maintenance or an incident; the required jobs must be enabled explicitly.
+- The confirmation dialog and success message state how many backup jobs are disabled together with the device.
+
+### Documentation and tests
+
+- README, installation guide and the integrated German and English help now document the cascade and the deliberate non-restoration of job enabled states.
+- Regression coverage verifies the direct device control, the device edit form, active-run protection and the state after re-enabling the device.
+
 ## v1.0.43
 
 ### Upload manager backups through the Web UI

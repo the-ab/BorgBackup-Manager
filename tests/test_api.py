@@ -2543,18 +2543,89 @@ def test_host_and_job_can_be_enabled_and_disabled_from_list_actions(monkeypatch)
             },
         ).json()
 
+        disabled_host = client.post(f"/api/hosts/{host['id']}/enabled", headers={**AUTH, **BROWSER}, json={"enabled": False})
+        assert disabled_host.status_code == 200
+        assert disabled_host.json()["enabled"] is False
+        jobs_after_host_disable = client.get("/api/jobs", headers=AUTH).json()
+        cascaded_job = next(item for item in jobs_after_host_disable if item["id"] == job["id"])
+        assert cascaded_job["enabled"] is False
+
+        enabled_host = client.post(f"/api/hosts/{host['id']}/enabled", headers={**AUTH, **BROWSER}, json={"enabled": True})
+        assert enabled_host.json()["enabled"] is True
+        jobs_after_host_enable = client.get("/api/jobs", headers=AUTH).json()
+        still_disabled_job = next(item for item in jobs_after_host_enable if item["id"] == job["id"])
+        assert still_disabled_job["enabled"] is False
+
+        enabled_job = client.post(f"/api/jobs/{job['id']}/enabled", headers={**AUTH, **BROWSER}, json={"enabled": True})
+        assert enabled_job.json()["enabled"] is True
         disabled_job = client.post(f"/api/jobs/{job['id']}/enabled", headers={**AUTH, **BROWSER}, json={"enabled": False})
         assert disabled_job.status_code == 200
         assert disabled_job.json()["enabled"] is False
 
-        disabled_host = client.post(f"/api/hosts/{host['id']}/enabled", headers={**AUTH, **BROWSER}, json={"enabled": False})
-        assert disabled_host.status_code == 200
-        assert disabled_host.json()["enabled"] is False
 
-        enabled_host = client.post(f"/api/hosts/{host['id']}/enabled", headers={**AUTH, **BROWSER}, json={"enabled": True})
-        enabled_job = client.post(f"/api/jobs/{job['id']}/enabled", headers={**AUTH, **BROWSER}, json={"enabled": True})
-        assert enabled_host.json()["enabled"] is True
-        assert enabled_job.json()["enabled"] is True
+def test_disabling_host_cascades_to_all_related_jobs():
+    with TestClient(app) as client:
+        host = client.post(
+            "/api/hosts", headers=AUTH,
+            json={"name": "cascade-host", "address": "10.0.0.64", "port": 22, "username": "backup", "host_key": HOST_KEY, "enabled": True},
+        ).json()
+        repository = client.post(
+            "/api/repositories", headers=AUTH,
+            json={"name": "cascade-repo", "managed": False, "location": "/tmp/cascade-repo", "encryption_mode": "none", "generate_external_ssh_key": False, "scan_external_host_key": False},
+        ).json()
+        job_ids = []
+        for index in range(2):
+            job = client.post(
+                "/api/jobs", headers=AUTH,
+                json={
+                    "name": f"cascade-job-{index}", "host_id": host["id"], "repository_id": repository["id"],
+                    "source_paths": [f"/srv/data-{index}"], "exclude_patterns": [],
+                    "archive_template": "{hostname}-{now:%Y-%m-%dT%H:%M:%S}", "compression": "zstd,6",
+                    "prune_options": {}, "create_options": {}, "enabled": True,
+                },
+            ).json()
+            job_ids.append(job["id"])
+
+        response = client.post(
+            f"/api/hosts/{host['id']}/enabled", headers={**AUTH, **BROWSER}, json={"enabled": False}
+        )
+        assert response.status_code == 200
+        jobs = {item["id"]: item for item in client.get("/api/jobs", headers=AUTH).json()}
+        assert all(jobs[job_id]["enabled"] is False for job_id in job_ids)
+
+
+def test_editing_host_to_disabled_cascades_related_jobs():
+    with TestClient(app) as client:
+        host = client.post(
+            "/api/hosts", headers=AUTH,
+            json={"name": "edit-disable-host", "address": "10.0.0.63", "port": 22, "username": "backup", "host_key": HOST_KEY, "enabled": True},
+        ).json()
+        repository = client.post(
+            "/api/repositories", headers=AUTH,
+            json={"name": "edit-disable-repo", "managed": False, "location": "/tmp/edit-disable-repo", "encryption_mode": "none", "generate_external_ssh_key": False, "scan_external_host_key": False},
+        ).json()
+        job = client.post(
+            "/api/jobs", headers=AUTH,
+            json={
+                "name": "edit-disable-job", "host_id": host["id"], "repository_id": repository["id"],
+                "source_paths": ["/srv/data"], "exclude_patterns": [],
+                "archive_template": "{hostname}-{now:%Y-%m-%dT%H:%M:%S}", "compression": "zstd,6",
+                "prune_options": {}, "create_options": {}, "enabled": True,
+            },
+        ).json()
+
+        response = client.put(
+            f"/api/hosts/{host['id']}",
+            headers={**AUTH, **BROWSER},
+            json={
+                "name": host["name"], "address": host["address"], "port": host["port"],
+                "username": host["username"], "host_key": host["host_key"], "enabled": False,
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["enabled"] is False
+        jobs = client.get("/api/jobs", headers=AUTH).json()
+        assert next(item for item in jobs if item["id"] == job["id"])["enabled"] is False
 
 
 def test_active_run_blocks_direct_disable_actions():
@@ -2575,6 +2646,13 @@ def test_active_run_blocks_direct_disable_actions():
             host_id, job_id = host.id, job.id
         assert client.post(f"/api/jobs/{job_id}/enabled", headers={**AUTH, **BROWSER}, json={"enabled": False}).status_code == 409
         assert client.post(f"/api/hosts/{host_id}/enabled", headers={**AUTH, **BROWSER}, json={"enabled": False}).status_code == 409
+        assert client.put(
+            f"/api/hosts/{host_id}", headers={**AUTH, **BROWSER},
+            json={
+                "name": "busy-toggle-host", "address": "10.0.0.62", "port": 22,
+                "username": "backup", "enabled": False, "host_key": HOST_KEY,
+            },
+        ).status_code == 409
 
 
 def test_manager_backup_can_be_uploaded_as_raw_body(monkeypatch, tmp_path: Path):
@@ -2655,3 +2733,157 @@ def test_disabled_device_jobs_are_not_registered_for_active_schedules():
             assigned_ids = schedule_target_job_ids(db, schedule, enabled_jobs_only=False)
     assert active_ids == [active_job_id]
     assert assigned_ids == [active_job_id, disabled_job_id]
+
+
+def test_notification_settings_store_secrets_without_returning_them():
+    payload = {
+        "enabled": True,
+        "instance_name": "Test Manager",
+        "language": "de",
+        "events": ["backup_failed", "backup_warning"],
+        "include_error_excerpt": True,
+        "timeout_seconds": 8,
+        "smtp_enabled": True,
+        "smtp_host": "mail.example.test",
+        "smtp_port": 587,
+        "smtp_security": "starttls",
+        "smtp_username": "borg",
+        "smtp_password": "VerySecretSmtpPassword!",
+        "smtp_clear_password": False,
+        "email_from": "borg@example.test",
+        "email_recipients": ["admin@example.test"],
+        "webhook_enabled": True,
+        "webhook_kind": "generic",
+        "webhook_url": "https://hooks.example.test/bbm-secret-token",
+        "webhook_clear_url": False,
+        "telegram_enabled": False,
+        "telegram_bot_token": None,
+        "telegram_clear_token": False,
+        "telegram_chat_id": "",
+    }
+    with TestClient(app) as client:
+        response = client.put("/api/notifications/settings", headers={**AUTH, **BROWSER}, json=payload)
+        loaded = client.get("/api/notifications/settings", headers=AUTH)
+    assert response.status_code == 200, response.text
+    assert loaded.status_code == 200
+    body = loaded.json()
+    assert body["smtp_password_set"] is True
+    assert body["webhook_url_set"] is True
+    assert "smtp_password" not in body
+    assert "webhook_url" not in body
+    settings_file = TEST_DATA_DIR / "notifications.json"
+    persisted = settings_file.read_text(encoding="utf-8")
+    assert "VerySecretSmtpPassword" not in persisted
+    assert "bbm-secret-token" not in persisted
+
+
+def test_notification_test_endpoint_reports_delivery(monkeypatch):
+    monkeypatch.setattr(main_module, "send_test_notification", lambda channel: [{
+        "channel": channel, "status": "success", "detail": "sent",
+    }])
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/notifications/test", headers={**AUTH, **BROWSER}, json={"channel": "email"},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"channel": "email", "status": "success", "detail": "sent"}
+
+
+def test_source_statistics_are_persisted_from_live_scan_and_backup(monkeypatch):
+    Base.metadata.create_all(engine)
+    suffix = str(time.time_ns())
+    outputs = [
+        (0, 'BBM_SOURCE_STATS_JSON={"size_bytes":12345,"file_count":17,"warning_count":0,"method":"python-lstat"}\n', ''),
+        (0, 'Archive name: bbm-source-auto\nNumber of files: 19\nThis archive: 15.00 kB  12.00 kB  5.00 kB\n', ''),
+    ]
+
+    async def fake_execute(_command, on_output=None, **_kwargs):
+        code, output, error = outputs.pop(0)
+        if on_output and output:
+            await on_output('stdout', output)
+        return code, output, error
+
+    monkeypatch.setattr(service, 'execute', fake_execute)
+    monkeypatch.setattr(service, 'notify_run_completion', lambda _run_id: None)
+
+    with SessionLocal() as db:
+        host = Host(
+            name=f'source-host-{suffix}', address='10.0.0.99', port=22,
+            username='backup', host_key=HOST_KEY, enabled=True,
+        )
+        repository = Repository(
+            name=f'source-repo-{suffix}', location=f'/tmp/source-repo-{suffix}', initialized=True,
+        )
+        db.add_all([host, repository])
+        db.flush()
+        job = Job(
+            name=f'source-job-{suffix}', host_id=host.id, repository_id=repository.id,
+            source_paths_json='["/srv/data"]', exclude_patterns_json='[]',
+            archive_template='source-{now}', archive_prefix=f'bbm-source-{suffix}-',
+            compression='zstd,6', prune_options_json='{}', create_options_json='{}', enabled=True,
+        )
+        db.add(job)
+        db.flush()
+        scan_run = Run(
+            job_id=job.id, repository_id=repository.id, job_name_snapshot=job.name,
+            action='source-stats', status='queued', command_preview='live scan',
+        )
+        db.add(scan_run)
+        db.commit()
+        job_id, scan_run_id = job.id, scan_run.id
+
+    asyncio.run(service.execute_run(
+        scan_run_id, runner.Command(argv=['true'], preview='live scan'), refresh_size_after=False,
+    ))
+
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        assert job.source_size_bytes == 12345
+        assert job.source_file_count == 17
+        assert job.source_stats_origin == 'scan'
+        backup_run = Run(
+            job_id=job.id, repository_id=job.repository_id, job_name_snapshot=job.name,
+            action='backup', status='queued', command_preview='borg create',
+        )
+        db.add(backup_run)
+        db.commit()
+        backup_run_id = backup_run.id
+
+    asyncio.run(service.execute_run(
+        backup_run_id, runner.Command(argv=['true'], preview='borg create'), refresh_size_after=False,
+    ))
+
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        run = db.get(Run, backup_run_id)
+        assert job.source_size_bytes == 15000
+        assert job.source_file_count == 19
+        assert job.source_stats_origin == 'backup'
+        assert run.backup_file_count == 19
+
+
+def test_editing_job_source_configuration_clears_stale_source_statistics():
+    from app.schemas import DEFAULT_CREATE_OPTIONS, JobIn
+
+    row = Job(
+        id=999001, name='source-config', host_id=1, repository_id=2,
+        source_paths_json='["/srv/data"]', exclude_patterns_json='["*/cache"]',
+        archive_template='source-{now}', compression='zstd,6', prune_options_json='{}',
+        create_options_json=json.dumps(DEFAULT_CREATE_OPTIONS), enabled=True,
+        source_size_bytes=1000, source_file_count=10, source_stats_origin='backup',
+    )
+    unchanged = JobIn(
+        name='source-config', host_id=1, repository_id=2, source_paths=['/srv/data'],
+        exclude_patterns=['*/cache'], archive_template='source-{now}', compression='zstd,6',
+        prune_options={}, create_options=dict(DEFAULT_CREATE_OPTIONS), enabled=True,
+    )
+    main_module.apply_job(row, unchanged)
+    assert row.source_size_bytes == 1000
+    assert row.source_file_count == 10
+
+    changed = unchanged.model_copy(update={'source_paths': ['/srv/data', '/etc']})
+    main_module.apply_job(row, changed)
+    assert row.source_size_bytes is None
+    assert row.source_file_count is None
+    assert row.source_stats_checked_at is None
+    assert row.source_stats_origin is None

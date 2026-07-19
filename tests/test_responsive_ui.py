@@ -41,7 +41,7 @@ def test_all_operational_views_have_mobile_overflow_protection():
 
     for view in (
         "dashboard", "hosts", "repositories", "jobs", "schedules", "runs",
-        "archives", "restore", "backups", "users", "settings", "help", "releases",
+        "archives", "restore", "notifications", "users", "backups", "settings", "diagnostics", "help", "releases",
     ):
         assert f'id="view-{view}"' in html
 

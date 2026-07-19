@@ -69,9 +69,11 @@ def test_full_backup_contains_snapshot_manifest_and_keys(monkeypatch, tmp_path: 
     connection.commit(); connection.close()
     (data / "ssh").mkdir(); (data / "ssh" / "id_ed25519").write_text("private", encoding="utf-8")
     (data / "settings.json").write_text('{"density":"compact"}', encoding="utf-8")
+    (data / "notifications.json").write_text('{"enabled":true}', encoding="utf-8")
     monkeypatch.setattr(backups, "DATA_DIR", data)
     monkeypatch.setattr(backups, "BACKUP_DIR", data / "backups")
     monkeypatch.setattr(backups, "SETTINGS_PATH", data / "settings.json")
+    monkeypatch.setattr(backups, "NOTIFICATION_SETTINGS_PATH", data / "notifications.json")
     security_dir = data / "security"
     security_dir.mkdir()
     security_database = security_dir / "security.db"
@@ -99,7 +101,7 @@ def test_full_backup_contains_snapshot_manifest_and_keys(monkeypatch, tmp_path: 
     assert manifest["format"] == backups.BACKUP_FORMAT
     assert manifest["repository_data_included"] is False
     assert {
-        "data/manager.db", "data/settings.json",
+        "data/manager.db", "data/settings.json", "data/notifications.json",
         "data/security/security.db", "data/security/master.key",
     } <= names
     assert "data/ssh/id_ed25519" not in names
@@ -285,6 +287,7 @@ def test_prepared_restore_replaces_control_data_and_removes_sqlite_sidecars(monk
     (data / "manager.db-shm").write_text("shm", encoding="utf-8")
     (data / "backups").mkdir()
     (data / "backups" / "keep.zip").write_text("keep", encoding="utf-8")
+    (data / "notifications.json").write_text("{\"enabled\":true}", encoding="utf-8")
     staging = tmp_path / "stage"
     (staging / "data" / "ssh").mkdir(parents=True)
     (staging / "data" / "manager.db").write_text("new-db", encoding="utf-8")
@@ -298,6 +301,7 @@ def test_prepared_restore_replaces_control_data_and_removes_sqlite_sidecars(monk
     assert not (data / "manager.db-wal").exists()
     assert not (data / "manager.db-shm").exists()
     assert (data / "ssh" / "id_ed25519").read_text(encoding="utf-8") == "new-key"
+    assert not (data / "notifications.json").exists()
     assert (data / "backups" / "keep.zip").is_file()
 
 

@@ -28,6 +28,7 @@ from app.config import (
     DATABASE_URL,
     SECURITY_DATABASE_PATH,
     SETTINGS_PATH,
+    NOTIFICATION_SETTINGS_PATH,
 )
 
 
@@ -37,7 +38,7 @@ BACKUP_MAGIC = b"BBM-BACKUP-1\n"
 BACKUP_NAME = re.compile(
     r"^borgbackup-manager-backup-v[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}-[a-zA-Z0-9_-]+\.(?:zip|bbm)$"
 )
-RESTORE_COMPONENTS = ("manager.db", "settings.json", "ssh", "repository-ssh", "repository-keys", "tls", "security")
+RESTORE_COMPONENTS = ("manager.db", "settings.json", "notifications.json", "ssh", "repository-ssh", "repository-keys", "tls", "security")
 
 
 def _label(value: str) -> str:
@@ -118,7 +119,7 @@ def _write_plain_backup(destination: Path, app_version: str, label: str) -> dict
             "encrypted": False,
             "repository_data_included": False,
             "run_logs_included": False,
-            "includes": ["database", "security_database", "master_key", "settings", "migration_environment"],
+            "includes": ["database", "security_database", "master_key", "settings", "notification_settings", "migration_environment"],
         }
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
             archive.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
@@ -128,6 +129,9 @@ def _write_plain_backup(destination: Path, app_version: str, label: str) -> dict
             if SETTINGS_PATH.is_file():
                 archive.write(SETTINGS_PATH, "data/settings.json")
                 permissions["data/settings.json"] = 0o600
+            if NOTIFICATION_SETTINGS_PATH.is_file():
+                archive.write(NOTIFICATION_SETTINGS_PATH, "data/notifications.json")
+                permissions["data/notifications.json"] = 0o600
             security_dir = DATA_DIR / "security"
             if SECURITY_DATABASE_PATH.is_file():
                 with NamedTemporaryFile(prefix="bbm-security-", suffix=".sqlite3", dir=DATA_DIR, delete=False) as security_temporary:
@@ -404,9 +408,14 @@ def apply_prepared_restore(staging: Path) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     for component in RESTORE_COMPONENTS:
         incoming = source / component
-        if not incoming.exists():
-            continue
         target = DATA_DIR / component
+        if not incoming.exists():
+            # Backups created before the notification center must not retain a
+            # newer installation's channel configuration after a rollback.
+            # Notification secrets are already replaced with security.db.
+            if component == "notifications.json":
+                target.unlink(missing_ok=True)
+            continue
         temporary_target = DATA_DIR / f".{component}.restore-new"
         if temporary_target.exists():
             if temporary_target.is_dir():

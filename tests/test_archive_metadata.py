@@ -31,3 +31,17 @@ def test_archives_are_sorted_newest_first_with_name_timestamp_fallback():
         "host-a-2026-07-16T23:00:00",
         "ohne-zeit",
     ]
+
+
+def test_archive_browser_listing_exposes_file_metadata():
+    import json
+    from app.main import parse_archive_browser_listing
+    output = json.dumps({
+        "path": "etc/config.ini", "type": "f", "size": 42,
+        "mtime": "2026-07-19T10:11:12.000000", "mode": "-rw-r-----",
+        "user": "root", "group": "backup", "uid": 0, "gid": 1000,
+    })
+    entry = parse_archive_browser_listing(output, "etc")[0]
+    assert entry["mode"] == "-rw-r-----"
+    assert entry["user"] == "root" and entry["group"] == "backup"
+    assert entry["uid"] == 0 and entry["gid"] == 1000

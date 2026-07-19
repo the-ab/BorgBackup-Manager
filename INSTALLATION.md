@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.0.43
+# Installation und Betrieb – BorgBackup Manager 1.0.47
 
 ## 1. Voraussetzungen des Manager-Hosts
 
@@ -18,7 +18,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.0.43.zip
+BorgBackup-Manager-1.0.47.zip
 └── BorgBackup-Manager/
 ```
 
@@ -26,7 +26,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.43.zip
+unzip /pfad/BorgBackup-Manager-1.0.47.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -131,7 +131,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.43.zip
+unzip /pfad/BorgBackup-Manager-1.0.47.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build
@@ -169,6 +169,8 @@ Mit Benutzer `admin` und dem temporären Passwort anmelden. Die WebUI erzwingt u
 
 Auf Smartphones und schmalen Tablets zeigt die Kopfzeile der Seitenleiste die Schaltfläche **Menü**. Sie öffnet Navigation und Kontofunktionen; nach Auswahl eines Bereichs wird das Menü automatisch geschlossen. Die Betriebsseiten wurden bei 360, 390 und 768 Pixel Breite geprüft. Tabellen wechseln auf beschriftete Karten, Formulare werden einspaltig, Aktionsschaltflächen umbrechen vollständig und Dialoge bleiben innerhalb der sichtbaren Bildschirmhöhe. Es ist kein horizontales Scrollen der gesamten WebUI erforderlich.
 
+Unter **Infrastruktur** enthält die Seitenleiste ausschließlich **Geräte** und **System**. Der Systembereich besitzt direkt in der sticky Kopfzeile eine horizontale Reiterleiste für **Benachrichtigungen**, **Benutzer**, **Manager-Backup**, **Einstellungen** und **Systemdiagnose**. Sie bleibt beim Scrollen sichtbar, hebt den aktiven Bereich dunkel hervor und bleibt auf Mobilgeräten horizontal scrollbar. Die Systemdiagnose wurde vom Dashboard in diesen eigenen Reiter verschoben. Beim Wechsel der Reiter bleibt **System** in der Seitenleiste aktiv; vorhandene direkte URLs und Lesezeichen bleiben gültig.
+
 ## 6. Client vorbereiten
 
 Auf Debian oder Ubuntu:
@@ -201,9 +203,9 @@ Die Seite zeigt **Gerät hinzufügen** als oberen Vollbreitenblock und **Verbund
 5. Gerät speichern.
 6. **Borg prüfen** ausführen.
 
-In der Liste **Verbundene Geräte** kann ein Gerät direkt über **Deaktivieren** aus dem Betrieb genommen und später über **Aktivieren** wieder freigegeben werden. Die Konfiguration bleibt erhalten. Deaktivierte Geräte werden nicht durch Zeitpläne gestartet, erhalten keine aktiven Repository-SSH-Zugänge und ihre Jobs können nicht manuell ausgeführt werden. Laufende oder wartende Ausführungen blockieren das Deaktivieren.
+In der Liste **Verbundene Geräte** kann ein Gerät direkt über **Deaktivieren** aus dem Betrieb genommen und später über **Aktivieren** wieder freigegeben werden. Die Konfiguration bleibt erhalten. Beim Deaktivieren setzt der Manager alle zugehörigen aktiven Backup-Jobs automatisch auf **inaktiv**, entfernt das Gerät aus aktiven Zeitplänen und entzieht seine aktiven Repository-SSH-Zugänge. Laufende oder wartende Ausführungen blockieren das Deaktivieren. Beim erneuten Aktivieren werden Zeitpläne und Repository-Zugänge synchronisiert; die Backup-Jobs bleiben bewusst deaktiviert und müssen einzeln wieder aktiviert werden.
 
-Die Erneuerung des zentralen Controller-Schlüssels befindet sich aus Sicherheitsgründen ausschließlich unter **Einstellungen → Controller-Schlüssel**. Im Geräteformular steht nur die ungefährliche Kopierfunktion zur Verfügung.
+Die Erneuerung des zentralen Controller-Schlüssels befindet sich aus Sicherheitsgründen ausschließlich unter **System → Einstellungen → Controller-Schlüssel**. Im Geräteformular steht nur die ungefährliche Kopierfunktion zur Verfügung.
 
 Der Controller-Schlüssel in `authorized_keys` erlaubt die Anmeldung des Managers. Der separat bestätigte Ed25519-Hostschlüssel weist die Identität des Clients nach. Beide Prüfungen sind erforderlich; der Hostschlüssel wird bei der Verbindung über eine temporäre `known_hosts`-Datei mit aktivem `StrictHostKeyChecking=yes` verwendet.
 
@@ -313,7 +315,7 @@ Im Container erscheinen diese als `/repositories/nas-a`, `/repositories/nas-b` u
 
 Globale Einstellung:
 
-1. **Einstellungen** öffnen.
+1. **System → Einstellungen** öffnen.
 2. **Speicherplatz-Sperre global aktivieren** ein- oder ausschalten.
 3. Globale Sperrgrenze zwischen 1 und 100 Prozent setzen.
 4. Einstellungen speichern.
@@ -329,7 +331,7 @@ Die **Systemdiagnose** zeigt alle im Container sichtbaren Mountpunkte unter `/re
 
 ## 9. Ausschlussvorlagen konfigurieren
 
-Unter **Einstellungen → Ausschlussvorlagen** befindet sich standardmäßig:
+Unter **System → Einstellungen → Ausschlussvorlagen** befindet sich standardmäßig:
 
 ```text
 Linux-Systempfade
@@ -405,7 +407,7 @@ Ein Job darf nur einem aktiven Zeitplan zugeordnet sein. Überlappungen werden b
 
 Pro Repository wird immer nur eine Borg-Aktion gleichzeitig ausgeführt. Starten mehrere Geräte zur selben Zeit, bleibt der erste Lauf **Laufend**, alle weiteren stehen **Wartend**. Das Dashboard zeigt beide Zustände getrennt. Sobald das Repository frei wird, startet der nächste wartende Lauf automatisch. Direkt am Repository gestartetes Compact und repositoryweite Archivlöschungen werden ebenfalls über diese Sperre und ein reguläres Ausführungsprotokoll gesteuert; ein Backup-Job ist dafür nicht erforderlich.
 
-Unter **Einstellungen → Parallelitätsgrenzen** kann zusätzlich eine globale Obergrenze von `0` bis `64` gesetzt werden. `0` lässt unterschiedliche Repositorys unbegrenzt parallel arbeiten; `1` erlaubt insgesamt nur eine laufende Manager-Ausführung. Zeitpläne können eine eigene, engere Grenze besitzen. Damit lassen sich beispielsweise zwei Geräte mit zwei verschiedenen Repositorys gemeinsam um 22:00 Uhr einreihen, ohne gleichzeitig Netzwerk und CPU zu belasten.
+Unter **System → Einstellungen → Parallelitätsgrenzen** kann zusätzlich eine globale Obergrenze von `0` bis `64` gesetzt werden. `0` lässt unterschiedliche Repositorys unbegrenzt parallel arbeiten; `1` erlaubt insgesamt nur eine laufende Manager-Ausführung. Zeitpläne können eine eigene, engere Grenze besitzen. Damit lassen sich beispielsweise zwei Geräte mit zwei verschiedenen Repositorys gemeinsam um 22:00 Uhr einreihen, ohne gleichzeitig Netzwerk und CPU zu belasten.
 
 Die Reihenfolge wird als datenbankgestützte FIFO-Warteschlange geführt und zusätzlich durch eine lokale Prozesssperre abgesichert. Das tatsächliche Repository-Verzeichnis beziehungsweise die externe URL bildet die Sperridentität, sodass auch versehentlich doppelt erfasste Ziele nicht parallel bearbeitet werden. Freie globale Plätze werden nicht durch einen älteren Lauf verschwendet, der noch auf sein Repository oder seine Zeitplangrenze wartet. Wartende Laufprotokolle nennen die konkrete Ursache und gegebenenfalls die davorliegende Ausführungs-ID. Nur tatsächlich lebende Manager-Tasks belegen Plätze; verwaiste Laufzustände werden nicht als dauerhafte Blocker behandelt. Extern gestartete Borg-Prozesse sind für die Manager-Warteschlange nicht sichtbar und werden weiterhin durch Borgs eigene Repository-Sperre abgefangen.
 
@@ -588,9 +590,27 @@ Ab Version 0.8.7 liegen vollständige neue Laufprotokolle unter:
 /data/run-logs/run-ID.log
 ```
 
-SQLite speichert nur Metadaten sowie feste Vorschauen von maximal 4 KiB stdout, 32 KiB gefilterte Fehler-/Warnungsausgabe und 16 KiB Bedienprotokoll. Beim ersten Start von 0.8.7 werden größere Altinhalte in `/data/run-logs` migriert und anschließend aus der Datenbank gekürzt. Unter **Einstellungen → Ausführungsprotokolle** werden Anzahl, Dateigröße und Datenbankanteil angezeigt. Dort können abgelaufene oder alle abgeschlossenen Protokolle sofort gelöscht werden. Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin nach der konfigurierten Aufbewahrungsdauer. Aktive Läufe bleiben immer erhalten.
+SQLite speichert nur Metadaten sowie feste Vorschauen von maximal 4 KiB stdout, 32 KiB gefilterte Fehler-/Warnungsausgabe und 16 KiB Bedienprotokoll. Beim ersten Start von 0.8.7 werden größere Altinhalte in `/data/run-logs` migriert und anschließend aus der Datenbank gekürzt. Unter **System → Einstellungen → Ausführungsprotokolle** werden Anzahl, Dateigröße und Datenbankanteil angezeigt. Dort können abgelaufene oder alle abgeschlossenen Protokolle sofort gelöscht werden. Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin nach der konfigurierten Aufbewahrungsdauer. Aktive Läufe bleiben immer erhalten.
 
-## 17. Manager-Backup und Sicherheitsdaten
+## 17. Benachrichtigungszentrale einrichten
+
+1. Als Administrator **System → Benachrichtigungen** öffnen.
+2. Installationsnamen, Sprache und gewünschte Ereignisse wählen.
+3. Mindestens einen Kanal einrichten:
+   - SMTP-Server, Port, Transportverschlüsselung, Absender und Empfänger
+   - generischer oder Discord-Webhook
+   - Telegram-Bot-Token und Chat-ID beziehungsweise Kanal
+4. Konfiguration speichern.
+5. Den jeweiligen **Testen**-Button verwenden und das Zustellungsprotokoll kontrollieren.
+6. Erst danach **Benachrichtigungen global aktivieren**.
+
+Geheimnisse werden nicht in `notifications.json` abgelegt, sondern mit dem Manager-Master-Key verschlüsselt in der Sicherheitsdatenbank gespeichert. Beim Bearbeiten bleiben leere Passwort-, URL- und Tokenfelder unverändert; zum Entfernen muss die jeweilige Löschoption aktiviert werden.
+
+Für SMTP sollte STARTTLS oder direktes TLS verwendet werden. Die Einstellung **Keine** ist ausschließlich für bewusst isolierte interne Mail-Relays vorgesehen. Ausgehende Verbindungen zu SMTP, Webhook und Telegram müssen durch Firewall, DNS und gegebenenfalls den Reverse-Proxy-Host erlaubt sein.
+
+Fehlgeschlagene Zustellungen werden im Benachrichtigungsprotokoll gespeichert, verändern aber weder den Borg-Rückgabecode noch den Status der Sicherung. Der Manager gibt den Repository- und Parallelitätsplatz frei, bevor er externe Dienste kontaktiert.
+
+## 18. Manager-Backup und Sicherheitsdaten
 
 Das Manager-Backup enthält Manager-Datenbank, Sicherheitsdatenbank, Master-Key, Einstellungen, Controller-/Repository-SSH-Schlüssel, Borg-Keyfiles und TLS-Dateien. Repository-Nutzdaten und vollständige Dateien aus `/data/run-logs` sind nicht enthalten.
 
@@ -602,7 +622,7 @@ Die `.bbm`-Datei verwendet AES-256-GCM und scrypt.
 
 ### Backup hochladen
 
-1. **Manager-Backup** öffnen.
+1. **System → Manager-Backup** öffnen.
 2. Unter **Manager-Backup hochladen** eine vorhandene `.bbm`-Datei oder ein historisches `.zip`-Manager-Backup auswählen.
 3. **Backup hochladen** wählen.
 4. Nach erfolgreicher serverseitiger Prüfung erscheint die Datei unter **Vorhandene Backups** und in der Wiederherstellungsauswahl.
@@ -636,9 +656,9 @@ bash restore-backup.sh /pfad/manager-backup.bbm
 
 Neue 0.9.x-Backups enthalten Sicherheitsdatenbank und Master-Key vollständig. Alte 0.8.x-Backups übernehmen beim ersten Start ihre bisherigen Token-/Schlüsselwerte einmalig in das neue Sicherheitsmodell. Repository-Verzeichnisse müssen separat übertragen oder wieder eingebunden werden.
 
-## 18. Zeitzone, Dashboard und Einstellungen
+## 19. Zeitzone, Dashboard und Systembereich
 
-Der Compose-Stack setzt standardmäßig `TZ=Europe/Berlin`. Das Dashboard zeigt Repository-Anzahl und summierte Repository-Größe gemeinsam in einer Kachel. Darüber hinaus steht oberhalb der letzten Aktivitäten eine sortierbare Backup-Job-Tabelle mit Status, Gerät, Repository, Quellen, Zeitplan, letztem Lauf und den gespeicherten Größen der letzten Sicherung. Ein fehlgeschlagener letzter Lauf ersetzt dabei nicht die Größenwerte der vorherigen erfolgreichen Sicherung. Die Systemdiagnose lässt sich nach dem Laden ohne Seitenreload wieder schließen. Das Dashboard zeigt neben laufenden auch wartende Ausführungen; beide Kacheln öffnen die entsprechend gefilterte Protokollansicht. Die WebUI stellt serverseitige UTC-Zeitwerte in dieser Zeitzone dar. Borg-Archivzeitpunkte ohne Offset werden als lokale Zeit dieser Zeitzone interpretiert und nicht ein zweites Mal um zwei Stunden verschoben. Cron-Zeitpläne werden in dieser Zeitzone ausgewertet und remote gestartete Borg-Befehle erhalten dieselbe TZ-Variable.
+Der Compose-Stack setzt standardmäßig `TZ=Europe/Berlin`. Das Dashboard zeigt Repository-Anzahl und summierte Repository-Größe gemeinsam in einer Kachel. Darüber hinaus steht oberhalb der letzten Aktivitäten eine sortierbare Backup-Job-Tabelle mit Status, Gerät, Repository, Quellen, Zeitplan, letztem Lauf und den gespeicherten Größen der letzten Sicherung. Ein fehlgeschlagener letzter Lauf ersetzt dabei nicht die Größenwerte der vorherigen erfolgreichen Sicherung. Die Systemdiagnose befindet sich unter **System → Systemdiagnose** und lässt sich nach dem Laden ohne Seitenreload wieder schließen. Das Dashboard zeigt neben laufenden auch wartende Ausführungen; beide Kacheln öffnen die entsprechend gefilterte Protokollansicht. Die WebUI stellt serverseitige UTC-Zeitwerte in dieser Zeitzone dar. Borg-Archivzeitpunkte ohne Offset werden als lokale Zeit dieser Zeitzone interpretiert und nicht ein zweites Mal um zwei Stunden verschoben. Cron-Zeitpläne werden in dieser Zeitzone ausgewertet und remote gestartete Borg-Befehle erhalten dieselbe TZ-Variable.
 
 
 - Darstellung hell, dunkel oder automatisch
@@ -658,9 +678,9 @@ Der Compose-Stack setzt standardmäßig `TZ=Europe/Berlin`. Das Dashboard zeigt 
 
 Dashboard-Backup-Jobs, Backup-Jobs, Repositories und verbundene Geräte besitzen jeweils eigene Sortierfelder. Die Auswahl wird je angemeldetem Benutzer im verwendeten Browser gespeichert.
 
-## 19. Benutzerverwaltung
+## 20. Benutzerverwaltung
 
-Administratoren öffnen **Benutzer** und können dort:
+Administratoren öffnen **System → Benutzer** und können dort:
 
 - Konten mit Benutzername, Rolle und temporärem Passwort anlegen
 - Passwortwechsel bei der nächsten Anmeldung erzwingen
@@ -693,13 +713,13 @@ Jeder Administrator und jeder normale Benutzer kann über **Darstellung & Sprach
 
 Die Werte liegen am jeweiligen Benutzerkonto in der Sicherheitsdatenbank. Sie verändern keine globale Einstellung und haben keinen Einfluss auf andere Konten. Navigation, Formulare, Dialoge, dynamische Statusmeldungen, das integrierte Betriebshandbuch und die aktuellen Release Notes folgen der gewählten Sprache.
 
-## 19. Aktionsbestätigung und Aktualisierung
+## 21. Aktionsbestätigung und Aktualisierung
 
 Die WebUI bestätigt Änderungen unmittelbar über den betätigten Button, eine Toast-Meldung und die Statusanzeige im Seitenkopf. Bei laufenden oder wartenden Aufgaben zeigt die Statusposition vor dem Farbschema-Schalter die aktuell laufende Aufgabe und gegebenenfalls die Zahl weiterer aktiver Läufe. Ein Klick öffnet ohne Zwischenliste direkt das Live-Log des aktuell laufenden Vorgangs; falls ausschließlich wartende Läufe vorhanden sind, wird der nächste wartende Lauf geöffnet. Borg-Hintergrundläufe werden nach ihrer Lauf-ID bis zum tatsächlichen Abschluss verfolgt. Anschließend werden ausschließlich die betroffenen API-Bereiche neu geladen. Archivlisten verwenden einen persistenten repositorybezogenen Cache. Nach Backup, Prune, Umbenennen oder Löschen wird dieser vor dem sichtbaren Laufabschluss invalidiert; eine geöffnete Ansicht baut ihn anschließend gezielt neu auf. Compact allein verändert die Archivliste nicht.
 
 Das unter **Einstellungen** konfigurierbare Aktualisierungsintervall ist nur eine zusätzliche Hintergrundaktualisierung. Die Bestätigung und Übernahme einer Aktion ist nicht von diesem Zeitwert abhängig. Ein manuelles Neuladen der gesamten Browserseite ist im Normalfall nicht erforderlich.
 
-## 20. Update
+## 22. Update
 
 ### Eingefrorene WebUI nach Version 1.0.26/1.0.27
 
@@ -777,7 +797,7 @@ Das Update-Skript:
 
 Repository-Nutzdaten werden beim Update weder kopiert noch verändert. Das Datenbackup verwendet zusätzlich `--one-file-system`, sodass unerwartete weitere Unter-Mounts im Manager-Datenpfad nicht traversiert werden. Der Borg-Cache ist regenerierbar und wird ebenfalls nicht in das Update-Backup aufgenommen. Sicherheitsdatenbank, Master-Key, Einstellungen, SSH-/TLS-Schlüssel und Borg-Sicherheitsstatus bleiben Bestandteil der persistenten Managersicherung.
 
-## 21. Healthchecks
+## 23. Healthchecks
 
 Web-Bereitschaft:
 
@@ -803,7 +823,7 @@ Detaillierte Komponenteninformationen stehen nur angemeldeten Administratoren ü
 
 Der Docker-Build verwendet den festgeschriebenen Multi-Platform-Digest des offiziellen Python-Basisimages. `requirements.txt` enthält für alle direkten und transitiven Laufzeitpakete geprüfte SHA-256-Hashes der Linux-amd64- und Linux-arm64-Wheels; Pip installiert ausschließlich mit `--require-hashes`. Änderungen an Abhängigkeiten erfordern deshalb eine bewusste Aktualisierung von Versionen und Hashes.
 
-## 22. Docker-Diagnose
+## 24. Docker-Diagnose
 
 ```bash
 cd /opt/BorgBackup-Manager
@@ -819,7 +839,7 @@ IMAGE       borgbackup-manager:latest
 CONTAINER   borgbackup-manager
 ```
 
-## 23. Repository-SSH-Diagnose
+## 25. Repository-SSH-Diagnose
 
 Die WebUI-Diagnose prüft Repository-Zugriff, Logs, Wrapper und `authorized_keys` direkt als Benutzer `borg`. Die nur als Root mögliche Konfigurationsprüfung `sshd -t` wird beim Containerstart ausgeführt und der Web-API als geschützter Laufzeitstatus bereitgestellt.
 
@@ -830,7 +850,7 @@ docker compose exec -T borg-manager tail -n 200 /data/logs/sshd.log
 docker compose exec -T borg-manager tail -n 200 /data/logs/borg-serve.log
 ```
 
-## 24. Sicherheitsregeln
+## 26. Sicherheitsregeln
 
 - Port 2222 nur für bekannte Clients freigeben.
 - `/data/security/security.db` und `/data/security/master.key` nur gemeinsam sichern.
@@ -840,7 +860,7 @@ docker compose exec -T borg-manager tail -n 200 /data/logs/borg-serve.log
 - Anwendungsdatenbanken vor dem Dateibackup konsistent dumpen oder snapshotten.
 - Keine zweite Manager-Instanz gleichzeitig auf dasselbe Repository schreiben lassen.
 
-## 25. Deinstallation ohne Datenverlust
+## 27. Deinstallation ohne Datenverlust
 
 Container entfernen:
 
@@ -896,3 +916,8 @@ Dateisystem   # nur bei verwalteten Repositories
 ```
 
 Anschließend unter **Archive → Archive anzeigen** prüfen, ob je Archiv Dauer, Dateianzahl und die drei Größen erscheinen. Bei sehr alten oder unvollständigen Checkpoint-Archiven können einzelne Werte fehlen; die WebUI zeigt dann `–`.
+
+
+## Quellenstatistik und Archivbrowser
+
+Die Quellenstatistik eines Backup-Jobs wird nach abgeschlossenen Backups aus Borgs Abschlusswerten aktualisiert. Eine manuelle Aktualisierung führt einen repositoryunabhängigen Live-Scan auf dem Quellgerät aus. Dieser zählt die konfigurierten Quellen vor Borg-Ausschlüssen und erzeugt kein Archiv. Nach einem abgeschlossenen Backup ersetzen Borgs exakte Abschlusswerte nach Anwendung der Ausschlüsse die Scanwerte. Der Archivbrowser liest Metadaten direkt über `borg list --json-lines`, zeigt Größe, Typ, Rechte, Besitzer/Gruppe und Änderungszeit und benötigt kein FUSE.

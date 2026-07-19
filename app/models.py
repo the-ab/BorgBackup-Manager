@@ -76,6 +76,10 @@ class Job(Base):
     prune_options_json: Mapped[str] = mapped_column(Text, default="{}")
     create_options_json: Mapped[str] = mapped_column(Text, default="{}")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    source_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_stats_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_stats_origin: Mapped[str | None] = mapped_column(String(20), nullable=True)
     host: Mapped[Host] = relationship()
     repository: Mapped[Repository] = relationship()
 
@@ -138,6 +142,7 @@ class Run(Base):
     backup_original_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backup_compressed_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backup_deduplicated_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    backup_file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -157,3 +162,15 @@ class ArchiveMount(Base):
     job: Mapped[Job] = relationship()
     repository: Mapped[Repository] = relationship()
     host: Mapped[Host] = relationship()
+
+
+class NotificationDelivery(Base):
+    __tablename__ = "notification_deliveries"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    event_type: Mapped[str] = mapped_column(String(50))
+    channel: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(300))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

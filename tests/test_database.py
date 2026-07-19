@@ -29,5 +29,5 @@ def test_legacy_database_receives_additive_columns():
         "external_host_fingerprint", "validation_error", "validation_details", "validated_at",
         "storage_guard_enabled", "storage_guard_threshold_percent",
     } <= repository_columns
-    assert {"archive_prefix", "archive_prefix_history_json", "create_options_json"} <= job_columns
-    assert {"repository_id", "job_name_snapshot", "log_output", "warning_summary_json", "borg_version", "trigger_type", "schedule_name_snapshot", "archive_name_snapshot", "backup_original_size_bytes", "backup_compressed_size_bytes", "backup_deduplicated_size_bytes"} <= run_columns
+    assert {"archive_prefix", "archive_prefix_history_json", "create_options_json", "source_size_bytes", "source_file_count", "source_stats_checked_at", "source_stats_origin"} <= job_columns
+    assert {"repository_id", "job_name_snapshot", "log_output", "warning_summary_json", "borg_version", "trigger_type", "schedule_name_snapshot", "archive_name_snapshot", "backup_original_size_bytes", "backup_compressed_size_bytes", "backup_deduplicated_size_bytes", "backup_file_count"} <= run_columns

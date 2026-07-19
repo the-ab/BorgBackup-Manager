@@ -10,6 +10,7 @@ EXPORT_DIR = DATA_DIR / "exports"
 RUN_LOG_DIR = DATA_DIR / "run-logs"
 ARCHIVE_CACHE_DIR = Path(os.getenv("BBM_ARCHIVE_CACHE_DIR", str(DATA_DIR / "archive-cache")))
 SETTINGS_PATH = DATA_DIR / "settings.json"
+NOTIFICATION_SETTINGS_PATH = DATA_DIR / "notifications.json"
 DATABASE_URL = os.getenv("BBM_DATABASE_URL", f"sqlite:///{DATA_DIR / 'manager.db'}")
 LEGACY_ADMIN_TOKEN = os.getenv("BBM_ADMIN_TOKEN", "")
 LEGACY_SECRET_KEY = os.getenv("BBM_SECRET_KEY", "")

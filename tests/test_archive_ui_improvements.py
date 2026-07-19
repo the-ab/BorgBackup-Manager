@@ -42,3 +42,14 @@ def test_archive_bulk_delete_and_repository_compact_are_exposed_safely():
     assert "repositoryJobs[0]?.id" not in javascript
     assert "repositoryJobs.length === 1 ? repositoryJobs[0].id : null" in javascript
     assert "Mehrere Geräte" in javascript
+
+
+def test_archive_browser_uses_file_table_with_metadata_columns():
+    html = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    assert 'class="browser-breadcrumbs"' in html
+    for heading in ("Größe", "Typ", "Rechte", "Besitzer", "Geändert"):
+        assert heading in javascript
+    assert ".archive-browser-table" in css
+    assert "entry.mode" in javascript and "entry.user" in javascript

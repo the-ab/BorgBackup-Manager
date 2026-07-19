@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 import shutil
+import subprocess
 
 import pytest
 
@@ -836,3 +838,40 @@ def test_repository_compact_does_not_require_a_backup_job(job):
 
     assert "borg --lock-wait 600 compact --verbose --show-rc" in command.preview
     assert "ssh backup@10.0.0.4" not in command.preview
+
+
+def test_source_stats_command_uses_repository_independent_live_scan(job):
+    from app.runner import source_stats_command
+    command = source_stats_command(job)
+    assert "BBM_SOURCE_STATS_JSON" in command.preview
+    assert "Live-Scan" in command.preview
+    assert "vor Borg-Ausschlüssen" in command.preview
+    assert "borg --lock-wait" not in command.preview
+    assert "--dry-run --stats" not in command.preview
+    assert command.stdin_controlled_cancel is True
+
+
+def test_source_stats_live_scan_counts_files_without_repository_access(job, tmp_path):
+    from app.runner import source_stats_command
+
+    (tmp_path / "one.txt").write_bytes(b"abc")
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "two.bin").write_bytes(b"12345")
+    (tmp_path / "link").symlink_to("one.txt")
+    job.source_paths_json = json.dumps([str(tmp_path)])
+
+    command = source_stats_command(job)
+    remote_parts = shlex.split(command.preview.split(" -- ", 1)[1])
+    result = subprocess.run(remote_parts, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    marker = next(line for line in result.stdout.splitlines() if line.startswith("BBM_SOURCE_STATS_JSON="))
+    payload = json.loads(marker.split("=", 1)[1])
+    assert payload["file_count"] == 3
+    assert payload["size_bytes"] == 8
+
+
+def test_archive_browser_command_requests_owner_and_mode(job):
+    from app.runner import browse_archive_command
+    command = browse_archive_command(job, "archive-one", "etc")
+    assert "{mode}{user}{group}{uid}{gid}" in command.preview

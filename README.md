@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.43
+# BorgBackup Manager 1.0.47
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -28,7 +28,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.0.43.zip
+BorgBackup-Manager-1.0.47.zip
 ```
 
 ## Sicherheit und Härtung
@@ -121,6 +121,16 @@ Beim Update von 0.8.x werden ein vorhandener `BBM_ADMIN_TOKEN` einmalig als temp
 
 ## Navigation und Funktionsbereiche
 
+Unter **Infrastruktur** stehen in der Seitenleiste nur noch **Geräte** und **System**. **System** bündelt die administrativen Bereiche in einer gemeinsamen Reiterleiste direkt in der sticky Kopfzeile. Sie bleibt beim Scrollen sichtbar; der aktuell geöffnete Bereich wird durch einen dunkel gefüllten Reiter eindeutig hervorgehoben:
+
+1. **Benachrichtigungen**
+2. **Benutzer**
+3. **Manager-Backup**
+4. **Einstellungen**
+5. **Systemdiagnose**
+
+Beim Wechsel zwischen diesen Reitern bleibt **System** in der Seitenleiste markiert. Die bisherigen direkten URLs wie `#notifications`, `#users`, `#backups`, `#settings` und `#diagnostics` bleiben gültig, damit vorhandene Lesezeichen weiterhin funktionieren. Die Systemdiagnose befindet sich nicht mehr auf dem Dashboard.
+
 ### Übersicht
 
 Das Dashboard zeigt:
@@ -142,21 +152,19 @@ Der Backup-Job-Block steht direkt oberhalb der letzten Aktivitäten. Aktive Jobs
 
 Die Repository-Anzahl und die summierte Repository-Größe stehen gemeinsam in einer Kachel und führen beide in denselben Arbeitsbereich. Die übrigen Kennzahlen verlinken ebenfalls direkt auf den jeweiligen Arbeitsbereich. „Laufend“, „Wartend“ und „Fehlgeschlagen“ öffnen die Ausführungsansicht bereits mit dem passenden Statusfilter. Der Aufmerksamkeitshinweis für fehlgeschlagene Läufe verwendet denselben Filter und zeigt nicht mehr ungezielt alle Protokolle.
 
-Die Systemdiagnose kann nach dem Laden über **Diagnose schließen** sofort wieder eingeklappt und auf den Ausgangszustand zurückgesetzt werden; ein Seitenreload ist dafür nicht mehr erforderlich. Sie prüft den Repository-Basismount und alle sichtbaren Unter-Mounts getrennt, sodass mehrere NFS- oder Bind-Mounts mit ihrer jeweiligen Belegung und Speicherplatz-Sperre erfasst werden.
-
 Die Betriebslisten für Jobs, Geräte, Repositories und Ausführungen verwenden kompakte Tabellen. Backup-Jobs können nach Name, Gerät, Repository oder Quellpfad durchsucht, nach Aktivstatus gefiltert und zusätzlich sortiert werden. Eigene Sortierauswahlen stehen auch für den Dashboard-Jobblock, Repositories und verbundene Geräte bereit. Die Auswahl wird pro angemeldetem Benutzer und Browser gespeichert. Dadurch bleibt die Übersicht auch bei 20 oder mehr Clients nutzbar. Die über **Mehr** eingeblendeten Jobaktionen erscheinen als kompakte, gruppierte Aktionsleiste: Prüfungen, Repository-Zugang, Speicherpflege und Verwaltung brechen innerhalb ihrer Gruppe um, statt pro Aktion eine hohe Vollbreitenzeile zu belegen.
 
 Die WebUI verwendet ein eigenes Borg-orientiertes Favicon und dieselbe Bildmarke auf Anmeldung und Seitenleiste.
 
 Ausführungsdialoge verwenden die verfügbare Fensterhöhe dynamisch. Auch bei zusätzlichen Borg-Sicherheitswarnungen oder Diagnosen bleibt der Logbereich sichtbar und besitzt eine eigene vollständige Scrollleiste; Warnungen verschieben das Ende der Ausgabe nicht mehr außerhalb des Dialogs.
 
-Auf Smartphones und schmalen Tablets wird die Seitenleiste über **Menü** ein- und ausgeblendet. Formulare, Aktionsbereiche, Repository-, Geräte-, Job-, Zeitplan-, Lauf- und Benutzertabellen, Archivansicht, Restore, Manager-Backup, Einstellungen, Anleitung, Release Notes und Dialoge passen sich ohne horizontales Seiten-Scrolling an. Breite Tabellen werden in beschriftete Karten umgewandelt; lange Pfade, Archivnamen und Protokollzeilen brechen innerhalb der verfügbaren Breite um.
+Auf Smartphones und schmalen Tablets wird die Seitenleiste über **Menü** ein- und ausgeblendet. Formulare, Aktionsbereiche, Repository-, Geräte-, Job-, Zeitplan-, Lauf- und Benutzertabellen, Archivansicht, Restore, der Systembereich mit seinen Reitern, Anleitung, Release Notes und Dialoge passen sich ohne horizontales Seiten-Scrolling an. Breite Tabellen werden in beschriftete Karten umgewandelt; lange Pfade, Archivnamen und Protokollzeilen brechen innerhalb der verfügbaren Breite um.
 
 ### Geräte
 
 Die Liste der verbundenen Geräte lässt sich nach Name, Aktivstatus, Adresse oder Borg-Version sortieren. Die Auswahl bleibt für den angemeldeten Benutzer in diesem Browser erhalten.
 
-Die Geräteansicht verwendet zwei vollständige Arbeitsblöcke untereinander: **Gerät hinzufügen** oben und **Verbundene Geräte** darunter. Dadurch bleibt die Eingabe auch auf breiten Bildschirmen übersichtlich und die Geräteliste erhält die gesamte verfügbare Breite. Der Controller-Schlüssel besitzt direkt in seiner Anzeigezeile einen kompakten Kopierbutton. Die sicherheitskritische Erneuerung befindet sich ausschließlich unter **Einstellungen → Controller-Schlüssel**. Die SSH-Fingerprint-Prüfung zeigt den gefundenen Ed25519-Fingerprint im Formular an; Bestätigen oder Verwerfen erfolgt ohne separates Aktionsfenster. Der Zugangsstatus bleibt hier sichtbar; Einrichtung und Erneuerung repositorybezogener Schlüssel erfolgen jedoch direkt beim jeweiligen Backup-Job.
+Die Geräteansicht verwendet zwei vollständige Arbeitsblöcke untereinander: **Gerät hinzufügen** oben und **Verbundene Geräte** darunter. Dadurch bleibt die Eingabe auch auf breiten Bildschirmen übersichtlich und die Geräteliste erhält die gesamte verfügbare Breite. Der Controller-Schlüssel besitzt direkt in seiner Anzeigezeile einen kompakten Kopierbutton. Die sicherheitskritische Erneuerung befindet sich ausschließlich unter **System → Einstellungen → Controller-Schlüssel**. Die SSH-Fingerprint-Prüfung zeigt den gefundenen Ed25519-Fingerprint im Formular an; Bestätigen oder Verwerfen erfolgt ohne separates Aktionsfenster. Der Zugangsstatus bleibt hier sichtbar; Einrichtung und Erneuerung repositorybezogener Schlüssel erfolgen jedoch direkt beim jeweiligen Backup-Job.
 
 Ein Gerät besteht aus:
 
@@ -177,9 +185,9 @@ Verfügbare Aktionen:
 - Borg-Version prüfen
 - Repository-Zugänge einrichten oder erneuern
 - Gerät löschen, sofern es von keinem Job verwendet wird
-- Controller-Schlüssel unter **Einstellungen → Controller-Schlüssel** kontrolliert erneuern
+- Controller-Schlüssel unter **System → Einstellungen → Controller-Schlüssel** kontrolliert erneuern
 
-Ein deaktiviertes Gerät behält seine vollständige Konfiguration, wird aber aus aktiven Zeitplänen und den erzeugten Repository-SSH-Zugängen entfernt. Seine Backup-Jobs lassen sich weder über Zeitplan noch manuell starten. Laufende oder wartende Ausführungen müssen vor dem Deaktivieren beendet sein. Beim erneuten Aktivieren synchronisiert der Manager Zeitpläne und Repository-Zugänge automatisch.
+Ein deaktiviertes Gerät behält seine vollständige Konfiguration, wird aber aus aktiven Zeitplänen und den erzeugten Repository-SSH-Zugängen entfernt. Beim Deaktivieren setzt der Manager außerdem sämtliche zugehörigen aktiven Backup-Jobs automatisch auf **inaktiv**, damit Geräte- und Jobstatus nicht auseinanderlaufen. Laufende oder wartende Ausführungen müssen vorher beendet sein. Beim erneuten Aktivieren synchronisiert der Manager Zeitpläne und Repository-Zugänge; die Backup-Jobs bleiben aus Sicherheitsgründen deaktiviert und müssen anschließend gezielt wieder aktiviert werden.
 
 Beim Erneuern des Controller-Schlüssels wird das bisherige Schlüsselpaar verschlüsselt als historischer Systemschlüssel in `/data/security/security.db` archiviert. Laufende oder wartende Ausführungen blockieren den Wechsel. Anschließend muss der neue öffentliche Schlüssel auf jedem Client in `authorized_keys` eingetragen werden; Repository-Schlüssel und Borg-Archive werden dabei nicht verändert.
 
@@ -243,7 +251,7 @@ Die Repository-Aktion **Cache löschen** entfernt ausschließlich den managersei
 
 Schreibende Backup-Läufe werden nicht mehr pauschal anhand des Dateisystems von `/repositories` beurteilt. Der Manager prüft den tatsächlichen `storage_path` des betroffenen verwalteten Repositorys. Liegen beispielsweise mehrere NFS-Mounts als `/repositories/nas-a`, `/repositories/nas-b` und `/repositories/offline` vor, wird für jeden Backup-Job genau der Mount des zugehörigen Repositorys ausgewertet. Ein voller Mount blockiert damit nur die darauf schreibenden Backups; andere Repository-Dateisysteme bleiben nutzbar.
 
-Unter **Einstellungen → Speicherplatz-Sperre** werden die globale Aktivierung und die globale Schwelle von 1 bis 100 Prozent festgelegt. Jedes verwaltete Repository kann unter **Repositories → Bearbeiten**:
+Unter **System → Einstellungen → Speicherplatz-Sperre** werden die globale Aktivierung und die globale Schwelle von 1 bis 100 Prozent festgelegt. Jedes verwaltete Repository kann unter **Repositories → Bearbeiten**:
 
 - die globale Einstellung vollständig übernehmen,
 - die Sperre ausdrücklich aktivieren oder deaktivieren,
@@ -288,6 +296,10 @@ Repository-Passphrasen und Keyfiles werden mit einem zufälligen Fernet-Master-K
 
 ### Backup-Jobs
 
+Die Jobübersicht zeigt zusätzlich eine Quellenstatistik mit Originalgröße und Dateianzahl. Nach einem erfolgreichen oder mit Warnung abgeschlossenen Backup werden die Werte direkt aus Borgs Abschlussstatistik übernommen. Über **Aktualisieren** beziehungsweise **Quellenstatistik** kann ein repositoryunabhängiger Live-Scan auf dem Quellgerät gestartet werden. Dieser zählt die konfigurierten Quellen vor Borg-Ausschlüssen und schreibt kein Archiv. Nach dem nächsten abgeschlossenen Backup werden die Werte wieder durch Borgs exakte Statistik nach Anwendung der Ausschlüsse ersetzt.
+
+
+
 Der Jobbereich besteht aus zwei breiten Blöcken: oben der kompakte Editor, darunter die filter- und sortierbare Jobtabelle. Sortiert werden kann nach Name, Status, Gerät oder Repository; die Auswahl bleibt pro Benutzer und Browser erhalten. Grunddaten, Quellpfade und Ausschlüsse werden nebeneinander angeordnet; Dateisystemoptionen und Aufbewahrung lassen sich bei Bedarf aufklappen. Dadurch bleibt der Editor auch bei vielen Optionen deutlich kürzer.
 
 Nach dem Speichern eines Jobs steht unter **Mehr → Repository-Zugang** die passende Einrichtung direkt im Jobbereich bereit. Für verwaltete Repositories erzeugt der Manager dabei ausschließlich den Schlüssel für die konkrete Kombination aus Gerät und Repository. Andere Repository-Zugänge desselben Geräts werden nicht unnötig erneuert. Der Status und fehlende Zugänge sind in der Jobliste unmittelbar sichtbar. Unter **Mehr → Verwalten** kann der Job außerdem direkt aktiviert oder deaktiviert werden. Deaktivierte Jobs behalten sämtliche Optionen und Zeitplanzuordnungen, werden aber nicht gestartet; laufende oder wartende Ausführungen müssen vor dem Deaktivieren abgeschlossen oder beendet sein.
@@ -317,7 +329,7 @@ Bei Quelle `/` sollte `Nur jeweiliges Quelldateisystem sichern` aktiviert bleibe
 
 #### Zentrale Ausschlussvorlagen
 
-Unter **Einstellungen → Ausschlussvorlagen** können beliebig viele benannte Vorlagen gepflegt werden. Die mitgelieferte Standardvorlage lautet:
+Unter **System → Einstellungen → Ausschlussvorlagen** können beliebig viele benannte Vorlagen gepflegt werden. Die mitgelieferte Standardvorlage lautet:
 
 ```text
 Linux-Systempfade
@@ -457,7 +469,7 @@ Ein aktiver Backup-Job darf nur einem aktiven zentralen Zeitplan zugeordnet sein
 
 Alle Borg-Aktionen werden pro Repository serialisiert. Beginnen mehrere Geräte gleichzeitig ein Backup in dasselbe Repository, wechselt nur der erste Lauf auf **Laufend**. Weitere Anforderungen bleiben als **Wartend** sichtbar und starten automatisch, sobald das Repository frei ist. Dies verhindert parallele Schreibzugriffe und Borg-Lock-Konflikte. Repositoryweite Administratoraktionen wie **Compact** und eine gemeinsame Mehrfachlöschung von Archiven verwenden dieselbe Sperr- und Laufprotokollierung und benötigen keinen Backup-Job.
 
-Zusätzlich kann unter **Einstellungen → Parallelitätsgrenzen** die maximale Anzahl aller gleichzeitig laufenden Manager-Ausführungen festgelegt werden. `0` bedeutet unbegrenzt; `1` serialisiert auch Aktionen auf unterschiedlichen Repositorys. Eine am Zeitplan gesetzte Grenze kann die Ausführungen dieses Zeitplans weiter einschränken. Repository-Grenze, Zeitplangrenze und globale Grenze werden gemeinsam angewendet; die jeweils engste zutreffende Grenze entscheidet.
+Zusätzlich kann unter **System → Einstellungen → Parallelitätsgrenzen** die maximale Anzahl aller gleichzeitig laufenden Manager-Ausführungen festgelegt werden. `0` bedeutet unbegrenzt; `1` serialisiert auch Aktionen auf unterschiedlichen Repositorys. Eine am Zeitplan gesetzte Grenze kann die Ausführungen dieses Zeitplans weiter einschränken. Repository-Grenze, Zeitplangrenze und globale Grenze werden gemeinsam angewendet; die jeweils engste zutreffende Grenze entscheidet.
 
 Die Reihenfolge wird dauerhaft über die Datenbank als FIFO bestimmt. Maßgeblich ist das tatsächliche Repository-Ziel – bei verwalteten Repositorys das Verzeichnis, bei externen Repositorys die URL – und nicht nur die interne Datenbank-ID. Dadurch werden auch ältere doppelte Einträge mit demselben Ziel gemeinsam gesperrt. Freie globale Plätze werden mit startfähigen Läufen belegt; ein älterer Lauf, der selbst noch an einem belegten Repository oder Zeitplan wartet, blockiert unabhängige Repositorys nicht unnötig. Im vollständigen Laufprotokoll wird unterschieden, ob auf eine Repository-Ausführung, die Zeitplangrenze oder die globale Grenze gewartet wird. Nur tatsächlich lebende Manager-Tasks belegen Parallelitätsplätze, damit verwaiste Laufzustände die Warteschlange nicht dauerhaft sperren. Die Manager-Warteschlange kann keine Borg-Prozesse erfassen, die außerhalb des Managers gestartet wurden; für diese Fälle verwendet Borg zusätzlich seine eigene Sperre und `--lock-wait`.
 
@@ -485,7 +497,7 @@ Laufende Aktionen können gestoppt werden. Der Manager beendet dabei nicht mehr 
 
 Neue vollständige Live-Protokolle werden ausschließlich als Dateien unter `/data/run-logs/run-ID.log` gespeichert. SQLite enthält nur Laufmetadaten sowie feste kleine Vorschauen: maximal 4 KiB stdout, 32 KiB gefilterte Fehler-/Warnungsausgabe und 16 KiB zusammengeführtes Bedienprotokoll. Auch der laufende Prozess hält die Dateiliste nicht mehr vollständig im Arbeitsspeicher. Beim ersten Start von 0.8.7 werden große Altprotokolle aus SQLite in Logdateien überführt, auf Vorschaugröße reduziert und die Datenbank anschließend mit `VACUUM` komprimiert.
 
-Unter **Einstellungen → Ausführungsprotokolle** sind konfigurierbar:
+Unter **System → Einstellungen → Ausführungsprotokolle** sind konfigurierbar:
 
 - Aufbewahrungsdauer in Tagen; `0` bedeutet unbegrenzt
 - maximale Größe je Logdatei
@@ -498,6 +510,10 @@ Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin. Aktive 
 Passphrasenfehler werden erst nach Abschluss eines fehlgeschlagenen Borg-Laufs diagnostiziert. Vorläufige Live-Fragmente können daher keine kurzzeitig eingeblendete falsche Meldung „Passphrase abgelehnt“ mehr erzeugen.
 
 ### Archive
+
+Der Archivbrowser arbeitet ohne FUSE wie ein Dateibrowser. Er zeigt Breadcrumb-Navigation sowie Name, Größe, Typ, POSIX-Rechte, Besitzer/Gruppe und Änderungszeit der Archivobjekte.
+
+
 
 Die Archivübersicht ist repositoryzentriert. Beim ersten Aufruf liest der Manager die vollständige Liste samt Archivstatistiken aus Borg und speichert sie persistent unter `/data/archive-cache`. Weitere Aufrufe verwenden diesen Zwischenspeicher und öffnen dadurch auch sehr große Repositorys deutlich schneller. Ein Backup-Job ist für das Auflisten, Anzeigen von Archivinformationen und Durchsuchen des Inhalts nicht erforderlich. Ein zeitgesteuerter Seitenrefresh wird dafür nicht verwendet.
 
@@ -585,11 +601,28 @@ Beim Erstellen ist die Bezeichnung optional. Neue Manager-Backups werden ausschl
 
 Die `.bbm`-Verschlüsselung verwendet AES-256-GCM und scrypt. Die Backup-Passphrase wird weder gespeichert noch in einer Datenbank abgelegt.
 
-Unter **Manager-Backup → Hochladen** kann eine vorhandene `.bbm`-Datei oder ein historisches Manager-Backup im `.zip`-Format in die lokale Backupliste übernommen werden. Der Manager prüft Dateinamen, Größenlimit und Struktur, speichert die Datei mit Modus `0600` und überschreibt niemals ein bereits vorhandenes Backup. Bei verschlüsselten `.bbm`-Dateien wird beim Upload der authentifizierte Containeraufbau geprüft; die vollständige AES-GCM-Authentifizierung erfolgt bei der Wiederherstellung nach Eingabe der Passphrase.
+Unter **System → Manager-Backup → Hochladen** kann eine vorhandene `.bbm`-Datei oder ein historisches Manager-Backup im `.zip`-Format in die lokale Backupliste übernommen werden. Der Manager prüft Dateinamen, Größenlimit und Struktur, speichert die Datei mit Modus `0600` und überschreibt niemals ein bereits vorhandenes Backup. Bei verschlüsselten `.bbm`-Dateien wird beim Upload der authentifizierte Containeraufbau geprüft; die vollständige AES-GCM-Authentifizierung erfolgt bei der Wiederherstellung nach Eingabe der Passphrase.
 
-Unter **Manager-Backup → Wiederherstellen** kann ein vorhandenes oder hochgeladenes Backup direkt eingespielt werden. Vorher wird mit einer separat einzugebenden Passphrase automatisch ein verschlüsseltes Sicherheitsbackup erstellt. Laufende und wartende Ausführungen blockieren den Vorgang. Nach erfolgreicher Prüfung werden Manager- und Sicherheitsdatenbank, Einstellungen sowie SSH-, TLS- und Repository-Schlüssel ersetzt; der Container startet automatisch neu. Alle Browser-Sitzungen aus dem vorherigen Stand verlieren dadurch ihre Gültigkeit.
+Unter **System → Manager-Backup → Wiederherstellen** kann ein vorhandenes oder hochgeladenes Backup direkt eingespielt werden. Vorher wird mit einer separat einzugebenden Passphrase automatisch ein verschlüsseltes Sicherheitsbackup erstellt. Laufende und wartende Ausführungen blockieren den Vorgang. Nach erfolgreicher Prüfung werden Manager- und Sicherheitsdatenbank, Einstellungen sowie SSH-, TLS- und Repository-Schlüssel ersetzt; der Container startet automatisch neu. Alle Browser-Sitzungen aus dem vorherigen Stand verlieren dadurch ihre Gültigkeit.
 
 Für einen Serverwechsel kann `restore-backup.sh` verwendet werden. Neue Backups bringen Sicherheitsdatenbank und Master-Key vollständig mit. Alte 0.8.x-Backups werden beim ersten Start über ihre vorhandenen Altwerte migriert. Verschlüsselte `.bbm`-Dateien werden nach Installation von `python3-cryptography` unterstützt.
+
+### Benachrichtigungszentrale
+
+Unter **System → Benachrichtigungen** konfigurieren Administratoren eine zentrale Ereigniszustellung. Unterstützt werden:
+
+- E-Mail über SMTP mit STARTTLS, direktem TLS/SSL oder bewusst unverschlüsseltem Transport für isolierte interne Netze
+- generischer JSON-Webhook
+- Discord-Webhook
+- Telegram-Bot mit Chat-ID oder Kanalname
+
+Die Ereignisauswahl umfasst fehlgeschlagene, mit Warnungen beendete und optional erfolgreiche Backups, abgebrochene Läufe, Repository-Aktionen, Zeitplanfehler sowie sonstige Manager-Ausführungen. Erfolgsereignisse sind standardmäßig deaktiviert, damit Installationen mit vielen täglichen Backups nicht unnötig viele Meldungen erzeugen.
+
+SMTP-Passwort, Webhook-URL und Telegram-Bot-Token liegen ausschließlich verschlüsselt in der Sicherheitsdatenbank. Die nicht geheimen Einstellungen werden unter `/data/notifications.json` gespeichert und sind Bestandteil eines Manager-Backups. Leere Geheimnisfelder behalten den bereits gespeicherten Wert; separate Löschoptionen entfernen ihn ausdrücklich.
+
+Jeder Kanal besitzt eine Testfunktion. Das Zustellungsprotokoll zeigt Versandzeit, Kanal, Ereignis, Titel sowie Erfolg oder konkrete Fehlermeldung. Ein fehlgeschlagener Benachrichtigungsversand verändert niemals den Status des Borg-Laufs und blockiert keine Repository- oder globale Warteschlange. Der Versand startet erst, nachdem der Laufstatus gespeichert und der Ausführungsplatz freigegeben wurde.
+
+Der generische Webhook erhält ein JSON-Dokument mit `source`, `event`, `severity`, `title`, `message`, `run_id` und `timestamp`. Diagnoseausschnitte sind gefiltert, auf 4.000 Zeichen begrenzt und können vollständig deaktiviert werden.
 
 ### Zeitzone
 
@@ -634,7 +667,7 @@ Release Notes werden passend zur persönlichen Spracheinstellung auf Deutsch ode
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.43.zip
+unzip /pfad/BorgBackup-Manager-1.0.47.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh

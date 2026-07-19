@@ -1,5 +1,95 @@
 # Release Notes
 
+## v1.0.47
+
+### Sticky Systemnavigation
+
+- Die fünf System-Reiter befinden sich direkt in der sticky Kopfzeile und bleiben beim Scrollen dauerhaft sichtbar.
+- Der aktive Bereich wird als dunkel gefüllter Reiter hervorgehoben; die mobile Reiterleiste bleibt horizontal scrollbar.
+- Bestehende Direktlinks, Administratorrechte und die Seitenleistenmarkierung **System** bleiben unverändert.
+
+### Quellenstatistik für Backup-Jobs
+
+- Die Backup-Job-Übersicht zeigt unter den Quellpfaden zusätzlich Originalgröße, Dateianzahl, Zeitpunkt und Herkunft der Werte.
+- Nach einem erfolgreichen oder mit Warnung abgeschlossenen Backup werden Größe und Dateianzahl direkt aus Borgs Abschlussstatistik übernommen.
+- **Aktualisieren** und **Mehr → Prüfen → Quellenstatistik** starten einen repositoryunabhängigen Live-Scan auf dem Quellgerät. Er schreibt kein Archiv und zählt die konfigurierten Quellen vor Borg-Ausschlüssen.
+- Der Live-Scan läuft als derselbe SSH-Benutzer wie der Backup-Job, unterstützt `one_file_system`, kontrollierten Abbruch sowie einen `find`/`stat`-Fallback ohne Python 3.
+- Änderungen an Quellpfaden, Ausschlüssen oder relevanten Dateisystemoptionen verwerfen automatisch veraltete Statistikwerte.
+- Die Datenbank wird automatisch um die Quellen- und Dateizählerfelder erweitert.
+
+### Archivbrowser als Dateibrowser
+
+- Der Archivbrowser verwendet eine Breadcrumb-Navigation und eine Dateitabelle.
+- Angezeigt werden Name, Größe, Typ, Rechte, Besitzer/Gruppe und Änderungsdatum.
+- Verzeichnisse werden zuerst sortiert, symbolische Links mit Ziel dargestellt und die Anzahl der sichtbaren Einträge angezeigt.
+- Die Metadaten stammen direkt aus `borg list --json-lines`; ein FUSE-Mount ist weiterhin nicht erforderlich.
+
+### Prüfung
+
+- 403 automatisierte Tests bestanden, darunter reale Live-Scan-, Persistenz-, Datenbankmigrations-, UI- und Archivmetadatentests.
+
+## v1.0.46
+
+### Systembereiche zentral zusammengeführt
+
+- Unter **Infrastruktur** enthält die Seitenleiste nur noch **Geräte** und **System**.
+- Die bisherigen Einträge **Benachrichtigungen**, **Benutzer**, **Manager-Backup** und **Einstellungen** wurden aus der Seitenleiste entfernt und gemeinsam unter **System** zusammengeführt.
+- Der Systemarbeitsbereich besitzt am oberen Rand eine feste Reiterleiste in der Reihenfolge **Benachrichtigungen**, **Benutzer**, **Manager-Backup**, **Einstellungen** und **Systemdiagnose**.
+- Beim Wechsel zwischen den fünf Bereichen bleibt **System** in der Seitenleiste aktiv und die Seitenüberschrift eindeutig auf **System** gesetzt.
+- Die bisherigen direkten Hash-URLs bleiben gültig, sodass vorhandene Lesezeichen und interne Verlinkungen weiterhin funktionieren.
+
+### Dashboard und responsive Darstellung
+
+- Die Systemdiagnose wurde vollständig aus dem Dashboard entfernt und in den eigenen Reiter **Systemdiagnose** verschoben.
+- Die Reiterleiste ist auf schmalen Bildschirmen horizontal scrollbar und unterstützt die kompakte Darstellungsdichte.
+- Administratorrechte werden weiterhin für alle fünf Systembereiche erzwungen; normale Benutzer werden bei direkten URLs sicher zum Dashboard zurückgeführt.
+- Controller-Schlüssel, Benachrichtigungen, Benutzerverwaltung, Manager-Backup und Systemeinstellungen behalten ihre bestehenden Funktionen und APIs unverändert.
+
+### Anleitung und Tests
+
+- README, Installationsanleitung sowie die integrierte deutsche und englische Hilfe wurden auf die neue Navigation und die verschobene Systemdiagnose aktualisiert.
+- Neue Regressionstests prüfen Seitenleiste, Reiterreihenfolge, aktive Zustände, Rechteprüfung, mobile Darstellung und das Fehlen der Diagnose auf dem Dashboard.
+- Die vollständige Testsuite umfasst 391 bestandene Tests.
+
+## v1.0.45
+
+### Zentrale Benachrichtigungen für Backup- und Systemereignisse
+
+- Der neue Administrationsbereich **Benachrichtigungen** versendet auswählbare Ereignisse per SMTP-E-Mail, generischem JSON-Webhook, Discord-Webhook oder Telegram-Bot.
+- Konfigurierbar sind Backup-Fehler, Backup-Warnungen, optionale Erfolgsmeldungen, Abbrüche, Repository-Aktionen, Zeitplanfehler und sonstige Manager-Ausführungen.
+- Jeder Kanal besitzt eine Testfunktion. Die aktuellen Formularwerte werden vor dem Test sicher gespeichert, sodass keine separate Zwischenspeicherung erforderlich ist.
+- Das Zustellungsprotokoll zeigt Kanal, Ereignis, Titel, Zeitpunkt und Erfolg beziehungsweise konkrete Fehlermeldung. Es kann unabhängig von den Laufprotokollen geleert werden.
+
+### Sichere Geheimnis- und Ausführungsbehandlung
+
+- SMTP-Passwort, Webhook-URL und Telegram-Bot-Token werden ausschließlich verschlüsselt in der Sicherheitsdatenbank gespeichert und niemals an die WebUI zurückgegeben.
+- Gespeicherte Geheimnisse bleiben bei leeren Eingabefeldern erhalten und können nur über eine ausdrückliche Löschoption entfernt werden.
+- Versandfehler ändern weder Borg-Rückgabecode noch Laufstatus. Repository-, Zeitplan- und globale Ausführungsplätze werden vor dem Kontakt mit externen Diensten freigegeben.
+- Diagnoseausschnitte sind gefiltert und auf 4.000 Zeichen begrenzt; die Aufnahme kann vollständig deaktiviert werden. Geheimnisse aus Webhook- oder Telegram-Adressen werden auch aus Fehlermeldungen entfernt.
+- Generische Webhooks erhalten ein strukturiertes JSON-Dokument mit Quelle, Ereignis, Schweregrad, Titel, Nachricht, Lauf-ID und UTC-Zeitstempel.
+
+### Backup, Dokumentation und Tests
+
+- Manager-Backups enthalten nun zusätzlich die nicht geheimen Benachrichtigungseinstellungen; die zugehörigen Geheimnisse waren bereits Bestandteil der gesicherten Sicherheitsdatenbank.
+- Beim Einspielen eines älteren Backups ohne Benachrichtigungskonfiguration wird eine neuere lokale Konfiguration entfernt, damit keine veralteten Kanäle mit einer zurückgesetzten Sicherheitsdatenbank aktiv bleiben.
+- README, Installationsanleitung sowie die integrierte deutsche und englische Hilfe beschreiben Einrichtung, Test, Ereignisauswahl, Sicherheit und Fehlerverhalten.
+- Die vollständige Testsuite umfasst 388 bestandene Tests.
+
+## v1.0.44
+
+### Gerätestatus und Backup-Job-Status konsistent gekoppelt
+
+- Beim Deaktivieren eines verbundenen Geräts werden jetzt alle zugehörigen aktiven Backup-Jobs innerhalb derselben Datenbanktransaktion automatisch deaktiviert.
+- Die Kaskade gilt sowohl für den direkten **Deaktivieren**-Button in der Geräteliste als auch für das Speichern eines Geräts mit deaktiviertem Aktivstatus im Bearbeitungsformular.
+- Laufende oder wartende Ausführungen blockieren die Deaktivierung weiterhin, sodass kein aktiver Borg- oder SSH-Prozess durch eine Statusänderung unterbrochen wird.
+- Beim erneuten Aktivieren des Geräts bleiben seine Backup-Jobs bewusst deaktiviert. Dadurch starten Zeitpläne nach einer Wartung oder Störung nicht unbeabsichtigt wieder; die gewünschten Jobs müssen gezielt aktiviert werden.
+- Bestätigungsdialog und Statusmeldung nennen die automatisch mitdeaktivierten Backup-Jobs.
+
+### Dokumentation und Tests
+
+- README, Installationsanleitung sowie die integrierte deutsche und englische Hilfe beschreiben die neue Kaskadenlogik und das bewusste Nicht-Wiederaktivieren der Jobs.
+- Regressionstests prüfen den direkten Gerätebutton, das Geräte-Bearbeitungsformular, den Schutz bei aktiven Läufen und den Zustand nach erneuter Geräteaktivierung.
+
 ## v1.0.43
 
 ### Manager-Backups über die WebUI hochladen

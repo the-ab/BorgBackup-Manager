@@ -7,8 +7,8 @@
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
 <link href="/static/favicon.svg" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.0.43"></script>
-<link href="/static/style.css?v=1.0.43" rel="stylesheet"/>
+<script src="/static/theme-init.js?v=1.0.47"></script>
+<link href="/static/style.css?v=1.0.47" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
@@ -19,7 +19,7 @@
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.0.43</b></p>
+<p class="login-version">Version <b id="login-version">v1.0.47</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
@@ -38,9 +38,7 @@
 <button data-admin-only="" data-view="repositories">Repositories</button>
 <span class="nav-label">Infrastruktur</span>
 <button data-admin-only="" data-view="hosts">Geräte</button>
-<button data-admin-only="" data-view="backups">Manager-Backup</button>
-<button data-admin-only="" data-view="settings">Einstellungen</button>
-<button data-admin-only="" data-view="users">Benutzer</button>
+<button data-admin-only="" data-view="settings">System</button>
 <span class="nav-label">Information</span>
 <button data-view="help">Anleitung</button>
 <button data-view="releases">Release Notes</button>
@@ -48,19 +46,26 @@
 <div class="aside-foot"><span class="status-dot"></span> Dienst erreichbar <button class="link" data-target-view="releases" id="version-link">v…</button><span class="current-user" id="current-user"></span><button class="link" id="user-preferences">Darstellung &amp; Sprache</button><button class="link" id="change-password">Passwort ändern</button><button class="link" id="logout">Abmelden</button></div>
 </aside>
 <main>
-<header><div><p class="eyebrow">Kontrollzentrum</p><h1 id="page-title">Übersicht</h1></div><div class="header-actions"><div class="task-status" id="task-status"><button aria-live="polite" class="sync-state idle" id="sync-state" type="button"><span aria-hidden="true" class="sync-indicator"></span><span>Aktuell</span></button></div><button aria-label="Farbschema wechseln" class="secondary" id="theme-toggle" type="button">Dunkel</button><button class="secondary" id="refresh">Aktualisieren</button></div></header>
+<header class="main-header"><div class="main-header-row"><div><p class="eyebrow">Kontrollzentrum</p><h1 id="page-title">Übersicht</h1></div><div class="header-actions"><div class="task-status" id="task-status"><button aria-live="polite" class="sync-state idle" id="sync-state" type="button"><span aria-hidden="true" class="sync-indicator"></span><span>Aktuell</span></button></div><button aria-label="Farbschema wechseln" class="secondary" id="theme-toggle" type="button">Dunkel</button><button class="secondary" id="refresh">Aktualisieren</button></div></div>
+<div aria-label="Systembereiche" class="system-workspace-tabs hidden" id="system-workspace-tabs" role="tablist">
+<button data-system-view="notifications" role="tab" type="button">Benachrichtigungen</button>
+<button data-system-view="users" role="tab" type="button">Benutzer</button>
+<button data-system-view="backups" role="tab" type="button">Manager-Backup</button>
+<button data-system-view="settings" role="tab" type="button">Einstellungen</button>
+<button data-system-view="diagnostics" role="tab" type="button">Systemdiagnose</button>
+</div></header>
 <section class="view active" id="view-dashboard">
 <div class="metrics" id="metrics"></div><div class="panel attention-panel hidden" id="attention-panel"></div>
 <div class="panel"><div class="panel-head responsive-head"><h2>Backup-Jobs</h2><div class="list-controls"><label>Sortierung<select id="dashboard-job-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="host-asc">Gerät A–Z</option><option value="repository-asc">Repository A–Z</option><option value="status-active">Aktive zuerst</option><option value="last-newest">Letzter Lauf – neueste zuerst</option><option value="last-oldest">Letzter Lauf – älteste zuerst</option><option value="size-desc">Sicherungsgröße absteigend</option></select></label><button class="section-link" data-target-view="jobs" type="button">Alle Backup-Jobs</button></div></div><div class="bounded-list" id="dashboard-jobs"></div></div>
 <div class="panel"><div class="panel-head"><h2>Letzte Aktivitäten</h2><button class="section-link" data-target-view="runs" type="button">Alle Protokolle</button></div><div class="bounded-list" id="recent-runs"></div></div>
-<div class="panel diagnostics-panel"><div class="panel-head responsive-head"><h2>Systemdiagnose</h2><div class="table-actions"><button class="secondary" id="load-diagnostics" type="button">Diagnose laden</button><button class="secondary hidden" id="close-diagnostics" type="button">Diagnose schließen</button></div></div><div class="empty" id="system-diagnostics">Borg-Version, Repository-Speicher und Serverprotokoll bei Bedarf laden.</div></div>
+
 </section>
 <section class="view" id="view-hosts">
 <div class="hosts-stack"><form class="panel host-form" id="host-form"><h2 id="host-form-title">Gerät hinzufügen</h2>
 <input name="id" type="hidden"/>
 <p class="hint">Installiere zuerst diesen Controller-Schlüssel beim SSH-Benutzer des Geräts:</p>
 <div class="key-copy-row"><code class="key-box" id="controller-key">Wird geladen …</code><button class="secondary compact-copy-button" id="copy-controller-key" title="Controller-Schlüssel kopieren" type="button">Kopieren</button></div>
-<p class="hint controller-key-management-note">Die sicherheitskritische Erneuerung befindet sich unter <button class="link inline-link" id="open-controller-key-settings" type="button">Einstellungen → Controller-Schlüssel</button>.</p>
+<p class="hint controller-key-management-note">Die sicherheitskritische Erneuerung befindet sich unter <button class="link inline-link" id="open-controller-key-settings" type="button">System → Einstellungen → Controller-Schlüssel</button>.</p>
 <label>Name<input name="name" placeholder="webserver-01" required=""/></label>
 <label>Adresse<input name="address" placeholder="10.20.0.15" required=""/></label>
 <div class="row"><label>SSH-Benutzer<input name="username" placeholder="backup" required=""/></label><label>Port<input name="port" required="" type="number" value="22"/></label></div>
@@ -222,7 +227,7 @@
 <div class="panel archive-toolbar"><div class="row"><label>Repository<select id="archive-repository"></select></label><label>Archive anzeigen<select disabled="" id="archive-device-filter"><option value="">Alle Geräte / alle Archive</option></select></label><label class="check archive-check"><input id="archive-consider-checkpoints" type="checkbox"/> Unvollständige Checkpoint-Archive anzeigen</label></div><div class="form-actions"><button id="load-archives" type="button">Archive anzeigen</button><button class="secondary" id="refresh-archives" type="button">Neu aus Repository einlesen</button><span class="hint" id="archive-summary">Die zuletzt geladene Archivliste wird persistent zwischengespeichert.</span></div><div class="archive-selection-toolbar hidden" data-admin-only-block="" id="archive-selection-toolbar"><label class="check"><input disabled="" id="archive-select-visible" type="checkbox"/> Sichtbare Archive auswählen</label><button class="danger" disabled="" id="delete-selected-archives" type="button">Ausgewählte Archive löschen</button><span class="hint" id="archive-selection-summary">0 ausgewählt</span></div><p class="hint">Nach erfolgreichen Backups, Prune-Läufen, Umbenennungen oder Löschungen wird der Zwischenspeicher automatisch verworfen. „Neu aus Repository einlesen“ ist nur für Änderungen erforderlich, die außerhalb des Managers vorgenommen wurden.</p><div class="persistent-error hidden" id="archive-error"></div></div>
 <div class="panel archive-compare"><div class="panel-head"><div><h2>Archive vergleichen</h2><span>Änderungen zwischen zwei Sicherungsständen mit Borg Diff anzeigen.</span></div></div><div class="row"><label>Älteres Archiv<select id="archive-diff-first"><option value="">Archive anzeigen</option></select></label><label>Neueres Archiv<select id="archive-diff-second"><option value="">Archive anzeigen</option></select></label><label class="check archive-check"><input id="archive-diff-content-only" type="checkbox"/> Nur Inhaltsänderungen</label></div><label>Optionale Pfade, eine Zeile je relativer Archivpfad<textarea id="archive-diff-paths" placeholder="home/user/Documents" rows="3"></textarea></label><div class="form-actions"><button id="compare-archives" type="button">Archive vergleichen</button></div></div>
 <div class="panel"><div class="panel-head"><div><h2>Archivübersicht</h2><span>Verwaltete Repositories werden direkt im Manager-Container geöffnet. SSH zum Backup-Client ist dafür nicht erforderlich.</span></div></div><div class="bounded-list" id="archive-list"><div class="empty">Zuerst ein Repository auswählen und die Archivliste anzeigen.</div></div></div>
-<div class="panel hidden" id="archive-browser-panel"><div class="panel-head"><div><h2>Archivinhalt durchsuchen</h2><span id="archive-browser-meta"></span></div><button class="secondary" id="close-archive-browser" type="button">Browser schließen</button></div><div class="persistent-error hidden" id="archive-browser-error"></div><div class="browser-toolbar"><button class="secondary" id="browser-up" type="button">Eine Ebene höher</button><code id="browser-path">/</code><button class="secondary" id="export-browser-selection" type="button">Auswahl exportieren (.tar.gz)</button><button id="use-browser-selection" type="button">Auswahl wiederherstellen</button></div><div class="persistent-info hidden" id="archive-export-status"></div><div class="archive-browser-list" id="archive-browser-list"></div><div class="selection-box"><b>Ausgewählte Pfade</b><div class="hint" id="browser-selection">Noch nichts ausgewählt.</div></div></div>
+<div class="panel hidden" id="archive-browser-panel"><div class="panel-head"><div><h2>Archivinhalt durchsuchen</h2><span id="archive-browser-meta"></span></div><button class="secondary" id="close-archive-browser" type="button">Browser schließen</button></div><div class="persistent-error hidden" id="archive-browser-error"></div><div class="browser-toolbar"><button class="secondary" id="browser-up" type="button">Eine Ebene höher</button><div class="browser-breadcrumbs" id="browser-path"><button type="button" data-browse-path="">/</button></div><button class="secondary" id="export-browser-selection" type="button">Auswahl exportieren (.tar.gz)</button><button id="use-browser-selection" type="button">Auswahl wiederherstellen</button></div><div class="persistent-info hidden" id="archive-export-status"></div><div class="archive-browser-list" id="archive-browser-list"></div><div class="selection-box"><b>Ausgewählte Pfade</b><div class="hint" id="browser-selection">Noch nichts ausgewählt.</div></div></div>
 <div class="panel hidden" id="legacy-mount-panel"><div class="panel-head"><div><h2>Alte FUSE-Mounts</h2><span>Nur für Mount-Sitzungen aus Version 0.7/0.8. Neue Archivbrowser-Sitzungen benötigen kein FUSE.</span></div></div><div class="persistent-error hidden" id="legacy-mount-error"></div><div class="bounded-list" id="legacy-mount-list"></div></div>
 </section>
 <section class="view" id="view-restore"><div class="restore-grid">
@@ -291,6 +296,38 @@
 <div class="panel"><div class="panel-head"><div><h2>Benutzerverwaltung</h2><span id="security-status">Sicherheitsdaten werden geladen …</span></div></div><div id="user-list"></div></div>
 </div>
 </section>
+<section class="view" id="view-notifications">
+<form class="panel" id="notification-form">
+<div class="panel-head responsive-head"><div><h2>Benachrichtigungszentrale</h2><span>Ereignisse zentral per E-Mail, Webhook, Discord oder Telegram versenden.</span></div><button type="submit">Konfiguration speichern</button></div>
+<label class="check"><input name="enabled" type="checkbox"/> Benachrichtigungen global aktivieren</label>
+<div class="row"><label>Installationsname<input name="instance_name" maxlength="100" required="" value="BorgBackup Manager"/></label><label>Sprache<select name="language"><option value="de">Deutsch</option><option value="en">English</option></select></label><label>Zeitlimit je Versand (Sekunden)<input name="timeout_seconds" type="number" min="3" max="60" value="10"/></label></div>
+<label class="check"><input name="include_error_excerpt" type="checkbox"/> Gefilterten Diagnoseausschnitt in Benachrichtigungen aufnehmen</label>
+<section class="settings-section"><div class="panel-head"><div><h2>Ereignisse</h2><span>Erfolgsbenachrichtigungen sind optional, damit die Zentrale nicht unnötig viele Meldungen erzeugt.</span></div></div>
+<div class="notification-event-grid">
+<label class="check"><input name="events" type="checkbox" value="backup_failed"/> Backup fehlgeschlagen</label><label class="check"><input name="events" type="checkbox" value="backup_warning"/> Backup mit Warnungen</label><label class="check"><input name="events" type="checkbox" value="backup_success"/> Backup erfolgreich</label>
+<label class="check"><input name="events" type="checkbox" value="run_cancelled"/> Ausführung abgebrochen</label><label class="check"><input name="events" type="checkbox" value="repository_failed"/> Repository-Aktion fehlgeschlagen</label><label class="check"><input name="events" type="checkbox" value="repository_warning"/> Repository-Aktion mit Warnungen</label><label class="check"><input name="events" type="checkbox" value="repository_success"/> Repository-Aktion erfolgreich</label>
+<label class="check"><input name="events" type="checkbox" value="schedule_failed"/> Zeitplanausführung fehlgeschlagen</label><label class="check"><input name="events" type="checkbox" value="schedule_warning"/> Zeitplanausführung mit Warnungen</label><label class="check"><input name="events" type="checkbox" value="schedule_success"/> Zeitplanausführung erfolgreich</label>
+<label class="check"><input name="events" type="checkbox" value="operation_failed"/> Sonstige Aktion fehlgeschlagen</label><label class="check"><input name="events" type="checkbox" value="operation_warning"/> Sonstige Aktion mit Warnungen</label><label class="check"><input name="events" type="checkbox" value="operation_success"/> Sonstige Aktion erfolgreich</label>
+</div></section>
+<section class="settings-section"><div class="panel-head responsive-head"><div><h2>E-Mail über SMTP</h2><span id="smtp-secret-status">Kein SMTP-Passwort gespeichert.</span></div><button class="secondary" id="test-notification-email" type="button">E-Mail testen</button></div>
+<label class="check"><input name="smtp_enabled" type="checkbox"/> E-Mail-Kanal aktivieren</label>
+<div class="row"><label>SMTP-Server<input name="smtp_host" maxlength="255" placeholder="mail.example.net"/></label><label>Port<input name="smtp_port" type="number" min="1" max="65535" value="587"/></label><label>Transportverschlüsselung<select name="smtp_security"><option value="starttls">STARTTLS</option><option value="ssl">TLS/SSL direkt</option><option value="none">Keine</option></select></label></div>
+<div class="row"><label>SMTP-Benutzer<input name="smtp_username" maxlength="255" autocomplete="username"/></label><label>SMTP-Passwort<input name="smtp_password" type="password" autocomplete="new-password" placeholder="Leer lassen = gespeichertes Passwort behalten"/></label><label class="check compact-check"><input name="smtp_clear_password" type="checkbox"/> Gespeichertes Passwort löschen</label></div>
+<div class="row"><label>Absender<input name="email_from" type="email" maxlength="320" placeholder="borg@example.net"/></label><label>E-Mail-Empfänger<textarea name="email_recipients" rows="3" placeholder="admin@example.net&#10;backup@example.net"></textarea></label></div>
+</section>
+<section class="settings-section"><div class="panel-head responsive-head"><div><h2>Webhook oder Discord</h2><span id="webhook-secret-status">Keine Webhook-URL gespeichert.</span></div><button class="secondary" id="test-notification-webhook" type="button">Webhook testen</button></div>
+<label class="check"><input name="webhook_enabled" type="checkbox"/> Webhook-Kanal aktivieren</label>
+<div class="row"><label>Typ<select name="webhook_kind"><option value="generic">Generischer JSON-Webhook</option><option value="discord">Discord-Webhook</option></select></label><label>Webhook-URL<input name="webhook_url" type="password" maxlength="2048" autocomplete="new-password" placeholder="Leer lassen = gespeicherte URL behalten"/></label><label class="check compact-check"><input name="webhook_clear_url" type="checkbox"/> Gespeicherte URL löschen</label></div>
+<p class="hint">Der generische Webhook erhält ein JSON-Dokument mit Ereignis, Schweregrad, Titel, Nachricht, Ausführungs-ID und Zeitstempel.</p>
+</section>
+<section class="settings-section"><div class="panel-head responsive-head"><div><h2>Telegram</h2><span id="telegram-secret-status">Kein Bot-Token gespeichert.</span></div><button class="secondary" id="test-notification-telegram" type="button">Telegram testen</button></div>
+<label class="check"><input name="telegram_enabled" type="checkbox"/> Telegram-Kanal aktivieren</label>
+<div class="row"><label>Bot-Token<input name="telegram_bot_token" type="password" maxlength="200" autocomplete="new-password" placeholder="Leer lassen = gespeichertes Token behalten"/></label><label>Chat-ID oder Kanal<input name="telegram_chat_id" maxlength="100" placeholder="-1001234567890 oder @kanal"/></label><label class="check compact-check"><input name="telegram_clear_token" type="checkbox"/> Gespeichertes Token löschen</label></div>
+</section>
+<p class="error hidden" id="notification-form-status"></p>
+</form>
+<div class="panel"><div class="panel-head responsive-head"><div><h2>Letzte Zustellungen</h2><span>Erfolge und Fehler der Benachrichtigungskanäle, unabhängig vom Ergebnis des Borg-Laufs.</span></div><div class="table-actions"><button class="secondary" id="refresh-notification-deliveries" type="button">Aktualisieren</button><button class="danger ghost" id="clear-notification-deliveries" type="button">Protokoll leeren</button></div></div><div class="bounded-list" id="notification-delivery-list"></div></div>
+</section>
 <section class="view" id="view-settings">
 <form class="panel form-panel settings-form" id="settings-form"><h2>Systemweite Anzeigegrenzen</h2>
 <div class="row"><label>Darstellungsdichte<select name="density"><option value="comfortable">Komfortabel – größere Abstände</option><option value="compact">Kompakt – mehr Einträge sichtbar</option></select></label></div>
@@ -332,6 +369,9 @@
 </section>
 <button type="submit">Einstellungen speichern</button>
 </form>
+</section>
+<section class="view" id="view-diagnostics">
+<div class="panel diagnostics-panel"><div class="panel-head responsive-head"><div><h2>Systemdiagnose</h2><span>Borg-Version, Repository-Speicher, SSH-Dienst und Serverprotokolle zentral prüfen.</span></div><div class="table-actions"><button class="secondary" id="load-diagnostics" type="button">Diagnose laden</button><button class="secondary hidden" id="close-diagnostics" type="button">Diagnose schließen</button></div></div><div class="empty" id="system-diagnostics">Borg-Version, Repository-Speicher und Serverprotokoll bei Bedarf laden.</div></div>
 </section>
 <section class="view" id="view-help"><div class="help-fragment-loading" id="help-container">Anleitung wird geladen …</div></section>
 <section class="view" id="view-releases"><div class="panel"><div class="panel-head"><h2>Release Notes</h2><span id="release-version"></span></div><pre id="release-content">Wird geladen …</pre></div></section>
@@ -389,6 +429,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.0.43"></script><script src="/static/app.js?v=1.0.43"></script>
+<script src="/static/i18n.js?v=1.0.47"></script><script src="/static/app.js?v=1.0.47"></script>
 </body>
 </html>

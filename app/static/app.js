@@ -1,6 +1,6 @@
 const state = {
   currentUser: null, users: [], securityStatus: null,
-  hosts: [], repos: [], jobs: [], schedules: [], runs: [], mounts: [], system: {}, settings: null, backups: [], runStorage: null,
+  hosts: [], repos: [], jobs: [], schedules: [], runs: [], mounts: [], system: {}, settings: null, backups: [], runStorage: null, notifications: null, notificationDeliveries: [],
   liveRunId: null, liveTimer: null, refreshTimer: null,
   archiveData: null, archiveRequestId: 0, archiveSelection: new Set(), activeBrowser: null, browserPath: '', browserSelection: new Set(),
   openJobActions: new Set(), backgroundRefresh: false,
@@ -14,6 +14,8 @@ const state = {
 const SORT_DEFAULTS = {
   dashboardJobs: 'name-asc', jobs: 'name-asc', repositories: 'name-asc', hosts: 'name-asc',
 };
+
+const SYSTEM_VIEWS = new Set(['notifications', 'users', 'backups', 'settings', 'diagnostics']);
 
 function sortPreferenceStorageKey() {
   const user = state.currentUser?.id || state.currentUser?.username || 'anonymous';
@@ -332,7 +334,7 @@ function applyUserPermissions() {
   $$('[data-admin-only]').forEach((element) => element.classList.toggle('hidden', !admin));
   $$('[data-admin-only-block]').forEach((element) => element.classList.toggle('hidden', !admin));
   $('#current-user').textContent = state.currentUser ? `${state.currentUser.username} · ${admin ? 'Administrator' : 'Benutzer'}` : '';
-  if (!admin && ['hosts', 'repositories', 'archives', 'restore', 'backups', 'settings', 'users'].includes(hashView())) {
+  if (!admin && ['hosts', 'repositories', 'archives', 'restore', 'notifications', 'users', 'backups', 'settings', 'diagnostics'].includes(hashView())) {
     history.replaceState(null, '', '#dashboard');
     goToView('dashboard', false);
   }
@@ -609,7 +611,11 @@ function clearRepositoryStatus() {
 }
 
 function validView(view) {
-  return Boolean($(`#view-${view}`) && $(`nav button[data-view="${view}"]`));
+  return Boolean($(`#view-${view}`) && ($(`nav button[data-view="${view}"]`) || SYSTEM_VIEWS.has(view)));
+}
+
+function isSystemView(view) {
+  return SYSTEM_VIEWS.has(view);
 }
 
 function hashView() {
@@ -628,10 +634,20 @@ function setMobileNavigation(open) {
 function goToView(view, updateHash = true) {
   if (!validView(view)) view = 'dashboard';
   if (view === 'runs' && updateHash) state.runFilter = 'all';
-  const button = $(`nav button[data-view="${view}"]`);
+  const systemView = isSystemView(view);
+  const sidebarView = systemView ? 'settings' : view;
+  const button = $(`nav button[data-view="${sidebarView}"]`);
   $$('nav button').forEach((item) => item.classList.toggle('active', item === button));
   $$('.view').forEach((item) => item.classList.toggle('active', item.id === 'view-' + view));
-  if (button) $('#page-title').textContent = button.textContent;
+  const systemTabs = $('#system-workspace-tabs');
+  if (systemTabs) systemTabs.classList.toggle('hidden', !systemView || state.currentUser?.role !== 'admin');
+  $$('[data-system-view]').forEach((item) => {
+    const active = systemView && item.dataset.systemView === view;
+    item.classList.toggle('active', active);
+    item.setAttribute('aria-selected', active ? 'true' : 'false');
+    item.tabIndex = active ? 0 : -1;
+  });
+  $('#page-title').textContent = systemView ? 'System' : (button?.textContent || 'Übersicht');
   if (updateHash) {
     const targetHash = view === 'runs' && state.runFilter !== 'all' ? `#runs?status=${state.runFilter}` : '#' + view;
     if (location.hash !== targetHash) history.pushState(null, '', targetHash);
@@ -674,7 +690,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.43`, {cache: 'no-store'});
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.47`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -741,10 +757,12 @@ async function loadAll(background = false) {
     const securityRequest = admin ? api('/users/security-status') : Promise.resolve(null);
     const backupsRequest = admin ? api('/backups') : Promise.resolve([]);
     const mountsRequest = admin ? api('/mounts') : Promise.resolve([]);
+    const notificationSettingsRequest = admin ? api('/notifications/settings') : Promise.resolve(null);
+    const notificationDeliveriesRequest = admin ? api('/notifications/deliveries?limit=100') : Promise.resolve([]);
     const protectedStorageRequest = admin ? storageRequest : Promise.resolve(null);
-    const [dashboard, hosts, repos, jobs, schedules, runs, activeRuns, system, settings, backups, mounts, runStorage, users, securityStatus] = await Promise.all([
+    const [dashboard, hosts, repos, jobs, schedules, runs, activeRuns, system, settings, backups, mounts, runStorage, users, securityStatus, notifications, notificationDeliveries] = await Promise.all([
       api('/dashboard'), api('/hosts'), api('/repositories'), api('/jobs'), api('/schedules'), api(`/runs?status=${encodeURIComponent(state.runFilter)}`), api('/runs?status=active&limit=100'),
-      api('/system'), api('/settings'), backupsRequest, mountsRequest, protectedStorageRequest, usersRequest, securityRequest,
+      api('/system'), api('/settings'), backupsRequest, mountsRequest, protectedStorageRequest, usersRequest, securityRequest, notificationSettingsRequest, notificationDeliveriesRequest,
     ]);
     state.dashboard = dashboard;
     state.hosts = hosts;
@@ -760,6 +778,8 @@ async function loadAll(background = false) {
     state.runStorage = runStorage;
     state.users = users;
     state.securityStatus = securityStatus;
+    state.notifications = notifications;
+    state.notificationDeliveries = notificationDeliveries;
     applyUserPermissions();
     const active = hashView();
     renderDashboard(dashboard);
@@ -770,6 +790,7 @@ async function loadAll(background = false) {
     if (!background || active !== 'runs') renderRuns();
     renderSystem();
     if (!background || active !== 'settings') renderSettings();
+    if (!background || active !== 'notifications') renderNotifications();
     if (!background || active !== 'backups') renderBackups();
     if (!background || active !== 'users') renderUsers();
     fillSelects(background ? active : null);
@@ -816,6 +837,7 @@ async function performAreaRefresh(areas, message = 'Änderungen werden übernomm
   if (requested.has('security') && state.currentUser?.role === 'admin') add('security', api('/users/security-status'));
   if (requested.has('runStorage') && state.currentUser?.role === 'admin') add('runStorage', api('/runs/storage'));
   if (requested.has('mounts') && state.currentUser?.role === 'admin') add('mounts', api('/mounts'));
+  if (requested.has('notifications') && state.currentUser?.role === 'admin') { add('notifications', api('/notifications/settings')); add('notificationDeliveries', api('/notifications/deliveries?limit=100')); }
 
   const values = Object.fromEntries(await Promise.all(requests));
   if ('dashboard' in values) state.dashboard = values.dashboard;
@@ -830,6 +852,8 @@ async function performAreaRefresh(areas, message = 'Änderungen werden übernomm
   if ('security' in values) state.securityStatus = values.security;
   if ('runStorage' in values) state.runStorage = values.runStorage;
   if ('mounts' in values) state.mounts = values.mounts;
+  if ('notifications' in values) state.notifications = values.notifications;
+  if ('notificationDeliveries' in values) state.notificationDeliveries = values.notificationDeliveries;
 
   if ('dashboard' in values) renderDashboard(state.dashboard);
   if ('hosts' in values) renderHosts();
@@ -841,6 +865,7 @@ async function performAreaRefresh(areas, message = 'Änderungen werden übernomm
   if ('users' in values || 'security' in values) renderUsers();
   if ('runStorage' in values && active === 'settings') renderSettings();
   if ('mounts' in values) renderLegacyMounts();
+  if ('notifications' in values || 'notificationDeliveries' in values) renderNotifications();
   if (['hosts', 'repositories', 'jobs'].some((area) => requested.has(area))) fillSelects(active);
   setSyncState(`Aktualisiert · ${new Date().toLocaleTimeString(currentLocale())}`, 'success');
 }
@@ -902,6 +927,19 @@ function syncRunFilterControls() {
 }
 
 
+function sourceStatsLine(job, refreshable = false) {
+  const hasStats = job.source_size_bytes != null || job.source_file_count != null;
+  const sourceLabel = job.source_stats_origin === 'scan' ? 'Live-Scan vor Ausschlüssen' : 'letztes Backup';
+  const values = hasStats
+    ? `${formatBytes(job.source_size_bytes)} · ${job.source_file_count == null ? '–' : Number(job.source_file_count).toLocaleString(currentLocale())} Dateien`
+    : 'noch nicht ermittelt';
+  const checked = job.source_stats_checked_at ? ` · ${formatDate(job.source_stats_checked_at)}` : '';
+  const refresh = refreshable && state.currentUser?.role === 'admin'
+    ? `<button type="button" class="inline-action" ${bbmAction('action', job.id, 'source-stats')}>Aktualisieren</button>`
+    : '';
+  return `<span class="source-stat-line"><span><b>Quellenstatistik:</b> ${values}${hasStats ? ` · ${sourceLabel}` : ''}${checked}</span>${refresh}</span>`;
+}
+
 function dashboardJobTable(jobs) {
   if (!jobs?.length) return '<div class="empty">Noch keine Backup-Jobs angelegt.</div>';
   const rows = sortedDashboardJobs(jobs).map((job) => {
@@ -925,7 +963,7 @@ function dashboardJobTable(jobs) {
     const startAction = admin
       ? `<button ${bbmAction('action', job.id, 'backup')} ${job.enabled && job.host_enabled && !accessBlocked ? '' : 'disabled'} title="${esc(startTitle)}">Starten</button>`
       : '<span class="muted">Nur Ansicht</span>';
-    return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span></td><td data-label="Job"><button class="entity-link" ${bbmAction('goToView', 'jobs')}>${esc(job.name)}</button></td><td data-label="Gerät">${esc(job.host_name)}</td><td data-label="Repository">${esc(job.repository_name)}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span></td><td data-label="Zeitplan">${esc(schedule)}</td><td data-label="Letzter Job">${lastRun}</td><td data-label="Größe letzte Sicherung">${size}</td><td data-label="Aktion">${startAction}</td></tr>`;
+    return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span></td><td data-label="Job"><button class="entity-link" ${bbmAction('goToView', 'jobs')}>${esc(job.name)}</button></td><td data-label="Gerät">${esc(job.host_name)}</td><td data-label="Repository">${esc(job.repository_name)}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, false)}</td><td data-label="Zeitplan">${esc(schedule)}</td><td data-label="Letzter Job">${lastRun}</td><td data-label="Größe letzte Sicherung">${size}</td><td data-label="Aktion">${startAction}</td></tr>`;
   }).join('');
   return `<div class="table-scroll dashboard-jobs-scroll"><table class="data-table dashboard-jobs-table"><thead><tr><th>Status</th><th>Job</th><th>Gerät</th><th>Repository</th><th>Quellen</th><th>Zeitplan</th><th>Letzter Job</th><th>Größe letzte Sicherung</th><th>Aktion</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -1043,15 +1081,24 @@ async function copyRepositoryPublicKey(id) {
 
 async function setHostEnabled(id, enabled) {
   const host = state.hosts.find((item) => item.id === Number(id));
-  const verb = enabled ? 'aktivieren' : 'deaktivieren';
+  const activeJobs = state.jobs.filter((item) => item.host_id === Number(id) && item.enabled);
   const prompt = currentLanguage() === 'en'
-    ? `Really ${enabled ? 'enable' : 'disable'} device “${host?.name || ''}”?`
-    : `Gerät „${host?.name || ''}“ wirklich ${verb}?`;
+    ? enabled
+      ? `Really enable device “${host?.name || ''}”? Its backup jobs remain disabled and must be enabled explicitly.`
+      : `Really disable device “${host?.name || ''}”? ${activeJobs.length} active backup job(s) will also be disabled automatically.`
+    : enabled
+      ? `Gerät „${host?.name || ''}“ wirklich aktivieren? Die zugehörigen Backup-Jobs bleiben deaktiviert und müssen gezielt aktiviert werden.`
+      : `Gerät „${host?.name || ''}“ wirklich deaktivieren? ${activeJobs.length} aktive Backup-Job(s) werden automatisch ebenfalls deaktiviert.`;
   if (!host || !confirm(prompt)) return;
   const release = markButtonBusy(actionButton(), enabled ? 'Wird aktiviert …' : 'Wird deaktiviert …');
   try {
     await api(`/hosts/${id}/enabled`, {method: 'POST', body: JSON.stringify({enabled: Boolean(enabled)})});
-    toast(`Gerät ${enabled ? 'aktiviert' : 'deaktiviert'}`);
+    const message = enabled
+      ? 'Gerät aktiviert; Backup-Jobs bleiben deaktiviert'
+      : activeJobs.length
+        ? `Gerät und ${activeJobs.length} Backup-Job(s) deaktiviert`
+        : 'Gerät deaktiviert';
+    toast(message);
     await refreshAreas(['hosts', 'jobs', 'schedules', 'dashboard']);
   } catch (error) { toast(error.message, true); }
   finally { release(); }
@@ -1111,9 +1158,9 @@ function renderJobs() {
           ? 'Repository-Zugang zuerst einrichten'
           : 'Backup jetzt starten';
     if (!admin) {
-      return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span>${!repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span></td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><span class="muted">Nur Ansicht</span></td></tr>`;
+      return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span>${!repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><span class="muted">Nur Ansicht</span></td></tr>`;
     }
-    return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span>${!repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span></td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><div class="table-actions"><button ${bbmAction('action', job.id, 'backup')} ${startDisabled ? 'disabled' : ''} title="${esc(startTitle)}">Starten</button><button class="secondary" ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button><button class="secondary" data-job-toggle="${job.id}" ${bbmAction('toggleJobActions', job.id)}>${open ? 'Weniger' : 'Mehr'}</button></div></td></tr><tr class="job-detail-row ${open ? '' : 'hidden'}" data-job-detail="${job.id}"><td colspan="7"><div class="job-more-grid"><section class="job-action-group job-action-group-wide"><div class="job-action-heading"><h4>Prüfen</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'probe')} ${accessReady && repositoryReady ? '' : 'disabled'}>Verbindung</button><button ${bbmAction('action', job.id, 'info')} ${accessReady && repositoryReady ? '' : 'disabled'}>Job-Info</button><button ${bbmAction('action', job.id, 'version')}>Borg-Version</button><button ${bbmAction('action', job.id, 'check')} ${accessReady && repositoryReady ? '' : 'disabled'}>Repository</button><button ${bbmAction('action', job.id, 'verify')} ${accessReady && repositoryReady ? '' : 'disabled'}>Vollprüfung</button>${relocationButton}</div></section>${accessSection}<section class="job-action-group"><div class="job-action-heading"><h4>Speicherpflege</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'prune')} ${accessReady && repositoryReady ? '' : 'disabled'}>Aufbewahrung</button><button ${bbmAction('action', job.id, 'compact')} ${accessReady && repositoryReady ? '' : 'disabled'}>Compact</button><button ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button></div></section>${manageSection}</div></td></tr>`;
+    return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span>${!repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><div class="table-actions"><button ${bbmAction('action', job.id, 'backup')} ${startDisabled ? 'disabled' : ''} title="${esc(startTitle)}">Starten</button><button class="secondary" ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button><button class="secondary" data-job-toggle="${job.id}" ${bbmAction('toggleJobActions', job.id)}>${open ? 'Weniger' : 'Mehr'}</button></div></td></tr><tr class="job-detail-row ${open ? '' : 'hidden'}" data-job-detail="${job.id}"><td colspan="7"><div class="job-more-grid"><section class="job-action-group job-action-group-wide"><div class="job-action-heading"><h4>Prüfen</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'probe')} ${accessReady && repositoryReady ? '' : 'disabled'}>Verbindung</button><button ${bbmAction('action', job.id, 'info')} ${accessReady && repositoryReady ? '' : 'disabled'}>Job-Info</button><button ${bbmAction('action', job.id, 'version')}>Borg-Version</button><button ${bbmAction('action', job.id, 'source-stats')} ${host?.enabled ? '' : 'disabled'}>Quellenstatistik</button><button ${bbmAction('action', job.id, 'check')} ${accessReady && repositoryReady ? '' : 'disabled'}>Repository</button><button ${bbmAction('action', job.id, 'verify')} ${accessReady && repositoryReady ? '' : 'disabled'}>Vollprüfung</button>${relocationButton}</div></section>${accessSection}<section class="job-action-group"><div class="job-action-heading"><h4>Speicherpflege</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'prune')} ${accessReady && repositoryReady ? '' : 'disabled'}>Aufbewahrung</button><button ${bbmAction('action', job.id, 'compact')} ${accessReady && repositoryReady ? '' : 'disabled'}>Compact</button><button ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button></div></section>${manageSection}</div></td></tr>`;
   }).join('');
   list.innerHTML = `<div class="table-scroll"><table class="data-table jobs-table"><thead><tr><th>Status</th><th>Job</th><th>Gerät</th><th>Repository</th><th>Quellen</th><th>Zeitplan</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -1332,6 +1379,77 @@ function renderSettings() {
   renderExcludeTemplateEditor();
   renderExcludeTemplateSelect();
   applyPreferences();
+}
+
+function notificationChannelLabel(channel) {
+  return ({email: 'E-Mail', webhook: 'Webhook', telegram: 'Telegram'})[channel] || channel;
+}
+
+function notificationEventLabel(eventType) {
+  return ({
+    backup_failed: 'Backup fehlgeschlagen', backup_warning: 'Backup mit Warnungen', backup_success: 'Backup erfolgreich',
+    run_cancelled: 'Ausführung abgebrochen', repository_failed: 'Repository-Aktion fehlgeschlagen',
+    repository_warning: 'Repository-Aktion mit Warnungen', repository_success: 'Repository-Aktion erfolgreich',
+    schedule_failed: 'Zeitplanausführung fehlgeschlagen', schedule_warning: 'Zeitplanausführung mit Warnungen',
+    schedule_success: 'Zeitplanausführung erfolgreich', operation_failed: 'Sonstige Aktion fehlgeschlagen',
+    operation_warning: 'Sonstige Aktion mit Warnungen', operation_success: 'Sonstige Aktion erfolgreich', test: 'Testbenachrichtigung',
+  })[eventType] || eventType;
+}
+
+function renderNotifications() {
+  const settings = state.notifications;
+  const form = $('#notification-form');
+  if (!settings || !form) return;
+  for (const name of ['enabled', 'include_error_excerpt', 'smtp_enabled', 'webhook_enabled', 'telegram_enabled']) {
+    form.elements[name].checked = Boolean(settings[name]);
+  }
+  for (const name of ['instance_name', 'language', 'timeout_seconds', 'smtp_host', 'smtp_port', 'smtp_security', 'smtp_username', 'email_from', 'webhook_kind', 'telegram_chat_id']) {
+    form.elements[name].value = settings[name] ?? '';
+  }
+  form.elements.email_recipients.value = (settings.email_recipients || []).join('\n');
+  form.elements.smtp_password.value = ''; form.elements.webhook_url.value = ''; form.elements.telegram_bot_token.value = '';
+  form.elements.smtp_clear_password.checked = false; form.elements.webhook_clear_url.checked = false; form.elements.telegram_clear_token.checked = false;
+  const selectedEvents = new Set(settings.events || []);
+  form.querySelectorAll('input[name="events"]').forEach((input) => { input.checked = selectedEvents.has(input.value); });
+  $('#smtp-secret-status').textContent = settings.smtp_password_set ? 'SMTP-Passwort ist verschlüsselt gespeichert.' : 'Kein SMTP-Passwort gespeichert.';
+  $('#webhook-secret-status').textContent = settings.webhook_url_set ? 'Webhook-URL ist verschlüsselt gespeichert.' : 'Keine Webhook-URL gespeichert.';
+  $('#telegram-secret-status').textContent = settings.telegram_token_set ? 'Telegram-Bot-Token ist verschlüsselt gespeichert.' : 'Kein Bot-Token gespeichert.';
+  const deliveries = state.notificationDeliveries || [];
+  const target = $('#notification-delivery-list');
+  if (!target) return;
+  if (!deliveries.length) { target.innerHTML = '<div class="empty">Noch keine Benachrichtigungen versendet.</div>'; return; }
+  target.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Status</th><th>Zeit</th><th>Kanal</th><th>Ereignis</th><th>Titel</th><th>Ergebnis</th></tr></thead><tbody>${deliveries.map((item) => `<tr><td data-label="Status"><span class="badge ${item.status === 'success' ? 'success' : 'failed'}">${item.status === 'success' ? 'versendet' : 'Fehler'}</span></td><td data-label="Zeit">${esc(formatDate(item.created_at))}</td><td data-label="Kanal">${esc(notificationChannelLabel(item.channel))}</td><td data-label="Ereignis">${esc(notificationEventLabel(item.event_type))}</td><td data-label="Titel">${esc(item.title)}</td><td data-label="Ergebnis" class="notification-delivery-detail">${esc(item.detail || '–')}${item.run_id ? `<small>Ausführung #${esc(item.run_id)}</small>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function notificationPayload(formElement) {
+  const form = new FormData(formElement);
+  const payload = {
+    enabled: form.get('enabled') === 'on', instance_name: String(form.get('instance_name') || '').trim(),
+    language: form.get('language'), events: [...formElement.querySelectorAll('input[name="events"]:checked')].map((input) => input.value),
+    include_error_excerpt: form.get('include_error_excerpt') === 'on', timeout_seconds: +form.get('timeout_seconds'),
+    smtp_enabled: form.get('smtp_enabled') === 'on', smtp_host: String(form.get('smtp_host') || '').trim(), smtp_port: +form.get('smtp_port'),
+    smtp_security: form.get('smtp_security'), smtp_username: String(form.get('smtp_username') || '').trim(),
+    smtp_clear_password: form.get('smtp_clear_password') === 'on', email_from: String(form.get('email_from') || '').trim(),
+    email_recipients: String(form.get('email_recipients') || '').split(/[\n,;]+/).map((item) => item.trim()).filter(Boolean),
+    webhook_enabled: form.get('webhook_enabled') === 'on', webhook_kind: form.get('webhook_kind'), webhook_clear_url: form.get('webhook_clear_url') === 'on',
+    telegram_enabled: form.get('telegram_enabled') === 'on', telegram_clear_token: form.get('telegram_clear_token') === 'on', telegram_chat_id: String(form.get('telegram_chat_id') || '').trim(),
+  };
+  const smtpPassword = String(form.get('smtp_password') || ''); if (smtpPassword) payload.smtp_password = smtpPassword;
+  const webhookUrl = String(form.get('webhook_url') || ''); if (webhookUrl) payload.webhook_url = webhookUrl;
+  const telegramToken = String(form.get('telegram_bot_token') || ''); if (telegramToken) payload.telegram_bot_token = telegramToken;
+  return payload;
+}
+
+async function testNotification(channel, button) {
+  const release = markButtonBusy(button, 'Test wird gesendet …');
+  try {
+    state.notifications = await api('/notifications/settings', {method: 'PUT', body: JSON.stringify(notificationPayload($('#notification-form')))});
+    const result = await api('/notifications/test', {method: 'POST', body: JSON.stringify({channel})});
+    toast(`${notificationChannelLabel(channel)}-Test erfolgreich versendet`);
+    await refreshAreas(['notifications']);
+    return result;
+  } catch (error) { toast(error.message, true); throw error; }
+  finally { release(); }
 }
 
 function renderBackups() {
@@ -1734,7 +1852,7 @@ function renderRunDialog(run) {
   const backupSize = [run.backup_original_size_bytes, run.backup_compressed_size_bytes, run.backup_deduplicated_size_bytes].some((value) => value != null)
     ? `Dedupliziert ${formatBytes(run.backup_deduplicated_size_bytes)} · Original ${formatBytes(run.backup_original_size_bytes)} · Komprimiert ${formatBytes(run.backup_compressed_size_bytes)}`
     : '–';
-  $('#log-summary').innerHTML = `<div><span>Status</span><strong class="status-text ${esc(run.status)}">${esc(runStatusLabel(run.status))}</strong></div><div><span>Gestartet</span><strong>${run.started_at ? esc(formatDate(run.started_at)) : 'wartet'}</strong></div><div><span>Dauer</span><strong>${esc(formatDuration(run.duration_seconds))}</strong></div><div><span>Lauf</span><strong>#${run.id}</strong></div><div><span>Ausführung</span><strong>${trigger}</strong></div><div><span>Backup-Größe</span><strong>${backupSize}</strong></div>`;
+  $('#log-summary').innerHTML = `<div><span>Status</span><strong class="status-text ${esc(run.status)}">${esc(runStatusLabel(run.status))}</strong></div><div><span>Gestartet</span><strong>${run.started_at ? esc(formatDate(run.started_at)) : 'wartet'}</strong></div><div><span>Dauer</span><strong>${esc(formatDuration(run.duration_seconds))}</strong></div><div><span>Lauf</span><strong>#${run.id}</strong></div><div><span>Ausführung</span><strong>${trigger}</strong></div><div><span>Backup-Größe</span><strong>${backupSize}</strong></div><div><span>Dateien</span><strong>${run.backup_file_count == null ? '–' : Number(run.backup_file_count).toLocaleString(currentLocale())}</strong></div>`;
   renderWarningCauses(run.warning_summary);
   const box = $('#log-diagnosis');
   box.classList.toggle('hidden', !run.diagnosis);
@@ -2457,7 +2575,28 @@ async function browseArchive(path) {
     $('#browser-up').disabled = result.parent == null;
     $('#browser-up').dataset.parent = result.parent || '';
     const box = $('#archive-browser-list');
-    box.innerHTML = result.entries.length ? result.entries.map((entry) => `<div class="browser-entry"><label class="browser-select"><input type="checkbox" data-select-path="${esc(entry.path)}" ${state.browserSelection.has(entry.path) ? 'checked' : ''}></label><div class="browser-name">${entry.type === 'directory' ? `<button type="button" class="entity-link" data-browse-path="${esc(entry.path)}">📁 ${esc(entry.name)}</button>` : `<span>${entry.type === 'symlink' ? '🔗' : '📄'} ${esc(entry.name)}</span>`}<small>${entry.type} · ${formatBytes(entry.size)}${entry.target ? ' → ' + esc(entry.target) : ''}</small></div></div>`).join('') : '<div class="empty">Dieses Verzeichnis ist leer.</div>';
+    const typeLabels = {directory: 'Verzeichnis', file: 'Datei', symlink: 'Verknüpfung', other: 'Sonstiges'};
+    const iconFor = (entry) => entry.type === 'directory' ? '📁' : entry.type === 'symlink' ? '🔗' : entry.type === 'file' ? '📄' : '◻';
+    const ownerFor = (entry) => {
+      const user = entry.user || (entry.uid != null ? String(entry.uid) : '–');
+      const group = entry.group || (entry.gid != null ? String(entry.gid) : '–');
+      return `${user}:${group}`;
+    };
+    const parts = (result.path || '').split('/').filter(Boolean);
+    const breadcrumb = [{label: '/', path: ''}, ...parts.map((label, index) => ({label, path: parts.slice(0, index + 1).join('/')}))];
+    $('#browser-path').innerHTML = breadcrumb.map((item, index) => `${index ? '<span class="browser-breadcrumb-separator">›</span>' : ''}<button type="button" data-browse-path="${esc(item.path)}">${esc(item.label)}</button>`).join('');
+    const rows = result.entries.map((entry) => {
+      const name = entry.type === 'directory'
+        ? `<button type="button" class="entity-link" data-browse-path="${esc(entry.path)}"><span class="browser-icon">${iconFor(entry)}</span>${esc(entry.name)}</button>`
+        : `<span><span class="browser-icon">${iconFor(entry)}</span>${esc(entry.name)}</span>`;
+      const target = entry.target ? `<small class="browser-target" title="${esc(entry.target)}">→ ${esc(entry.target)}</small>` : '';
+      return `<tr><td data-label="Auswahl"><input aria-label="${esc(entry.name)} auswählen" type="checkbox" data-select-path="${esc(entry.path)}" ${state.browserSelection.has(entry.path) ? 'checked' : ''}></td><td data-label="Name" class="browser-name-cell">${name}${target}</td><td data-label="Größe">${entry.type === 'directory' ? '–' : formatBytes(entry.size)}</td><td data-label="Typ">${esc(typeLabels[entry.type] || entry.type)}</td><td data-label="Rechte"><code>${esc(entry.mode || '–')}</code></td><td data-label="Besitzer"><code>${esc(ownerFor(entry))}</code></td><td data-label="Geändert">${entry.mtime ? esc(formatDate(entry.mtime)) : '–'}</td></tr>`;
+    }).join('');
+    box.innerHTML = result.entries.length
+      ? `<div class="archive-browser-shell table-scroll"><table class="data-table archive-browser-table"><thead><tr><th></th><th>Name</th><th>Größe</th><th>Typ</th><th>Rechte</th><th>Besitzer</th><th>Geändert</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : '<div class="empty">Dieses Verzeichnis ist leer.</div>';
+    const meta = $('#archive-browser-meta');
+    meta.innerHTML = `${esc(archive)} · ${esc(mode)} · kein FUSE erforderlich <span class="browser-entry-count">· ${result.entries.length} Einträge</span>`;
     $$('[data-browse-path]').forEach((button) => button.onclick = () => browseArchive(button.dataset.browsePath));
     $$('[data-select-path]').forEach((checkbox) => checkbox.onchange = () => {
       if (checkbox.checked) state.browserSelection.add(checkbox.dataset.selectPath);
@@ -2589,6 +2728,7 @@ function formatDuration(value) {
 }
 
 $$('nav button').forEach((button) => button.onclick = () => goToView(button.dataset.view));
+$$('[data-system-view]').forEach((button) => button.onclick = () => goToView(button.dataset.systemView));
 $('#mobile-nav-toggle').onclick = () => setMobileNavigation(!document.querySelector('aside')?.classList.contains('mobile-open'));
 window.addEventListener('resize', () => {
   if (!window.matchMedia('(max-width: 760px)').matches) setMobileNavigation(false);
@@ -3012,6 +3152,30 @@ $('#backup-restore-form').onsubmit = async (event) => {
 };
 $('#cleanup-expired-runs')?.addEventListener('click', () => cleanupRunHistory('expired'));
 $('#cleanup-all-runs')?.addEventListener('click', () => cleanupRunHistory('all_finished'));
+
+$('#notification-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const release = markButtonBusy(event.submitter, 'Konfiguration wird gespeichert …');
+  const status = $('#notification-form-status');
+  status.classList.add('hidden');
+  try {
+    state.notifications = await api('/notifications/settings', {method: 'PUT', body: JSON.stringify(notificationPayload(event.target))});
+    renderNotifications();
+    toast('Benachrichtigungskonfiguration gespeichert');
+  } catch (error) {
+    status.textContent = error.message; status.classList.remove('hidden'); toast(error.message, true);
+  } finally { release(); }
+};
+$('#test-notification-email').onclick = (event) => testNotification('email', event.currentTarget);
+$('#test-notification-webhook').onclick = (event) => testNotification('webhook', event.currentTarget);
+$('#test-notification-telegram').onclick = (event) => testNotification('telegram', event.currentTarget);
+$('#refresh-notification-deliveries').onclick = () => refreshAreas(['notifications']);
+$('#clear-notification-deliveries').onclick = async (event) => {
+  if (!confirm('Benachrichtigungsprotokoll wirklich vollständig leeren?')) return;
+  const release = markButtonBusy(event.currentTarget, 'Wird gelöscht …');
+  try { await api('/notifications/deliveries', {method: 'DELETE'}); await refreshAreas(['notifications']); toast('Benachrichtigungsprotokoll geleert'); }
+  catch (error) { toast(error.message, true); } finally { release(); }
+};
 
 $('#settings-form').elements.density.onchange = (event) => {
   document.body.classList.toggle('compact', event.target.value === 'compact');

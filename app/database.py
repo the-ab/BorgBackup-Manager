@@ -58,6 +58,10 @@ def migrate_schema(target_engine=engine) -> None:
             "archive_prefix": "VARCHAR(80)",
             "archive_prefix_history_json": "TEXT NOT NULL DEFAULT '[]'",
             "create_options_json": "TEXT NOT NULL DEFAULT '{}'",
+            "source_size_bytes": "INTEGER",
+            "source_file_count": "INTEGER",
+            "source_stats_checked_at": "DATETIME",
+            "source_stats_origin": "VARCHAR(20)",
         },
         "backup_schedules": {
             "parallel_limit": "INTEGER NOT NULL DEFAULT 0",
@@ -76,6 +80,7 @@ def migrate_schema(target_engine=engine) -> None:
             "backup_original_size_bytes": "INTEGER",
             "backup_compressed_size_bytes": "INTEGER",
             "backup_deduplicated_size_bytes": "INTEGER",
+            "backup_file_count": "INTEGER",
         },
     }
     with target_engine.begin() as connection:

@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
-from app.backup_stats import parse_backup_statistics
+from app.backup_stats import parse_backup_statistics, parse_source_scan_statistics
 from app.borg_warnings import BorgWarningCollector, unresolved_warning_summary
 from app.config import (
     REPOSITORY_AUTHORIZED_KEYS_PATH,
@@ -54,12 +54,14 @@ from app.runner import (
     repository_size_command,
     repository_validation_command,
     repository_compact_command,
+    source_stats_command,
     rename_archive_command,
     restore_command,
 )
 from app.external_repository import generate_ed25519_keypair
 from app.vault import get_system_secret, set_repository_secret, set_system_secret
 from app.log_filter import extract_error_output
+from app.notifications import notify_run_completion
 from app.settings import load_settings
 from app.storage_guard import repository_storage_status
 
@@ -722,12 +724,24 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
                     host.borg_version = version
                     host.borg_version_status = compatibility.level
                     host.borg_checked_at = datetime.now(timezone.utc)
-            if action == "backup" and status in {"success", "warning"}:
-                statistics = parse_backup_statistics(output + "\n" + error)
-                run.archive_name_snapshot = statistics.get("archive_name")
-                run.backup_original_size_bytes = statistics.get("original_size_bytes")
-                run.backup_compressed_size_bytes = statistics.get("compressed_size_bytes")
-                run.backup_deduplicated_size_bytes = statistics.get("deduplicated_size_bytes")
+            if action in {"backup", "source-stats"} and status in {"success", "warning"}:
+                statistics = (
+                    parse_backup_statistics(output + "\n" + error)
+                    if action == "backup"
+                    else parse_source_scan_statistics(output + "\n" + error)
+                )
+                if action == "backup":
+                    run.archive_name_snapshot = statistics.get("archive_name")
+                    run.backup_original_size_bytes = statistics.get("original_size_bytes")
+                    run.backup_compressed_size_bytes = statistics.get("compressed_size_bytes")
+                    run.backup_deduplicated_size_bytes = statistics.get("deduplicated_size_bytes")
+                    run.backup_file_count = statistics.get("file_count")
+                job = db.get(Job, run.job_id) if run.job_id else None
+                if job and statistics.get("original_size_bytes") is not None:
+                    job.source_size_bytes = statistics.get("original_size_bytes")
+                    job.source_file_count = statistics.get("file_count")
+                    job.source_stats_checked_at = datetime.now(timezone.utc)
+                    job.source_stats_origin = "backup" if action == "backup" else "scan"
             run.finished_at = datetime.now(timezone.utc)
             db.commit()
 
@@ -759,6 +773,9 @@ async def execute_run(run_id: int, command: Command, *, refresh_size_after: bool
             _executing_run_ids.discard(run_id)
             if _active_run_tasks.get(run_id) is asyncio.current_task():
                 _active_run_tasks.pop(run_id, None)
+    # Release all repository/global queue slots before contacting external
+    # notification services. Delivery failures never alter the Borg result.
+    await asyncio.to_thread(notify_run_completion, run_id)
 
 
 async def reset_managed_repository_state(repository_id: int) -> dict[str, int | str]:
@@ -1100,7 +1117,7 @@ def queue_job_action(
         ):
             raise ValueError("A run for this job is already queued or running")
         if job.repository.storage_path:
-            if action != "version" and (
+            if action not in {"version", "source-stats"} and (
                 not job.repository.initialized or not managed_repository_present(job.repository)
             ):
                 raise ValueError("Verwaltetes Repository fehlt oder ist nicht initialisiert; zuerst zurücksetzen und erneut initialisieren")
@@ -1122,6 +1139,8 @@ def queue_job_action(
                     )
         if action == "backup":
             command = backup_command(job)
+        elif action == "source-stats":
+            command = source_stats_command(job)
         elif action == "prune":
             retention = json.loads(job.prune_options_json or "{}")
             if not any(
@@ -1228,7 +1247,7 @@ def _record_schedule_error(
     *,
     schedule_id: int | None = None,
     schedule_parallel_limit: int = 0,
-) -> None:
+) -> int:
     with SessionLocal() as db:
         job = db.get(Job, job_id)
         run = Run(
@@ -1247,6 +1266,7 @@ def _record_schedule_error(
         )
         db.add(run)
         db.commit()
+        return int(run.id)
 
 
 async def scheduled_backup(
@@ -1291,10 +1311,11 @@ async def scheduled_backup(
                 )
                 await _wait_for_run(compact_run)
     except Exception as exc:
-        _record_schedule_error(
+        failed_run_id = _record_schedule_error(
             job_id, str(exc), schedule_name,
             schedule_id=schedule_id, schedule_parallel_limit=schedule_parallel_limit,
         )
+        await asyncio.to_thread(notify_run_completion, failed_run_id)
     finally:
         if repository_changed and repository_id and load_settings().repository_size_after_run:
             try:

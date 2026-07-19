@@ -567,6 +567,10 @@ class JobOut(JobIn):
     schedule_mode: str = "manual"
     schedule_names: list[str] = Field(default_factory=list)
     repository_access_ready: bool = False
+    source_size_bytes: int | None = None
+    source_file_count: int | None = None
+    source_stats_checked_at: datetime | None = None
+    source_stats_origin: str | None = None
 
 
 class BackupScheduleIn(BaseModel):

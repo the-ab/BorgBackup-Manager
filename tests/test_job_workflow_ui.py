@@ -115,6 +115,18 @@ def test_list_actions_include_direct_enable_disable_and_backup_upload():
     assert "bbmAction('setHostEnabled'" in javascript
     assert "bbmAction('setJobEnabled'" in javascript
     assert "setHostEnabled" in javascript and "setJobEnabled" in javascript
+    assert "will also be disabled automatically" in javascript
+    assert "werden automatisch ebenfalls deaktiviert" in javascript
+    assert "Backup-Jobs bleiben deaktiviert" in javascript
     assert 'id="backup-upload-form"' in html
     assert "'/backups/upload'" in javascript
     assert "X-BBM-Backup-Name" in javascript
+
+
+def test_job_list_shows_refreshable_source_statistics():
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert "function sourceStatsLine" in javascript
+    assert "Quellenstatistik:" in javascript
+    assert "'source-stats'" in javascript
+    assert "source_file_count" in javascript
+    assert "Live-Scan vor Ausschlüssen" in javascript

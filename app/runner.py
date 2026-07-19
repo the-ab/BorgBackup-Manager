@@ -413,7 +413,9 @@ def repository_access_command(repository: Repository, parts: list[str], *, fallb
 def _repository_operation(job: Job, parts: list[str]) -> Command:
     return repository_access_command(job.repository, parts)
 
-def _ssh_argv(host: Host, remote_parts: Iterable[str], env: dict[str, str]) -> Command:
+def _ssh_argv(
+    host: Host, remote_parts: Iterable[str], env: dict[str, str], *, supervised: bool = False
+) -> Command:
     if not host.enabled:
         raise ValueError(f"Host {host.name} is disabled")
     public_env = {key: value for key, value in env.items() if not key.startswith("_BBM_")}
@@ -423,7 +425,7 @@ def _ssh_argv(host: Host, remote_parts: Iterable[str], env: dict[str, str]) -> C
     # even when an unencrypted managed repository needs no secret payload. This
     # guarantees both repository-scoped client caching and controlled SIGINT
     # cancellation for all backup jobs, not only encrypted/external ones.
-    payload = _secret_payload(env, required=cache_key != "-")
+    payload = _secret_payload(env, required=supervised or cache_key != "-")
     if payload is not None:
         command_parts = [
             "sh", "-c", _SECRET_WRAPPER, "--", env.get("_BBM_EXTERNAL_SSH_VERBOSE", "0"),
@@ -584,6 +586,170 @@ exit "$bbm_rc"
 """.strip()
     return _ssh_argv(job.host, ["sh", "-c", script], _remote_env(job.repository))
 
+
+def source_stats_command(job: Job) -> Command:
+    """Scan configured source paths without accessing or modifying a repository.
+
+    Borg 1.x does not permit ``create --dry-run`` together with ``--stats``.
+    A manual refresh therefore performs a read-only filesystem traversal as the
+    configured source-device SSH user. Exact post-exclusion values continue to
+    come from a completed Borg backup and replace this preliminary scan.
+    """
+    sources = json.loads(job.source_paths_json or "[]")
+    options = validate_create_options(json.loads(job.create_options_json or "{}"))
+    one_file_system = "1" if options["one_file_system"] else "0"
+    python_scan = r'''
+import json
+import os
+import stat
+import sys
+
+one_file_system = sys.argv[1] == "1"
+roots = sys.argv[2:]
+size_bytes = 0
+file_count = 0
+warning_count = 0
+seen_paths = set()
+
+
+def warn(message):
+    global warning_count
+    warning_count += 1
+    print("WARNUNG: " + message, file=sys.stderr)
+
+
+def account(path, st):
+    global size_bytes, file_count
+    normalized = os.path.normpath(path)
+    if normalized in seen_paths:
+        return
+    seen_paths.add(normalized)
+    if stat.S_ISDIR(st.st_mode):
+        return
+    file_count += 1
+    if stat.S_ISREG(st.st_mode):
+        size_bytes += max(0, int(st.st_size))
+
+
+for root in roots:
+    try:
+        root_stat = os.lstat(root)
+    except OSError as exc:
+        warn(f"{root}: {exc}")
+        continue
+    if not stat.S_ISDIR(root_stat.st_mode):
+        account(root, root_stat)
+        continue
+    root_device = root_stat.st_dev
+    normalized_root = os.path.normpath(root)
+    if normalized_root in seen_paths:
+        continue
+    seen_paths.add(normalized_root)
+    stack = [root]
+    while stack:
+        directory = stack.pop()
+        try:
+            with os.scandir(directory) as iterator:
+                entries = list(iterator)
+        except OSError as exc:
+            warn(f"{directory}: {exc}")
+            continue
+        for entry in entries:
+            path = entry.path
+            try:
+                item_stat = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                warn(f"{path}: {exc}")
+                continue
+            if stat.S_ISDIR(item_stat.st_mode):
+                if one_file_system and item_stat.st_dev != root_device:
+                    continue
+                normalized_path = os.path.normpath(path)
+                if normalized_path in seen_paths:
+                    continue
+                seen_paths.add(normalized_path)
+                stack.append(path)
+            else:
+                account(path, item_stat)
+
+print("BBM_SOURCE_STATS_JSON=" + json.dumps({
+    "size_bytes": size_bytes,
+    "file_count": file_count,
+    "warning_count": warning_count,
+    "method": "python-lstat",
+}, separators=(",", ":")))
+sys.exit(1 if warning_count else 0)
+'''.strip()
+    fallback_scan = r'''
+set +e
+tmpfile=$(mktemp /tmp/bbm-source-stats.XXXXXX) || exit 70
+trap 'rm -f -- "$tmpfile"' EXIT HUP INT TERM
+warnings=0
+for source in "$@"; do
+  if [ ! -e "$source" ] && [ ! -L "$source" ]; then
+    printf 'WARNUNG: Quelle nicht gefunden: %s\n' "$source" >&2
+    warnings=$((warnings + 1))
+    continue
+  fi
+  if [ -d "$source" ]; then
+    if [ "$one_file_system" = "1" ]; then
+      find "$source" -xdev \( -type f -o -type l \) -exec stat -c '%s' {} \; >>"$tmpfile" 2>/dev/null
+    else
+      find "$source" \( -type f -o -type l \) -exec stat -c '%s' {} \; >>"$tmpfile" 2>/dev/null
+    fi
+    rc=$?
+  else
+    stat -c '%s' "$source" >>"$tmpfile" 2>/dev/null
+    rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    printf 'WARNUNG: Quelle konnte nicht vollständig gelesen werden: %s\n' "$source" >&2
+    warnings=$((warnings + 1))
+  fi
+done
+awk -v warnings="$warnings" '
+  { size += $1; count += 1 }
+  END {
+    printf "BBM_SOURCE_STATS_JSON={\"size_bytes\":%.0f,\"file_count\":%d,\"warning_count\":%d,\"method\":\"find-stat\"}\n", size, count, warnings
+  }
+' "$tmpfile"
+[ "$warnings" -eq 0 ]
+'''.strip()
+    script = f'''
+set +e
+printf '%s\n' '=== Quellenstatistik aktualisieren (Live-Scan) ==='
+printf 'BACKUP-JOB: %s\n' {shlex.quote(job.name)}
+printf 'QUELLPFADE: %s\n' {shlex.quote(', '.join(sources))}
+printf '%s\n' 'Hinweis: Der manuelle Scan zählt die konfigurierten Quellen vor Borg-Ausschlüssen.'
+printf '%s\n' 'Das Repository wird nicht geöffnet und es wird kein Archiv geschrieben.'
+printf '%s\n' '------------------------------------------------------------------------------'
+one_file_system={one_file_system}
+if command -v python3 >/dev/null 2>&1; then
+  python3 -S -c {shlex.quote(python_scan)} "$one_file_system" "$@"
+  bbm_rc=$?
+elif command -v find >/dev/null 2>&1 && command -v stat >/dev/null 2>&1 && stat -c '%s' / >/dev/null 2>&1; then
+  {fallback_scan}
+  bbm_rc=$?
+else
+  printf '%s\n' 'FEHLER: Für die Quellenstatistik wird Python 3 oder eine kompatible find/stat-Umgebung benötigt.' >&2
+  bbm_rc=2
+fi
+printf '%s\n' '------------------------------------------------------------------------------'
+if [ "$bbm_rc" -eq 0 ]; then
+  printf '%s\n' 'ERGEBNIS: Quellenstatistik erfolgreich aktualisiert.'
+elif [ "$bbm_rc" -eq 1 ]; then
+  printf '%s\n' 'ERGEBNIS: Quellenstatistik mit Warnungen aktualisiert.' >&2
+else
+  printf 'ERGEBNIS: Quellenstatistik fehlgeschlagen (RC %s).\n' "$bbm_rc" >&2
+fi
+exit "$bbm_rc"
+'''.strip()
+    return _ssh_argv(
+        job.host,
+        ["sh", "-c", script, "--", *sources],
+        {},
+        supervised=True,
+    )
 
 def prune_command(job: Job) -> Command:
     options = json.loads(job.prune_options_json or "{}")
@@ -834,7 +1000,7 @@ def browse_archive_command(job: Job, archive: str, relative_path: str = "") -> C
     parts = [
         *_borg_base("list"),
         "--json-lines",
-        "--format", "{path}{type}{size}{mtime}{source}",
+        "--format", "{path}{type}{size}{mtime}{source}{mode}{user}{group}{uid}{gid}",
         "--pattern", f"+ {direct_children}",
         "--pattern", "- re:.*",
         f"::{archive}",
@@ -1018,7 +1184,7 @@ def repository_browse_archive_command(repository: Repository, archive: str, rela
     parts = [
         *_borg_base("list"),
         "--json-lines",
-        "--format", "{path}{type}{size}{mtime}{source}",
+        "--format", "{path}{type}{size}{mtime}{source}{mode}{user}{group}{uid}{gid}",
         "--pattern", f"+ {direct_children}",
         "--pattern", "- re:.*",
         f"::{archive}",

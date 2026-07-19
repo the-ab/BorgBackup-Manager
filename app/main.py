@@ -68,6 +68,11 @@ from app.external_repository import (
     public_key_from_private, repository_location_uses_ssh, scan_repository_host_key,
 )
 from app.repository_diagnostics import compact_repository_diagnostic
+from app.notifications import (
+    NotificationSettingsInput, NotificationSettingsOut, NotificationTestIn,
+    clear_deliveries, list_deliveries, notification_settings_out,
+    save_notification_settings, send_test_notification,
+)
 from app.repository_state import managed_repository_present
 from app.log_filter import extract_error_output
 from app.models import ArchiveMount, BackupSchedule, Host, HostRepositoryAccess, Job, JobIdReservation, Repository, Run
@@ -406,6 +411,10 @@ def job_out(
         create_options=json.loads(row.create_options_json or "{}"), enabled=row.enabled,
         schedule_mode="scheduled" if names else "manual", schedule_names=names,
         repository_access_ready=repository_access_ready,
+        source_size_bytes=row.source_size_bytes,
+        source_file_count=row.source_file_count,
+        source_stats_checked_at=row.source_stats_checked_at,
+        source_stats_origin=row.source_stats_origin,
     )
 
 
@@ -624,17 +633,31 @@ async def archive_exists(job: Job, archive: str) -> bool:
 
 
 def apply_job(row: Job, data: JobIn) -> None:
+    source_paths_json = json.dumps(data.source_paths)
+    exclude_patterns_json = json.dumps(data.exclude_patterns)
+    create_options_json = json.dumps(data.create_options)
+    statistics_inputs_changed = any((
+        row.host_id is not None and row.host_id != data.host_id,
+        row.source_paths_json not in {None, source_paths_json},
+        row.exclude_patterns_json not in {None, exclude_patterns_json},
+        row.create_options_json not in {None, create_options_json},
+    ))
     row.name = data.name
     row.host_id = data.host_id
     row.repository_id = data.repository_id
-    row.source_paths_json = json.dumps(data.source_paths)
-    row.exclude_patterns_json = json.dumps(data.exclude_patterns)
+    row.source_paths_json = source_paths_json
+    row.exclude_patterns_json = exclude_patterns_json
     row.archive_template = data.archive_template
     row.schedule = None
     row.compression = data.compression
     row.prune_options_json = json.dumps(data.prune_options)
-    row.create_options_json = json.dumps(data.create_options)
+    row.create_options_json = create_options_json
     row.enabled = data.enabled
+    if statistics_inputs_changed:
+        row.source_size_bytes = None
+        row.source_file_count = None
+        row.source_stats_checked_at = None
+        row.source_stats_origin = None
 
 
 def repair_invalid_stored_borg_versions() -> int:
@@ -1267,6 +1290,10 @@ def dashboard() -> dict:
                 "repository_managed": bool(job.repository.storage_path),
                 "repository_access_ready": access_ready,
                 "source_paths": json.loads(job.source_paths_json or "[]"),
+                "source_size_bytes": job.source_size_bytes,
+                "source_file_count": job.source_file_count,
+                "source_stats_checked_at": iso_utc(job.source_stats_checked_at),
+                "source_stats_origin": job.source_stats_origin,
                 "schedule_names": schedule_names,
                 "schedule_mode": "scheduled" if schedule_names else "manual",
                 "last_run": run_json(latest_runs[job.id], include_details=False) if job.id in latest_runs else None,
@@ -1325,6 +1352,50 @@ def update_settings(data: SettingsIn) -> SettingsIn:
     saved = save_settings(data)
     cleanup_run_history()
     return saved
+
+
+@app.get("/api/notifications/settings", response_model=NotificationSettingsOut, dependencies=admin_protected)
+def get_notification_settings() -> NotificationSettingsOut:
+    return notification_settings_out()
+
+
+@app.put("/api/notifications/settings", response_model=NotificationSettingsOut, dependencies=admin_protected)
+def update_notification_settings(data: NotificationSettingsInput) -> NotificationSettingsOut:
+    try:
+        return save_notification_settings(data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/notifications/test", dependencies=admin_protected)
+async def test_notification_channel(data: NotificationTestIn) -> dict:
+    try:
+        results = await asyncio.to_thread(send_test_notification, data.channel)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not results:
+        raise HTTPException(400, "Kein Benachrichtigungskanal wurde ausgeführt")
+    result = results[0]
+    if result["status"] != "success":
+        raise HTTPException(502, result["detail"])
+    return result
+
+
+@app.get("/api/notifications/deliveries", dependencies=admin_protected)
+def notification_deliveries(limit: int = 100) -> list[dict]:
+    return [
+        {
+            "id": row.id, "run_id": row.run_id, "event_type": row.event_type,
+            "channel": row.channel, "status": row.status, "title": row.title,
+            "detail": row.detail, "created_at": iso_utc(row.created_at),
+        }
+        for row in list_deliveries(limit)
+    ]
+
+
+@app.delete("/api/notifications/deliveries", dependencies=admin_protected)
+def delete_notification_deliveries() -> dict:
+    return {"deleted": clear_deliveries()}
 
 
 @app.get("/api/system/release-notes", dependencies=protected)
@@ -1465,6 +1536,29 @@ def create_host(data: HostIn):
         return host_out(row)
 
 
+def _apply_host_enabled_state(db, row: Host, enabled: bool) -> int:
+    """Apply the host state and cascade disabling to all related backup jobs.
+
+    Re-enabling a host intentionally does not re-enable jobs: an administrator
+    must make that scheduling decision explicitly so backups cannot resume
+    unexpectedly after maintenance or an incident.
+    """
+    disabled_jobs = 0
+    if not enabled:
+        active = db.scalar(
+            select(func.count()).select_from(Run).join(Job, Run.job_id == Job.id).where(
+                Job.host_id == row.id, Run.status.in_(["queued", "running"])
+            )
+        ) or 0
+        if active:
+            raise HTTPException(409, "Gerät kann während laufender oder wartender Ausführungen nicht deaktiviert werden")
+        for job in db.scalars(select(Job).where(Job.host_id == row.id, Job.enabled.is_(True))):
+            job.enabled = False
+            disabled_jobs += 1
+    row.enabled = enabled
+    return disabled_jobs
+
+
 @app.put("/api/hosts/{row_id}", response_model=HostOut, dependencies=admin_protected)
 def update_host(row_id: int, data: HostIn):
     with SessionLocal() as db:
@@ -1475,8 +1569,10 @@ def update_host(row_id: int, data: HostIn):
             getattr(row, key) != getattr(data, key)
             for key in ("address", "port", "username")
         )
-        for key, value in data.model_dump().items():
+        enabled_changed = row.enabled != data.enabled
+        for key, value in data.model_dump(exclude={"enabled"}).items():
             setattr(row, key, value)
+        _apply_host_enabled_state(db, row, data.enabled)
         if connection_changed:
             row.repository_ready = False
         try:
@@ -1490,6 +1586,8 @@ def update_host(row_id: int, data: HostIn):
         revoke_host_repository_access(row_id)
     else:
         sync_repository_access_assignments()
+    if enabled_changed or not data.enabled:
+        sync_schedules()
     with SessionLocal() as db:
         current = db.get(Host, row_id)
         return host_out(current) if current else result
@@ -1501,15 +1599,7 @@ def set_host_enabled(row_id: int, data: EnabledStateIn):
         row = db.get(Host, row_id)
         if not row:
             raise HTTPException(404, "Host not found")
-        if not data.enabled:
-            active = db.scalar(
-                select(func.count()).select_from(Run).join(Job, Run.job_id == Job.id).where(
-                    Job.host_id == row_id, Run.status.in_(["queued", "running"])
-                )
-            ) or 0
-            if active:
-                raise HTTPException(409, "Gerät kann während laufender oder wartender Ausführungen nicht deaktiviert werden")
-        row.enabled = data.enabled
+        _apply_host_enabled_state(db, row, data.enabled)
         db.commit()
     sync_repository_access_assignments()
     sync_schedules()
@@ -2607,6 +2697,11 @@ def parse_archive_browser_listing(output: str, current: str = "") -> list[dict]:
             normalized_size = max(0, int(size or 0))
         except (TypeError, ValueError):
             normalized_size = 0
+        mode = str(item.get("mode") or "").strip() or None
+        user = item.get("user")
+        group = item.get("group")
+        uid = item.get("uid")
+        gid = item.get("gid")
         entries.append({
             "name": name,
             "path": path,
@@ -2614,6 +2709,11 @@ def parse_archive_browser_listing(output: str, current: str = "") -> list[dict]:
             "size": normalized_size,
             "mtime": item.get("mtime") or item.get("isomtime"),
             "target": item.get("source") or item.get("linktarget") or None,
+            "mode": mode,
+            "user": str(user) if user is not None and user != "" else None,
+            "group": str(group) if group is not None and group != "" else None,
+            "uid": uid,
+            "gid": gid,
         })
     entries.sort(key=lambda item: (item["type"] != "directory", item["name"].casefold()))
     return entries
@@ -2880,6 +2980,7 @@ def run_json(row: Run, *, include_details: bool = True) -> dict:
         "backup_original_size_bytes": row.backup_original_size_bytes if row.backup_original_size_bytes is not None else backup_statistics.get("original_size_bytes"),
         "backup_compressed_size_bytes": row.backup_compressed_size_bytes if row.backup_compressed_size_bytes is not None else backup_statistics.get("compressed_size_bytes"),
         "backup_deduplicated_size_bytes": row.backup_deduplicated_size_bytes if row.backup_deduplicated_size_bytes is not None else backup_statistics.get("deduplicated_size_bytes"),
+        "backup_file_count": row.backup_file_count if row.backup_file_count is not None else backup_statistics.get("file_count"),
         "borg_compatibility": ({
             "version": compatibility.version, "supported": compatibility.supported,
             "level": compatibility.level, "title": compatibility.title, "message": compatibility.message,
