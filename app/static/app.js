@@ -337,7 +337,12 @@ function applyUserPermissions() {
   if (!admin && ['hosts', 'repositories', 'archives', 'restore', 'notifications', 'users', 'backups', 'settings', 'diagnostics'].includes(hashView())) {
     history.replaceState(null, '', '#dashboard');
     goToView('dashboard', false);
+    return;
   }
+  // Die Ansicht wird vor der Sitzungswiederherstellung bereits aus dem Hash
+  // gesetzt. Sobald Benutzer und Rolle bekannt sind, müssen Sichtbarkeit und
+  // aktiver Zustand der System-Reiter deshalb erneut synchronisiert werden.
+  syncSystemWorkspaceNavigation(hashView());
 }
 
 function parseHashState() {
@@ -631,6 +636,21 @@ function setMobileNavigation(open) {
   toggle.textContent = open ? 'Schließen' : 'Menü';
 }
 
+function syncSystemWorkspaceNavigation(view = hashView()) {
+  const systemView = isSystemView(view);
+  const admin = state.currentUser?.role === 'admin';
+  const systemTabs = $('#system-workspace-tabs');
+  if (systemTabs) systemTabs.classList.toggle('hidden', !(systemView && admin));
+  $$('[data-system-view]').forEach((item) => {
+    const active = Boolean(systemView && admin && item.dataset.systemView === view);
+    item.classList.toggle('active', active);
+    item.setAttribute('aria-selected', active ? 'true' : 'false');
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+    item.tabIndex = active ? 0 : -1;
+  });
+}
+
 function goToView(view, updateHash = true) {
   if (!validView(view)) view = 'dashboard';
   if (view === 'runs' && updateHash) state.runFilter = 'all';
@@ -639,14 +659,7 @@ function goToView(view, updateHash = true) {
   const button = $(`nav button[data-view="${sidebarView}"]`);
   $$('nav button').forEach((item) => item.classList.toggle('active', item === button));
   $$('.view').forEach((item) => item.classList.toggle('active', item.id === 'view-' + view));
-  const systemTabs = $('#system-workspace-tabs');
-  if (systemTabs) systemTabs.classList.toggle('hidden', !systemView || state.currentUser?.role !== 'admin');
-  $$('[data-system-view]').forEach((item) => {
-    const active = systemView && item.dataset.systemView === view;
-    item.classList.toggle('active', active);
-    item.setAttribute('aria-selected', active ? 'true' : 'false');
-    item.tabIndex = active ? 0 : -1;
-  });
+  syncSystemWorkspaceNavigation(view);
   $('#page-title').textContent = systemView ? 'System' : (button?.textContent || 'Übersicht');
   if (updateHash) {
     const targetHash = view === 'runs' && state.runFilter !== 'all' ? `#runs?status=${state.runFilter}` : '#' + view;
@@ -690,7 +703,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.47`, {cache: 'no-store'});
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.49`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -3272,6 +3285,7 @@ async function restoreBrowserSession() {
     applyUserPreferences(false);
     $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
     applyUserPermissions();
+    goToView(hashView(), false);
     if (current.must_change_password) { openPasswordDialog(true); return; }
     await loadAll();
   } catch (error) {

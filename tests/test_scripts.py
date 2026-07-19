@@ -188,7 +188,7 @@ def test_posix_wrappers_fail_cleanly_without_runtime_environment(tmp_path: Path)
     assert "unbound variable" not in borg_serve.stdout.lower()
 
 def test_release_build_context_remains_compatible_with_v1_0_25_updater(tmp_path: Path):
-    """The 1.0.25 updater did not copy top-level RELEASE_NOTES.en.md."""
+    """An old updater copy set must still leave a buildable default-English project."""
     target = tmp_path / "old-updater-target"
     target.mkdir()
     old_allowed = (
@@ -206,7 +206,8 @@ def test_release_build_context_remains_compatible_with_v1_0_25_updater(tmp_path:
             shutil.copy2(source, destination)
 
     assert not (target / "RELEASE_NOTES.en.md").exists()
-    assert (target / "app/RELEASE_NOTES.en.md").is_file()
+    assert (target / "app/RELEASE_NOTES.md").is_file()
+    assert (target / "app/RELEASE_NOTES.de.md").is_file()
 
     dockerfile = (target / "Dockerfile").read_text(encoding="utf-8")
     copy_line = next(line for line in dockerfile.splitlines() if line.startswith("COPY README.md"))

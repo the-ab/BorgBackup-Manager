@@ -17,7 +17,7 @@ def test_notification_center_is_available_without_inline_javascript():
 
 def test_notification_documentation_exists_in_both_languages():
     root = Path(__file__).parents[1]
-    assert "### Benachrichtigungszentrale" in (root / "README.md").read_text(encoding="utf-8")
-    assert "Benachrichtigungszentrale einrichten" in (root / "INSTALLATION.md").read_text(encoding="utf-8")
+    assert "### Benachrichtigungszentrale" in (root / "README.de.md").read_text(encoding="utf-8")
+    assert "Benachrichtigungszentrale einrichten" in (root / "INSTALLATION.de.md").read_text(encoding="utf-8")
     assert 'id="help-notifications"' in (root / "app/static/help.de.html").read_text(encoding="utf-8")
     assert 'id="help-notifications"' in (root / "app/static/help.en.html").read_text(encoding="utf-8")

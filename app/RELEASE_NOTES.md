@@ -1,5 +1,40 @@
 # Release Notes
 
+## v1.0.49
+
+### System tab active state made visually reliable
+
+- System tabs now use the dedicated `system-tab` class and are excluded from the generic primary-button styling that previously painted every tab identically.
+- The selected tab uses explicit high-contrast colors for light and dark mode instead of relying on `color-mix()`.
+- The active tab is marked with `active`, `aria-selected="true"` and `aria-current="page"`.
+- Session restore, direct hash navigation and page reload continue to resynchronize the selected System area.
+
+### English default Markdown documentation
+
+- `README.md`, `INSTALLATION.md` and `RELEASE_NOTES.md` are now English by default.
+- The complete German documents are named `README.de.md`, `INSTALLATION.de.md` and `RELEASE_NOTES.de.md`.
+- The in-application release-note endpoint now reads the English default file and the German `.de.md` file explicitly.
+- Because updater versions through v1.0.48 require the former `RELEASE_NOTES.en.md` filename, upgrading to v1.0.49 requires a one-time replacement of `update.sh` from the new ZIP before the normal update command.
+- Build, update, tests and documentation references were adjusted to the new convention.
+
+### Verification
+
+- Active-tab CSS precedence, fixed light/dark active colors, reload synchronization, bilingual release-note loading and package documentation completeness are covered by regression tests.
+
+## v1.0.48
+
+### Reliable System tabs after page reload
+
+- The System view is resynchronized with the current URL hash and user role after sign-in, automatic session restoration and page reload.
+- The tab row therefore remains visible for direct links such as `#notifications`, `#users`, `#backups`, `#settings` and `#diagnostics`.
+- The selected tab is now emphasized through both its active class and `aria-selected="true"`, using a visibly darker filled style.
+- Administrator authorization remains unchanged; regular users still cannot access or see the System tabs.
+- A new regression test prevents the tab row from disappearing again after a future reload-related change.
+
+### Verification
+
+- The project contains 404 automated tests; the new navigation tests and static checks pass.
+
 ## v1.0.47
 
 ### Sticky System navigation

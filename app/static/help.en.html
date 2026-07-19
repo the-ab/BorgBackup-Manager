@@ -1,6 +1,6 @@
 <article class="panel help-guide" data-i18n-skip>
   <header class="help-hero">
-    <div><p class="eyebrow">Operations manual</p><h2>Using BorgBackup Manager</h2><p>This manual covers all features in version 1.0.47, from installation and sign-in through devices, repositories, jobs and schedules to archive management, restore, user permissions and diagnostics.</p></div>
+    <div><p class="eyebrow">Operations manual</p><h2>Using BorgBackup Manager</h2><p>This manual covers all features in version 1.0.49, from installation and sign-in through devices, repositories, jobs and schedules to archive management, restore, user permissions and diagnostics.</p></div>
     <div class="help-version">Debian 13 · Borg 1.2–1.4 · Europe/Berlin</div>
   </header>
   <nav class="help-toc" aria-label="Table of contents">
@@ -9,7 +9,7 @@
 
   <section id="help-start" class="help-section"><h3>1. Quick start and system layout</h3>
     <p>The manager runs as a Docker container and controls Borg centrally. For a backup, the manager starts Borg on the selected client over SSH. The client reads its local files and writes to the configured repository. Clients do not need separate backup scripts or cron jobs.</p>
-    <p>Under <b>Infrastructure</b>, the sidebar now contains only <b>Devices</b> and <b>System</b>. The System workspace combines <b>Notifications</b>, <b>Users</b>, <b>Manager backup</b>, <b>Settings</b> and <b>System diagnostics</b> in one tab row. Diagnostics are no longer shown on the dashboard.</p>
+    <p>Under <b>Infrastructure</b>, the sidebar now contains only <b>Devices</b> and <b>System</b>. The System workspace combines <b>Notifications</b>, <b>Users</b>, <b>Manager backup</b>, <b>Settings</b> and <b>System diagnostics</b> in one tab row. Diagnostics are no longer shown on the dashboard. The tab row and active selection are restored after a page reload or direct System link.</p>
     <ol class="help-steps"><li>Sign in as an administrator and add the public controller key to the client's <code>authorized_keys</code>.</li><li>Add the device, verify its Ed25519 fingerprint and detect its Borg version.</li><li>Create a managed or external repository, or import an existing local repository.</li><li>Save a backup job with device, repository, sources, exclusions, compression and retention.</li><li>Configure repository access directly on the backup job.</li><li>Optionally assign a central schedule.</li><li>Test the connection and run a small test backup.</li><li>Browse an archive and test restore with a dry run first.</li></ol>
     <div class="help-note"><b>Important paths:</b> manager data <code>/data</code>, repositories <code>/repositories</code>, run logs <code>/data/run-logs</code>, archive cache <code>/data/archive-cache</code>, manager Borg cache <code>/data/borg-cache/repository-&lt;ID&gt;</code>, device cache <code>$HOME/.cache/borgbackup-manager/repository-&lt;ID&gt;</code>, and security data <code>/data/security</code>.</div>
   </section>

@@ -43,8 +43,8 @@ def test_system_diagnostics_is_not_rendered_on_dashboard():
 
 def test_system_tabs_have_responsive_styling_and_documentation():
     css = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
-    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-    installation = (PROJECT_ROOT / "INSTALLATION.md").read_text(encoding="utf-8")
+    readme = (PROJECT_ROOT / "README.de.md").read_text(encoding="utf-8")
+    installation = (PROJECT_ROOT / "INSTALLATION.de.md").read_text(encoding="utf-8")
 
     assert ".system-workspace-tabs" in css
     assert "overflow-x: auto" in css
@@ -58,7 +58,44 @@ def test_system_tabs_are_inside_sticky_header_and_active_is_visibly_filled():
     css = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
     header = html.split('<header class="main-header">', 1)[1].split('</header>', 1)[0]
     assert 'id="system-workspace-tabs"' in header
+    assert header.count('class="system-tab"') == 5
     assert 'main > header' in css and 'position: sticky' in css
     active = css.split('.system-workspace-tabs button.active', 1)[1].split('}', 1)[0]
-    assert 'background: var(--primary)' in active
+    assert 'background: var(--system-tab-active)' in active
     assert 'color: #fff' in active
+    assert '--system-tab-active: #174c46' in css
+    assert '--system-tab-active: #2f7f70' in css
+    generic = css.split('button:not(.link)', 1)[1].split('{', 1)[0]
+    assert ':not(.system-tab)' in generic
+
+
+def test_system_tabs_resynchronize_after_session_restore_and_permissions():
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+
+    assert "function syncSystemWorkspaceNavigation(view = hashView())" in javascript
+    apply_permissions = javascript.split("function applyUserPermissions()", 1)[1].split("function parseHashState()", 1)[0]
+    assert "syncSystemWorkspaceNavigation(hashView());" in apply_permissions
+    restore = javascript.split("async function restoreBrowserSession()", 1)[1]
+    assert "applyUserPermissions();\n    goToView(hashView(), false);" in restore
+    assert '.system-workspace-tabs button[aria-selected="true"]' in css
+    assert ':not(.system-tab)' in css
+    assert 'aria-current' in javascript
+    assert 'background: var(--system-tab-active)' in css
+
+
+def test_markdown_defaults_are_english_and_german_uses_de_suffix():
+    readme_en = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    readme_de = (PROJECT_ROOT / "README.de.md").read_text(encoding="utf-8")
+    install_en = (PROJECT_ROOT / "INSTALLATION.md").read_text(encoding="utf-8")
+    install_de = (PROJECT_ROOT / "INSTALLATION.de.md").read_text(encoding="utf-8")
+    notes_en = (PROJECT_ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
+    notes_de = (PROJECT_ROOT / "RELEASE_NOTES.de.md").read_text(encoding="utf-8")
+    assert "self-hosted web interface" in readme_en
+    assert "zentrale Webverwaltung" in readme_de
+    assert "Manager host requirements" in install_en
+    assert "Voraussetzungen des Manager-Hosts" in install_de
+    assert "System tab active state" in notes_en
+    assert "Aktive Markierung der System-Reiter" in notes_de
+    assert (PROJECT_ROOT / "app/RELEASE_NOTES.md").is_file()
+    assert (PROJECT_ROOT / "app/RELEASE_NOTES.de.md").is_file()

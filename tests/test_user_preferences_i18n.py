@@ -91,8 +91,13 @@ def test_release_package_includes_bilingual_release_notes():
     updater = (PROJECT_ROOT / 'update.sh').read_text(encoding='utf-8')
     assert 'COPY README.md INSTALLATION.md RELEASE_NOTES.md ./' in dockerfile
     assert 'COPY README.md INSTALLATION.md RELEASE_NOTES.md RELEASE_NOTES.en.md ./' not in dockerfile
-    assert (PROJECT_ROOT / 'app/RELEASE_NOTES.en.md').is_file()
-    assert 'RELEASE_NOTES.en.md' in updater
+    assert (PROJECT_ROOT / 'app/RELEASE_NOTES.md').is_file()
+    assert (PROJECT_ROOT / 'app/RELEASE_NOTES.de.md').is_file()
+    assert 'README.de.md' in updater
+    assert 'INSTALLATION.de.md' in updater
+    assert 'RELEASE_NOTES.de.md' in updater
+    assert not (PROJECT_ROOT / 'RELEASE_NOTES.en.md').exists()
+    assert not (PROJECT_ROOT / 'app/RELEASE_NOTES.en.md').exists()
 
 
 def test_translation_observer_does_not_rewrite_identical_values():

@@ -281,8 +281,8 @@ trap cleanup_on_exit EXIT
 project_items() {
   printf '%s\n' \
     .dockerignore .env.example .gitattributes .gitignore \
-    compose.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh INSTALLATION.md README.md \
-    RELEASE_NOTES.md RELEASE_NOTES.en.md VERSION requirements.in requirements.txt requirements-dev.txt app docker tests
+    compose.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh INSTALLATION.md INSTALLATION.de.md README.md README.de.md \
+    RELEASE_NOTES.md RELEASE_NOTES.de.md VERSION requirements.in requirements.txt requirements-dev.txt app docker tests
 }
 
 validate_runtime_paths() {
@@ -421,7 +421,7 @@ source = candidates[0]
 required = [
     ".env.example", "VERSION", "compose.yaml", "Dockerfile", "requirements.in", "requirements.txt", "app", "docker",
     "install.sh", "update.sh", "recovery.sh", "restore-backup.sh",
-    "README.md", "INSTALLATION.md", "RELEASE_NOTES.md", "RELEASE_NOTES.en.md",
+    "README.md", "README.de.md", "INSTALLATION.md", "INSTALLATION.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
 ]
 missing = [name for name in required if not (source / name).exists()]
 if missing:
@@ -429,7 +429,8 @@ if missing:
 allowed = [
     ".dockerignore", ".env.example", ".gitattributes", ".gitignore",
     "compose.yaml", "Dockerfile", "install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "INSTALLATION.md",
-    "README.md", "RELEASE_NOTES.md", "RELEASE_NOTES.en.md", "VERSION", "requirements.in", "requirements.txt",
+    "INSTALLATION.de.md", "README.md", "README.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
+    "VERSION", "requirements.in", "requirements.txt",
     "requirements-dev.txt", "app", "docker", "tests",
 ]
 for name in allowed:
@@ -443,6 +444,9 @@ for name in ("install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "doc
     path = target / name
     if path.exists():
         path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+legacy_english_notes = target / "RELEASE_NOTES.en.md"
+if legacy_english_notes.exists() or legacy_english_notes.is_symlink():
+    legacy_english_notes.unlink()
 PY
   then
     rm -rf -- "$temp_dir"

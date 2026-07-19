@@ -22,6 +22,9 @@
   --sidebar: #15202b;
   --sidebar-muted: #8fa0b1;
   --sidebar-active: #263746;
+  --system-tab-active: #174c46;
+  --system-tab-active-border: #0f3b36;
+  --system-tab-active-shadow: rgba(23, 76, 70, .28);
   --shadow: 0 10px 30px rgba(20, 32, 43, .07);
   --radius: 12px;
   --list-max-height: 680px;
@@ -50,6 +53,9 @@
   --success-soft: #1d3b2e;
   --sidebar: #0d141b;
   --sidebar-active: #23313d;
+  --system-tab-active: #2f7f70;
+  --system-tab-active-border: #69b9aa;
+  --system-tab-active-shadow: rgba(79, 174, 155, .34);
   --shadow: 0 12px 36px rgba(0, 0, 0, .22);
 }
 
@@ -195,11 +201,13 @@ header h1 { margin: 0; font-size: 1.65rem; letter-spacing: -.025em; }
   white-space: nowrap;
 }
 .system-workspace-tabs button:hover { background: var(--surface-2); color: var(--text); }
-.system-workspace-tabs button.active {
-  border-color: var(--primary-hover);
-  background: var(--primary);
+.system-workspace-tabs button.active,
+.system-workspace-tabs button[aria-selected="true"] {
+  border-color: var(--system-tab-active-border);
+  background: var(--system-tab-active);
   color: #fff;
-  box-shadow: 0 2px 7px color-mix(in srgb, var(--primary) 30%, transparent);
+  font-weight: 800;
+  box-shadow: 0 2px 8px var(--system-tab-active-shadow);
 }
 
 .sync-state {
@@ -245,7 +253,7 @@ button.action-busy { cursor: progress; opacity: .78; }
 .view { display: none; max-width: 1540px; margin: 0 auto; }
 .view.active { display: block; }
 
-button:not(.link):not(.entity-link):not(.metric):not(.section-link):not(.sync-state):not(.task-status-item):not(nav button) {
+button:not(.link):not(.entity-link):not(.metric):not(.section-link):not(.sync-state):not(.task-status-item):not(.system-tab):not(nav button) {
   min-height: 38px;
   padding: 8px 13px;
   border: 1px solid var(--primary);
@@ -254,7 +262,7 @@ button:not(.link):not(.entity-link):not(.metric):not(.section-link):not(.sync-st
   color: #fff;
   font-weight: 650;
 }
-button:not(.link):not(.entity-link):not(.metric):not(.section-link):not(nav button):hover { background: var(--primary-hover); }
+button:not(.link):not(.entity-link):not(.metric):not(.section-link):not(.system-tab):not(nav button):hover { background: var(--primary-hover); }
 button.secondary, .action-menu button {
   border-color: var(--line-strong) !important;
   background: var(--surface) !important;

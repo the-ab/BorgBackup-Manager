@@ -716,7 +716,7 @@ def test_installer_preserves_extended_env_and_rejects_identical_paths():
 def test_update_validates_complete_release_and_recovers_stopped_container_on_abort():
     update = (PROJECT_ROOT / "update.sh").read_text(encoding="utf-8")
     assert '".env.example", "VERSION"' in update
-    assert '"README.md", "INSTALLATION.md", "RELEASE_NOTES.md", "RELEASE_NOTES.en.md"' in update
+    assert '"README.md", "README.de.md", "INSTALLATION.md", "INSTALLATION.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md"' in update
     assert "cleanup_on_exit" in update
     assert "compose start borg-manager" in update
     assert "CONTAINER_STOPPED=1" in update

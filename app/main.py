@@ -1399,14 +1399,17 @@ def delete_notification_deliveries() -> dict:
 
 
 @app.get("/api/system/release-notes", dependencies=protected)
-def release_notes(language: str = "de") -> dict:
-    english = language == "en"
-    candidates = (
-        [Path(__file__).parent / "RELEASE_NOTES.en.md", Path(__file__).parent.parent / "RELEASE_NOTES.en.md"]
-        if english else [Path(__file__).parent.parent / "RELEASE_NOTES.md"]
-    )
-    path = next((candidate for candidate in candidates if candidate.is_file()), Path(__file__).parent.parent / "RELEASE_NOTES.md")
-    return {"version": APP_VERSION, "language": "en" if english and path.name.endswith(".en.md") else "de", "content": path.read_text(encoding="utf-8") if path.is_file() else ""}
+def release_notes(language: str = "en") -> dict:
+    german = language == "de"
+    filename = "RELEASE_NOTES.de.md" if german else "RELEASE_NOTES.md"
+    candidates = [Path(__file__).parent / filename, Path(__file__).parent.parent / filename]
+    fallback = Path(__file__).parent / "RELEASE_NOTES.md"
+    path = next((candidate for candidate in candidates if candidate.is_file()), fallback)
+    return {
+        "version": APP_VERSION,
+        "language": "de" if german and path.name.endswith(".de.md") else "en",
+        "content": path.read_text(encoding="utf-8") if path.is_file() else "",
+    }
 
 
 @app.get("/api/system/diagnostics", dependencies=admin_protected)
