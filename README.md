@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.55
+# BorgBackup Manager 1.0.56
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -33,7 +33,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.0.55.zip
+BorgBackup-Manager-1.0.56.zip
 ```
 
 The documentation naming convention is:
@@ -359,7 +359,7 @@ System diagnostics cover:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.55.zip
+unzip /path/BorgBackup-Manager-1.0.56.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -471,6 +471,6 @@ The cache contains metadata only, is regenerable, is excluded from update backup
 
 The project source code is licensed under the [Apache License 2.0](LICENSE). Important third-party licenses and project-independence notices are summarized in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-Security reports must follow [SECURITY.md](SECURITY.md) and must not be submitted as public issues. Contribution requirements are documented in [CONTRIBUTING.md](CONTRIBUTING.md). GitHub Actions runs the complete test and syntax suite, while Dependabot monitors Python, Docker and GitHub Actions dependencies.
+Security reports must follow [SECURITY.md](SECURITY.md) and must not be submitted as public issues. Contribution requirements are documented in [CONTRIBUTING.md](CONTRIBUTING.md). The repository is maintained and released manually; automated dependency-update pull requests and hosted CI/container-build workflows are intentionally not included.
 
 Only the current release receives security fixes. Versions before 1.0.38 are unsupported and should not be published as supported releases.

@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.55
+# BorgBackup Manager 1.0.56
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -34,7 +34,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.0.55.zip
+BorgBackup-Manager-1.0.56.zip
 ```
 
 ## Sicherheit und Härtung
@@ -674,7 +674,7 @@ Release Notes werden passend zur persönlichen Spracheinstellung auf Deutsch ode
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.55.zip
+unzip /pfad/BorgBackup-Manager-1.0.56.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -865,6 +865,6 @@ Der Cache enthält keine Repository-Nutzdaten, sondern ausschließlich die JSON-
 
 Der selbst entwickelte Quellcode steht unter der [Apache License 2.0](LICENSE). Wichtige Lizenzen von Drittkomponenten und der Unabhängigkeitshinweis sind in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) zusammengefasst.
 
-Sicherheitsmeldungen müssen nach [SECURITY.md](SECURITY.md) erfolgen und dürfen nicht als öffentliche Issues veröffentlicht werden. Anforderungen für Beiträge stehen in [CONTRIBUTING.md](CONTRIBUTING.md). GitHub Actions führt die vollständige Test- und Syntaxprüfung aus; Dependabot überwacht Python-, Docker- und GitHub-Actions-Abhängigkeiten.
+Sicherheitsmeldungen müssen nach [SECURITY.md](SECURITY.md) erfolgen und dürfen nicht als öffentliche Issues veröffentlicht werden. Anforderungen für Beiträge stehen in [CONTRIBUTING.md](CONTRIBUTING.md). Das Repository wird bewusst manuell gepflegt und veröffentlicht; automatische Abhängigkeits-Pull-Requests sowie gehostete CI- und Container-Build-Workflows sind nicht Bestandteil des Projekts.
 
 Nur die aktuelle Version erhält Sicherheitskorrekturen. Versionen vor 1.0.38 werden nicht unterstützt und sollen nicht als unterstützte Releases veröffentlicht werden.

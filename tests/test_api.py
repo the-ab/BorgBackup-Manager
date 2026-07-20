@@ -1582,10 +1582,15 @@ def test_failed_managed_repository_check_keeps_existing_repository_state(monkeyp
         tested = client.post(f"/api/repositories/{repository_id}/test", headers=AUTH)
         assert tested.status_code == 202, tested.text
         run = wait_for_run_terminal(client, tested.json()["run_id"])
-        repositories = client.get("/api/repositories", headers=AUTH).json()
+        deadline = time.monotonic() + 1.0
+        while True:
+            repositories = client.get("/api/repositories", headers=AUTH).json()
+            stored = next(item for item in repositories if item["id"] == repository_id)
+            if stored["validation_error"] is not None or time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
 
     assert run["status"] == "failed"
-    stored = next(item for item in repositories if item["id"] == repository_id)
     assert stored["initialized"] is True
     assert stored["repository_present"] is True
     assert "lokale Borg-Cache" in stored["validation_error"]

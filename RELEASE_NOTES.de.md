@@ -1,5 +1,18 @@
 # Release Notes
 
+## v1.0.56
+
+### Manuelle GitHub-Veröffentlichung
+
+- Dependabot-Konfiguration und gehosteten GitHub-Actions-Test-/Container-Build-Workflow entfernt.
+- Zugehörige Hinweise und Prüfungen aus README, Beitragsrichtlinie, Release-Prüfung und Updater entfernt.
+- Der Updater entfernt ein von v1.0.55 verbliebenes `.github`-Automatisierungsverzeichnis.
+- Lokale automatisierte Tests, Syntaxprüfungen und `scripts/release-check.sh` bleiben für kontrollierte Releases erhalten.
+
+### Update
+
+- Keine Datenbankmigration erforderlich. Geräte, Repositorys, Jobs, Zeitpläne, Archive, Benutzer und Einstellungen bleiben unverändert.
+
 ## v1.0.55
 
 ### Vorbereitung für ein öffentliches Repository
@@ -9,11 +22,9 @@
 - Transparenter Hinweis auf die Unterstützung durch OpenAI ChatGPT und die menschliche Prüfung und Verantwortung ergänzt.
 - Dokumentiert, dass nur die aktuelle Version Sicherheitskorrekturen erhält und Versionen vor 1.0.38 nicht unterstützt werden.
 
-### GitHub-Pflege und CI
+### Lokale Release-Prüfung
 
-- GitHub-Actions-CI für Python 3.13 ergänzt: Installation der hashgesperrten Laufzeitabhängigkeiten, Abhängigkeitsprüfung, vollständige Pytest-Reihe, Python-, JavaScript- und Shell-Syntaxprüfungen sowie Container-Build.
-- Dependabot für Python-, Docker- und GitHub-Actions-Abhängigkeiten ergänzt.
-- Wiederverwendbares Release-Prüfskript und robuste Pytest-Pfadkonfiguration ergänzt.
+- Wiederverwendbares lokales Release-Prüfskript und robuste Pytest-Pfadkonfiguration ergänzt.
 
 ### Repository-Hygiene
 

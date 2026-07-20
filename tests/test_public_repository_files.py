@@ -6,13 +6,17 @@ ROOT = Path(__file__).parents[1]
 def test_public_repository_governance_files_exist():
     required = [
         "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md",
-        "THIRD-PARTY-NOTICES.md", ".github/dependabot.yml",
-        ".github/workflows/ci.yml", "scripts/release-check.sh",
+        "THIRD-PARTY-NOTICES.md", "scripts/release-check.sh",
     ]
     for relative in required:
         path = ROOT / relative
         assert path.is_file(), relative
         assert path.stat().st_size > 0, relative
+
+
+def test_hosted_github_automation_is_not_shipped():
+    assert not (ROOT / ".github/dependabot.yml").exists()
+    assert not (ROOT / ".github/workflows/ci.yml").exists()
 
 
 def test_readmes_disclose_independence_ai_assistance_and_license():
@@ -54,13 +58,15 @@ def test_synthetic_private_key_markers_are_not_contiguous_in_source():
         assert marker not in path.read_text(encoding="utf-8"), path
 
 
-def test_updater_preserves_public_repository_files_and_ci_configuration():
+def test_updater_preserves_public_repository_files_and_removes_legacy_automation():
     update = (ROOT / "update.sh").read_text(encoding="utf-8")
     for name in [
         "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md",
-        "THIRD-PARTY-NOTICES.md", ".github", "pytest.ini", "scripts",
+        "THIRD-PARTY-NOTICES.md", "pytest.ini", "scripts",
     ]:
         assert name in update
+    assert 'legacy_github = target / ".github"' in update
+    assert '".github",' not in update
 
 
 def test_container_image_includes_license_and_notice_files():

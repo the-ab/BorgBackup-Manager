@@ -40,7 +40,7 @@ A pull request should:
 - update release notes when behavior visible to users changes;
 - preserve the fixed top-level release directory `BorgBackup-Manager/`;
 - avoid database migrations unless they are necessary and documented;
-- pass CI, syntax checks and the complete automated test suite.
+- pass the local syntax checks and the complete automated test suite.
 
 Substantial use of AI-assisted coding should be disclosed in the pull request.
 AI-generated changes must be reviewed, adapted and tested by the contributor.

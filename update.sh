@@ -280,7 +280,7 @@ trap cleanup_on_exit EXIT
 
 project_items() {
   printf '%s\n' \
-    .dockerignore .env.example .gitattributes .gitignore .github \
+    .dockerignore .env.example .gitattributes .gitignore \
     LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md pytest.ini scripts \
     compose.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh INSTALLATION.md INSTALLATION.de.md README.md README.de.md \
     RELEASE_NOTES.md RELEASE_NOTES.de.md VERSION requirements.in requirements.txt requirements-dev.txt app docker tests
@@ -429,7 +429,7 @@ missing = [name for name in required if not (source / name).exists()]
 if missing:
     raise SystemExit("Release-ZIP ist unvollstaendig; fehlt: " + ", ".join(missing))
 allowed = [
-    ".dockerignore", ".env.example", ".gitattributes", ".gitignore", ".github",
+    ".dockerignore", ".env.example", ".gitattributes", ".gitignore",
     "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md", "THIRD-PARTY-NOTICES.md", "pytest.ini", "scripts",
     "compose.yaml", "Dockerfile", "install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "INSTALLATION.md",
     "INSTALLATION.de.md", "README.md", "README.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
@@ -443,6 +443,10 @@ for name in allowed:
     if dst.exists() or dst.is_symlink():
         shutil.rmtree(dst) if dst.is_dir() and not dst.is_symlink() else dst.unlink()
     shutil.copytree(src, dst) if src.is_dir() else shutil.copy2(src, dst)
+legacy_github = target / ".github"
+if legacy_github.exists() or legacy_github.is_symlink():
+    shutil.rmtree(legacy_github) if legacy_github.is_dir() and not legacy_github.is_symlink() else legacy_github.unlink()
+
 for name in ("install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "docker/entrypoint.sh", "docker/borg-serve.sh"):
     path = target / name
     if path.exists():
