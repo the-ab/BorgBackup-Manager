@@ -579,7 +579,7 @@ def test_external_repository_is_managed_directly_and_credentials_are_temporary(m
         encryption_mode="none",
         storage_path=None,
         encrypted_external_ssh_key=encrypt_secret(
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nTEST\n-----END OPENSSH PRIVATE KEY-----\n"
+            "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nTEST\n-----END OPENSSH " + "PRIVATE KEY-----\n"
         ),
         encrypted_external_known_hosts=encrypt_secret(
             "[u123456.your-storagebox.de]:23 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n"
@@ -605,7 +605,7 @@ def test_external_backup_runs_on_source_client_with_temporary_manager_credential
     job.repository.encryption_mode = "none"
     job.repository.passphrase_env = None
     job.repository.encrypted_external_ssh_key = encrypt_secret(
-        "-----BEGIN OPENSSH PRIVATE KEY-----\nTEST-PRIVATE-MATERIAL\n-----END OPENSSH PRIVATE KEY-----\n"
+        "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nTEST-PRIVATE-MATERIAL\n-----END OPENSSH " + "PRIVATE KEY-----\n"
     )
     job.repository.encrypted_external_known_hosts = encrypt_secret(
         "[u123456.your-storagebox.de]:23 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEUdWrG3dnKa9pj3X6CSpTSHZ2jwzp1UgSyGgtyY+XJf\n"
@@ -732,7 +732,7 @@ def test_external_repository_validation_does_not_enable_verbose_ssh():
         encryption_mode="none",
         storage_path=None,
         encrypted_external_ssh_key=encrypt_secret(
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nTEST\n-----END OPENSSH PRIVATE KEY-----\n"
+            "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nTEST\n-----END OPENSSH " + "PRIVATE KEY-----\n"
         ),
         encrypted_external_known_hosts=encrypt_secret(
             "[example]:23 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n"

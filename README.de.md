@@ -1,6 +1,10 @@
-# BorgBackup Manager 1.0.54
+# BorgBackup Manager 1.0.55
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
+
+> **Unabhängiges Projekt:** BorgBackup Manager ist ein unabhängiges Community-Projekt eines Dritten. Es ist nicht mit dem BorgBackup-Projekt verbunden und wird von diesem weder unterstützt noch gepflegt.
+
+Teile dieses Projekts wurden mit Unterstützung von OpenAI ChatGPT entwickelt. Der Projektbetreuer hat den erzeugten Code geprüft, angepasst und getestet und übernimmt die Verantwortung für die veröffentlichte Software.
 
 Die englische Standarddokumentation befindet sich in `README.md`. Die deutschen Markdown-Dateien verwenden durchgehend die Endung `.de.md`: `README.de.md`, `INSTALLATION.de.md` und `RELEASE_NOTES.de.md`.
 
@@ -30,7 +34,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.0.54.zip
+BorgBackup-Manager-1.0.55.zip
 ```
 
 ## Sicherheit und Härtung
@@ -670,7 +674,7 @@ Release Notes werden passend zur persönlichen Spracheinstellung auf Deutsch ode
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.54.zip
+unzip /pfad/BorgBackup-Manager-1.0.55.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -856,3 +860,11 @@ Die Archivübersicht speichert die einmal aus Borg geladenen Detailangaben persi
 Die deduplizierte Größe eines einzelnen Archivs bezeichnet nur die Chunks, die ausschließlich dieses Archiv benötigt. Sie darf deshalb nicht zur repositoryweiten deduplizierten Größe aufsummiert werden.
 
 Der Cache enthält keine Repository-Nutzdaten, sondern ausschließlich die JSON-Metadaten der Archivübersicht. Er ist regenerierbar, wird nicht in Update-Backups aufgenommen und kann bei externen Borg-Änderungen über **Neu aus Repository einlesen** ersetzt werden. Archivdetails werden direkt aus der gespeicherten Liste angezeigt, sofern Borg dort bereits vollständige Statistiken geliefert hat.
+
+## Lizenz, Sicherheit und Beiträge
+
+Der selbst entwickelte Quellcode steht unter der [Apache License 2.0](LICENSE). Wichtige Lizenzen von Drittkomponenten und der Unabhängigkeitshinweis sind in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) zusammengefasst.
+
+Sicherheitsmeldungen müssen nach [SECURITY.md](SECURITY.md) erfolgen und dürfen nicht als öffentliche Issues veröffentlicht werden. Anforderungen für Beiträge stehen in [CONTRIBUTING.md](CONTRIBUTING.md). GitHub Actions führt die vollständige Test- und Syntaxprüfung aus; Dependabot überwacht Python-, Docker- und GitHub-Actions-Abhängigkeiten.
+
+Nur die aktuelle Version erhält Sicherheitskorrekturen. Versionen vor 1.0.38 werden nicht unterstützt und sollen nicht als unterstützte Releases veröffentlicht werden.

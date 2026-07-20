@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.0.54
+# Installation und Betrieb – BorgBackup Manager 1.0.55
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.0.54.zip
+BorgBackup-Manager-1.0.55.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.54.zip
+unzip /pfad/BorgBackup-Manager-1.0.55.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -134,7 +134,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.54.zip
+unzip /pfad/BorgBackup-Manager-1.0.55.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build

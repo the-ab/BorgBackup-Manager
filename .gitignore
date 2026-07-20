@@ -1,11 +1,48 @@
+# Python and local tooling
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 .venv/
+venv/
 .tools/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local deployment configuration
+.env
+.env.*
+!.env.example
+install-config.env
+docker-compose.override.yml
+compose.override.yaml
+
+# Runtime and generated data
 data/
 repositories/
-.env
+backup/
+backups/
+secrets/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.pid
+
+# Release and build output
 dist/
+build/
 updates/
+updates/*.zip
+updates/*.sha256
+updates/*.sig
+*.zip
+*.sha256

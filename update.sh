@@ -280,7 +280,8 @@ trap cleanup_on_exit EXIT
 
 project_items() {
   printf '%s\n' \
-    .dockerignore .env.example .gitattributes .gitignore \
+    .dockerignore .env.example .gitattributes .gitignore .github \
+    LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md pytest.ini scripts \
     compose.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh INSTALLATION.md INSTALLATION.de.md README.md README.de.md \
     RELEASE_NOTES.md RELEASE_NOTES.de.md VERSION requirements.in requirements.txt requirements-dev.txt app docker tests
 }
@@ -421,13 +422,15 @@ source = candidates[0]
 required = [
     ".env.example", "VERSION", "compose.yaml", "Dockerfile", "requirements.in", "requirements.txt", "app", "docker",
     "install.sh", "update.sh", "recovery.sh", "restore-backup.sh",
+    "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md", "THIRD-PARTY-NOTICES.md",
     "README.md", "README.de.md", "INSTALLATION.md", "INSTALLATION.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
 ]
 missing = [name for name in required if not (source / name).exists()]
 if missing:
     raise SystemExit("Release-ZIP ist unvollstaendig; fehlt: " + ", ".join(missing))
 allowed = [
-    ".dockerignore", ".env.example", ".gitattributes", ".gitignore",
+    ".dockerignore", ".env.example", ".gitattributes", ".gitignore", ".github",
+    "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md", "THIRD-PARTY-NOTICES.md", "pytest.ini", "scripts",
     "compose.yaml", "Dockerfile", "install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "INSTALLATION.md",
     "INSTALLATION.de.md", "README.md", "README.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
     "VERSION", "requirements.in", "requirements.txt",

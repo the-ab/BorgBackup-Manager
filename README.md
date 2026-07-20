@@ -1,6 +1,10 @@
-# BorgBackup Manager 1.0.54
+# BorgBackup Manager 1.0.55
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
+
+> **Independent project:** BorgBackup Manager is an independent third-party community project. It is not affiliated with, endorsed by or maintained by the BorgBackup project.
+
+Portions of this project were developed with assistance from OpenAI ChatGPT. All generated code was reviewed, adapted and tested by the project maintainer, who assumes responsibility for the published software.
 
 German documentation is available in [`README.de.md`](README.de.md). Installation instructions are provided in [`INSTALLATION.md`](INSTALLATION.md) and [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -29,7 +33,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.0.54.zip
+BorgBackup-Manager-1.0.55.zip
 ```
 
 The documentation naming convention is:
@@ -355,7 +359,7 @@ System diagnostics cover:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.54.zip
+unzip /path/BorgBackup-Manager-1.0.55.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -462,3 +466,11 @@ The repository overview can show:
 Archive metadata is cached after loading and includes start/end time, duration, file count, original/compressed/deduplicated archive size, hostname, user, comment and archive ID. An archive's deduplicated size represents chunks required only by that archive and must not be summed to calculate repository-wide deduplicated size.
 
 The cache contains metadata only, is regenerable, is excluded from update backups and can be replaced through **Reload from repository** after external Borg changes.
+
+## License, security and contributions
+
+The project source code is licensed under the [Apache License 2.0](LICENSE). Important third-party licenses and project-independence notices are summarized in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+Security reports must follow [SECURITY.md](SECURITY.md) and must not be submitted as public issues. Contribution requirements are documented in [CONTRIBUTING.md](CONTRIBUTING.md). GitHub Actions runs the complete test and syntax suite, while Dependabot monitors Python, Docker and GitHub Actions dependencies.
+
+Only the current release receives security fixes. Versions before 1.0.38 are unsupported and should not be published as supported releases.

@@ -1,5 +1,29 @@
 # Release Notes
 
+## v1.0.55
+
+### Vorbereitung für ein öffentliches Repository
+
+- Apache License 2.0, Copyright-Hinweis, Sicherheitsrichtlinie, Beitragsrichtlinie und Third-Party-Hinweise ergänzt.
+- Deutlicher Hinweis ergänzt, dass BorgBackup Manager ein unabhängiges Drittprojekt ist und weder mit dem BorgBackup-Projekt verbunden ist noch von diesem gepflegt wird.
+- Transparenter Hinweis auf die Unterstützung durch OpenAI ChatGPT und die menschliche Prüfung und Verantwortung ergänzt.
+- Dokumentiert, dass nur die aktuelle Version Sicherheitskorrekturen erhält und Versionen vor 1.0.38 nicht unterstützt werden.
+
+### GitHub-Pflege und CI
+
+- GitHub-Actions-CI für Python 3.13 ergänzt: Installation der hashgesperrten Laufzeitabhängigkeiten, Abhängigkeitsprüfung, vollständige Pytest-Reihe, Python-, JavaScript- und Shell-Syntaxprüfungen sowie Container-Build.
+- Dependabot für Python-, Docker- und GitHub-Actions-Abhängigkeiten ergänzt.
+- Wiederverwendbares Release-Prüfskript und robuste Pytest-Pfadkonfiguration ergänzt.
+
+### Repository-Hygiene
+
+- `.gitignore` und `.dockerignore` um lokale Konfigurationen, Laufzeitdaten, Datenbanken, Logs, Backups, Updatearchive und Build-Ausgaben erweitert.
+- Künstliche OpenSSH-Private-Key-Markierungen in HTML und Tests so aufgeteilt, dass generische Secret-Scanner sie seltener als echte private Schlüssel melden; Laufzeitvalidierung und sichtbarer Platzhalter bleiben unverändert.
+
+### Update
+
+- Keine Datenbankmigration erforderlich. Geräte, Repositorys, Jobs, Zeitpläne, Archive, Benutzer und Einstellungen bleiben unverändert.
+
 ## v1.0.54
 
 ### Warnungsmarkierung im Dashboard

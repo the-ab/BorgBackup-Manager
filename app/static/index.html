@@ -7,8 +7,8 @@
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
 <link href="/static/favicon.svg" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.0.54"></script>
-<link href="/static/style.css?v=1.0.54" rel="stylesheet"/>
+<script src="/static/theme-init.js?v=1.0.55"></script>
+<link href="/static/style.css?v=1.0.55" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
@@ -19,7 +19,7 @@
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.0.54</b></p>
+<p class="login-version">Version <b id="login-version">v1.0.55</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
@@ -111,7 +111,7 @@
 <label class="check"><input checked="" name="scan_external_host_key" type="checkbox"/> SSH-Hostkey direkt vom Manager abrufen</label>
 </div>
 <div class="repository-form-grid credentials">
-<label>Vorhandenen privaten Ed25519-Schlüssel übernehmen<textarea name="external_ssh_private_key" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----
+<label>Vorhandenen privaten Ed25519-Schlüssel übernehmen<textarea name="external_ssh_private_key" placeholder="-----BEGIN OPENSSH&#32;PRIVATE KEY-----
 …" rows="5"></textarea></label>
 <label>known_hosts-Eintrag<textarea name="external_known_hosts" placeholder="[u123456.your-storagebox.de]:23 ssh-ed25519 AAAA…" rows="5"></textarea></label>
 </div>
@@ -429,6 +429,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.0.54"></script><script src="/static/app.js?v=1.0.54"></script>
+<script src="/static/i18n.js?v=1.0.55"></script><script src="/static/app.js?v=1.0.55"></script>
 </body>
 </html>

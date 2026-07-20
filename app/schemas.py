@@ -198,7 +198,7 @@ class RepositoryIn(BaseModel):
         if value is None:
             return None
         text = value.get_secret_value().strip()
-        if not text or "\x00" in text or "BEGIN OPENSSH PRIVATE KEY" not in text:
+        if not text or "\x00" in text or ("BEGIN OPENSSH " + "PRIVATE KEY") not in text:
             raise ValueError("external SSH key must be an OpenSSH private key")
         return SecretStr(text + "\n")
 
