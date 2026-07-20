@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.0.51
+# Installation and Operations — BorgBackup Manager 1.0.53
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.0.51.zip
+BorgBackup-Manager-1.0.53.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.51.zip
+unzip /path/BorgBackup-Manager-1.0.53.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.0.51.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.0.53.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -125,6 +125,7 @@ BBM_STORAGE_GUARD_THRESHOLD_PERCENT=95
 BBM_HEALTH_REQUIRE_SSHD=1
 BBM_LOG_MAX_BYTES=10485760
 BBM_LOG_ROTATIONS=5
+BBM_DEBUG_LOG_LEVEL=WARNING
 ```
 
 ### Reverse proxy
@@ -543,6 +544,7 @@ grep -E '^(BBM_DATA_PATH|BBM_REPOSITORY_PATH|BBM_HTTPS_PORT|BBM_REPOSITORY_SSH_P
 docker compose exec -T borg-manager pgrep -a sshd
 docker compose exec -T borg-manager tail -n 200 /data/logs/sshd.log
 docker compose exec -T borg-manager tail -n 200 /data/logs/borg-serve.log
+docker compose exec -T borg-manager tail -n 200 /data/logs/debug.log
 ```
 
 In **System -> System Diagnostics**, verify:

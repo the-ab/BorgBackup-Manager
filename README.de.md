@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.51
+# BorgBackup Manager 1.0.53
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -30,7 +30,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.0.51.zip
+BorgBackup-Manager-1.0.53.zip
 ```
 
 ## Sicherheit und Härtung
@@ -670,7 +670,7 @@ Release Notes werden passend zur persönlichen Spracheinstellung auf Deutsch ode
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.51.zip
+unzip /pfad/BorgBackup-Manager-1.0.53.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -760,6 +760,10 @@ Die persistente `.env`, Manager- und Sicherheitsdatenbank, Schlüssel und TLS-Da
 - Datenbanken und aktive Anwendungen benötigen anwendungskonsistente Dumps oder Snapshots.
 - Vor Restore, Prune, Compact und Archivlöschung aktuelle Sicherungen prüfen.
 
+## Vorhandenes verwaltetes Repository gezielt auswählen
+
+Neben **Automatisch suchen** steht auf der Repository-Seite **Ordner auswählen** zur Verfügung. Der Browser ist strikt auf `/repositories` begrenzt, folgt keinen symbolischen Links und kennzeichnet direkte Unterordner mit Borg-`config` als auswählbar. Die Auswahl füllt das vorhandene Importformular; vor der Registrierung wird das Repository geprüft und niemals initialisiert oder überschrieben.
+
 ## Diagnose
 
 ```bash
@@ -777,6 +781,7 @@ Repository-Dienst:
 docker compose exec -T borg-manager pgrep -a sshd
 docker compose exec -T borg-manager tail -n 200 /data/logs/sshd.log
 docker compose exec -T borg-manager tail -n 200 /data/logs/borg-serve.log
+docker compose exec -T borg-manager tail -n 200 /data/logs/debug.log
 ```
 
 ## Entwicklung und Prüfung

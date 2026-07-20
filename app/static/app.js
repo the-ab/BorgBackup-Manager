@@ -8,7 +8,7 @@ const state = {
   repositoryStatusDetails: '', dashboard: null,
   actionRuns: new Map(), activeRuns: [], refreshQueue: Promise.resolve(), syncResetTimer: null,
   syncDisplay: {message: 'Aktuell', kind: 'idle', persistent: false}, helpLanguage: '',
-  sorts: {},
+  sorts: {}, repositoryBrowserPath: '', diagnosticLogs: {}, activeDiagnosticLog: 'sshd',
 };
 
 const SORT_DEFAULTS = {
@@ -703,7 +703,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.51`, {cache: 'no-store'});
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.53`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -961,8 +961,8 @@ function dashboardJobTable(jobs) {
       ? job.schedule_names.join(', ') : 'Manuell';
     const admin = state.currentUser?.role === 'admin';
     const lastRun = last
-      ? `<span class="dashboard-run-stack"><span>${admin ? `<button class="entity-link" ${bbmAction('showRun', last.id)}>#${last.id} · ${esc(formatDate(last.created_at))}</button>` : `<b>#${last.id} · ${esc(formatDate(last.created_at))}</b>`}</span><small><span>Dauer</span> ${esc(formatDuration(last.duration_seconds))} · <span class="badge ${esc(last.status)}">${esc(runStatusLabel(last.status))}</span> · ${last.trigger_type === 'schedule' ? `Zeitplan: ${esc(last.schedule_name || schedule)}` : 'Manuell'}</small></span>`
-      : '<span class="dashboard-run-stack"><span>noch kein Backup</span><small>–</small></span>';
+      ? `<span class="dashboard-run-stack"><span>${admin ? `<button class="entity-link" ${bbmAction('showRun', last.id)}>#${last.id} · ${esc(formatDate(last.created_at))}</button>` : `<b>#${last.id} · ${esc(formatDate(last.created_at))}</b>`}</span><small class="dashboard-run-result"><span class="status-text ${esc(last.status)}">${esc(runStatusLabel(last.status))}</span> · <span>Dauer</span> ${esc(formatDuration(last.duration_seconds))}</small><small class="dashboard-run-trigger">${last.trigger_type === 'schedule' ? `Zeitplan: ${esc(last.schedule_name || schedule)}` : 'Manuell'}</small></span>`
+      : '<span class="dashboard-run-stack"><span>noch kein Backup</span><small>–</small><small>–</small></span>';
     const sizeRun = job.last_successful_backup || last;
     const deduplicated = sizeRun?.backup_deduplicated_size_bytes;
     const original = sizeRun?.backup_original_size_bytes;
@@ -2051,6 +2051,40 @@ async function discoverRepositories() {
   } catch (error) { box.innerHTML = `<div class="empty error">${esc(error.message)}</div>`; }
 }
 
+function repositoryBrowserSuggestedName(path) {
+  const name = String(path || '').split('/').filter(Boolean).pop() || 'Repository';
+  return name.replace(/[-_]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+async function browseRepositoryDirectories(path = '') {
+  const panel = $('#repository-folder-browser');
+  const list = $('#repository-browser-list');
+  panel.classList.remove('hidden');
+  list.innerHTML = '<div class="empty">Verzeichnisinhalt wird geladen …</div>';
+  try {
+    const data = await api(`/repositories/browse?path=${encodeURIComponent(path)}`);
+    state.repositoryBrowserPath = data.path || '';
+    $('#repository-browser-path').textContent = `/repositories${data.path ? '/' + data.path : ''}`;
+    const up = $('#repository-browser-up');
+    up.disabled = data.parent == null;
+    up.dataset.parent = data.parent ?? '';
+    list.innerHTML = data.entries.length ? data.entries.map((item) => {
+      const type = translateMessage(item.type === 'directory' ? (item.is_repository ? 'Borg-Repository' : 'Ordner') : (item.type === 'symlink' ? 'Symbolischer Link' : 'Datei'));
+      const meta = `${type}${item.modified_at ? ' · ' + formatDate(item.modified_at) : ''}${item.size != null ? ' · ' + formatBytes(item.size) : ''}`;
+      const open = item.is_directory ? `<button class="secondary" data-repository-browser-open="${esc(item.path)}">Öffnen</button>` : '';
+      const select = item.selectable ? `<button data-repository-browser-select="${esc(item.path)}">Repository auswählen</button>` : '';
+      return `<div class="repository-browser-entry"><div><b>${item.is_directory ? '📁' : '📄'} ${esc(item.name)}</b><small>${esc(meta)}</small></div><div class="actions">${open}${select}</div></div>`;
+    }).join('') : '<div class="empty">Dieses Verzeichnis ist leer.</div>';
+    if (data.truncated) list.insertAdjacentHTML('beforeend', '<div class="notice warning">Es werden maximal 500 Einträge angezeigt.</div>');
+    $$('[data-repository-browser-open]').forEach((button) => button.onclick = () => browseRepositoryDirectories(button.dataset.repositoryBrowserOpen));
+    $$('[data-repository-browser-select]').forEach((button) => button.onclick = () => {
+      const selected = button.dataset.repositoryBrowserSelect;
+      prepareRepositoryImport(selected, repositoryBrowserSuggestedName(selected));
+      panel.classList.add('hidden');
+    });
+  } catch (error) { list.innerHTML = `<div class="empty error">${esc(error.message)}</div>`; }
+}
+
 function toggleRepositoryMode() {
   const form = $('#repo-form');
   const managed = form.elements.managed.value === 'true';
@@ -2812,6 +2846,9 @@ $$('#schedule-weekdays input').forEach((input) => input.onchange = updateSchedul
 $('#schedule-day').oninput = updateSchedulePreview;
 $('#schedule-custom').oninput = updateSchedulePreview;
 $('#discover-repositories').onclick = discoverRepositories;
+$('#browse-repositories').onclick = () => browseRepositoryDirectories('');
+$('#repository-browser-up').onclick = () => browseRepositoryDirectories($('#repository-browser-up').dataset.parent || '');
+$('#close-repository-browser').onclick = () => $('#repository-folder-browser').classList.add('hidden');
 $('#archive-repository').onchange = markArchivesStale;
 $('#archive-consider-checkpoints').onchange = markArchivesStale;
 $('#archive-device-filter').onchange = () => {
@@ -2856,11 +2893,31 @@ toggleCompressionMode();
 resetScheduleForm();
 resetUserForm();
 
+function renderDiagnosticLog(name) {
+  const selected = ['sshd', 'borg', 'debug'].includes(name) ? name : 'sshd';
+  state.activeDiagnosticLog = selected;
+  const viewer = document.getElementById('diagnostic-log-content');
+  if (!viewer) return;
+  const empty = {
+    sshd: 'Noch keine SSH-Servermeldung protokolliert.',
+    borg: 'Noch kein Start von borg serve protokolliert.',
+    debug: 'Keine unerwarteten Tracebacks oder Hintergrundfehler protokolliert.',
+  };
+  viewer.textContent = state.diagnosticLogs[selected] || empty[selected];
+  $$('[data-diagnostic-log]').forEach((button) => {
+    const active = button.dataset.diagnosticLog === selected;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+}
+
 function resetSystemDiagnostics() {
   $('#system-diagnostics').className = 'empty';
   $('#system-diagnostics').textContent = 'Borg-Version, Repository-Speicher und Serverprotokoll bei Bedarf laden.';
   $('#load-diagnostics').textContent = 'Diagnose laden';
   $('#close-diagnostics').classList.add('hidden');
+  state.diagnosticLogs = {};
+  state.activeDiagnosticLog = 'sshd';
 }
 
 $('#load-diagnostics').onclick = async () => {
@@ -2876,8 +2933,27 @@ $('#load-diagnostics').onclick = async () => {
       const repositories = item.repositories?.length ? item.repositories.map((repo) => `${esc(repo.name)} · ${repo.guard_enabled ? `Sperre ab ${repo.guard_threshold_percent} %${repo.guard_source === 'repository' ? ' (Repository)' : ' (global)'}` : 'Sperre deaktiviert'}${repo.guard_blocked ? ' · BLOCKIERT' : ''}`).join('<br>') : `Keine direkte Repository-Zuordnung · globale Sperre ${item.guard_enabled ? 'ab ' + item.guard_threshold_percent + ' %' : 'deaktiviert'}`;
       return `<tr><td data-label="Mount"><code>${esc(item.path)}</code></td><td data-label="Belegung">${formatBytes(item.used)} / ${formatBytes(item.total)}<small>${item.percent} % · ${formatBytes(item.free)} frei</small></td><td data-label="Repositories">${repositories}</td><td data-label="Status"><span class="badge ${item.guard_blocked ? 'failed' : 'success'}">${item.guard_blocked ? 'Backups blockiert' : 'OK'}</span></td></tr>`;
     }).join('');
+    const inactiveAccess = Number(checks.repository_access_inactive_rows || 0);
+    const accessDetail = currentLanguage() === 'en'
+      ? `${checks.authorized_device_keys ?? 0}/${checks.repository_access_rows ?? 0} active${inactiveAccess ? ` · ${inactiveAccess} inactive` : ''}`
+      : `${checks.authorized_device_keys ?? 0}/${checks.repository_access_rows ?? 0} aktiv${inactiveAccess ? ` · ${inactiveAccess} deaktiviert` : ''}`;
+    const diagnosticChecks = [
+      ['Repository R/W/X', Boolean(checks.repository_readable_as_borg && checks.repository_writable_as_borg && checks.repository_searchable_as_borg)],
+      ['sshd lauscht', Boolean(checks.repository_sshd_listening)],
+      ['sshd-Konfiguration', Boolean(checks.sshd_configuration_valid)],
+      ['authorized_keys lesbar', Boolean(checks.authorized_keys_readable_as_borg)],
+      ['Forced Command', Boolean(checks.all_keys_use_forced_command)],
+      ['Log schreibbar', Boolean(checks.log_writable_as_borg)],
+      ['Wrapper ausführbar', Boolean(checks.serve_wrapper_executable)],
+      ['Zugänge vollständig', Boolean(checks.repository_access_complete), accessDetail],
+    ];
+    const diagnosticGrid = diagnosticChecks.map(([label, ok, detail]) => `<div class="diagnostic-check"><span>${esc(label)}</span><b class="badge ${ok ? 'success' : 'failed'}">${ok ? 'OK' : 'FEHLER'}</b>${detail ? `<small>${esc(detail)}</small>` : ''}</div>`).join('');
+    const sharedRepositories = Number(checks.managed_repositories_shared_across_hosts ?? 0);
     $('#system-diagnostics').className = '';
-    $('#system-diagnostics').innerHTML = `<p><b>Repository-Server:</b> ${esc(diagnostics.borg_version)}</p><h3>Repository-Dateisysteme</h3>${filesystemRows ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Mount</th><th>Belegung</th><th>Repositories / Sperre</th><th>Status</th></tr></thead><tbody>${filesystemRows}</tbody></table></div>` : '<p>Repository-Speicher konnte nicht ermittelt werden.</p>'}<p><b>Serverprüfungen:</b> Repository R/W/X: ${checks.repository_readable_as_borg && checks.repository_writable_as_borg && checks.repository_searchable_as_borg ? 'OK' : 'FEHLER'} · sshd lauscht: ${checks.repository_sshd_listening ? 'OK' : 'FEHLER'} · sshd-Konfiguration: ${checks.sshd_configuration_valid ? 'OK' : 'FEHLER'} · authorized_keys lesbar: ${checks.authorized_keys_readable_as_borg ? 'OK' : 'FEHLER'} · Forced Command: ${checks.all_keys_use_forced_command ? 'OK' : 'FEHLER'} · Log schreibbar: ${checks.log_writable_as_borg ? 'OK' : 'FEHLER'} · Wrapper ausführbar: ${checks.serve_wrapper_executable ? 'OK' : 'FEHLER'} · Zugänge vollständig: ${checks.repository_access_complete ? 'OK' : 'FEHLER'} (${checks.authorized_device_keys ?? 0}/${checks.repository_access_rows ?? 0}) · gemeinsam genutzte Repositories: ${checks.managed_repositories_shared_across_hosts ?? 0}</p><h3>sshd-Log</h3><pre>${esc(diagnostics.sshd_log || 'Noch keine SSH-Servermeldung protokolliert.')}</pre><h3>borg-serve-Log</h3><pre>${esc(diagnostics.borg_serve_log || 'Noch kein Start von borg serve protokolliert.')}</pre>`;
+    state.diagnosticLogs = {sshd: diagnostics.sshd_log || '', borg: diagnostics.borg_serve_log || '', debug: diagnostics.debug_log || ''};
+    $('#system-diagnostics').innerHTML = `<p class="diagnostic-server"><b>Repository-Server:</b> ${esc(diagnostics.borg_version)}</p><h3>Repository-Dateisysteme</h3>${filesystemRows ? `<div class="table-scroll diagnostic-filesystems"><table class="data-table"><thead><tr><th>Mount</th><th>Belegung</th><th>Repositories / Sperre</th><th>Status</th></tr></thead><tbody>${filesystemRows}</tbody></table></div>` : '<p>Repository-Speicher konnte nicht ermittelt werden.</p>'}<h3>Serverprüfungen</h3><div class="diagnostic-check-grid">${diagnosticGrid}<div class="diagnostic-check diagnostic-info"><span>Gemeinsam genutzte Repositories</span><b class="badge inactive">${sharedRepositories}</b><small>Information</small></div></div><h3>Serverprotokolle</h3><div class="diagnostic-log-tabs" role="tablist"><button class="secondary" data-diagnostic-log="sshd" role="tab">sshd-Log</button><button class="secondary" data-diagnostic-log="borg" role="tab">borg-serve-Log</button><button class="secondary" data-diagnostic-log="debug" role="tab">Debug-/Fehlerlog</button></div><pre id="diagnostic-log-content" class="diagnostic-log-content"></pre>`;
+    $$('[data-diagnostic-log]').forEach((tab) => tab.onclick = () => renderDiagnosticLog(tab.dataset.diagnosticLog));
+    renderDiagnosticLog(state.activeDiagnosticLog);
     button.textContent = 'Diagnose neu laden';
     $('#close-diagnostics').classList.remove('hidden');
     setSyncState('Systemdiagnose aktualisiert', 'success');

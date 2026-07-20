@@ -20,10 +20,10 @@ chmod 700 /data/security /data/exports /data/run-logs /data/archive-cache /data/
 chmod 711 /data/repository-ssh
 chown borg:borg /data/logs /data/exports /data/borg-cache /data/borg-security
 chmod 750 /data/logs
-touch /data/logs/borg-serve.log /data/logs/sshd.log /data/repository-ssh/authorized_keys
-chown borg:borg /data/logs/borg-serve.log /data/repository-ssh/authorized_keys
+touch /data/logs/borg-serve.log /data/logs/sshd.log /data/logs/debug.log /data/repository-ssh/authorized_keys
+chown borg:borg /data/logs/borg-serve.log /data/logs/debug.log /data/repository-ssh/authorized_keys
 chown root:borg /data/logs/sshd.log
-chmod 640 /data/logs/borg-serve.log /data/logs/sshd.log
+chmod 640 /data/logs/borg-serve.log /data/logs/sshd.log /data/logs/debug.log
 chmod 600 /data/repository-ssh/authorized_keys
 
 for access in r w x; do
@@ -71,7 +71,7 @@ chmod 700 /data/security /data/exports /data/run-logs /data/archive-cache /data/
 chmod 750 /data/logs
 chmod 711 /data/repository-ssh
 chown root:borg /data/logs/sshd.log
-chmod 640 /data/logs/borg-serve.log /data/logs/sshd.log
+chmod 640 /data/logs/borg-serve.log /data/logs/sshd.log /data/logs/debug.log
 chmod 600 /data/repository-ssh/authorized_keys
 
 chown root:borg /run/bbm-secrets
@@ -184,6 +184,6 @@ while :; do
   if ! kill -0 "$sshd_pid" 2>/dev/null; then wait "$sshd_pid" 2>/dev/null || rc=$?; echo "Repository sshd stopped unexpectedly (rc=${rc:-0})" >&2; exit "${rc:-1}"; fi
   if ! kill -0 "$api_pid" 2>/dev/null; then wait "$api_pid" 2>/dev/null || rc=$?; echo "Web API stopped unexpectedly (rc=${rc:-0})" >&2; exit "${rc:-1}"; fi
   now=$(date +%s)
-  if [ $((now - last_log_rotation)) -ge 300 ]; then rotate_log /data/logs/sshd.log; rotate_log /data/logs/borg-serve.log; last_log_rotation="$now"; fi
+  if [ $((now - last_log_rotation)) -ge 300 ]; then rotate_log /data/logs/sshd.log; rotate_log /data/logs/borg-serve.log; rotate_log /data/logs/debug.log; last_log_rotation="$now"; fi
   sleep 2
 done

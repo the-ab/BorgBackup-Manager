@@ -1,5 +1,42 @@
 # Release Notes
 
+## v1.0.53
+
+### Diagnostics for disabled devices
+
+- Repository access diagnostics now compare `authorized_keys` only with enabled devices. Stored access assignments for disabled devices are retained for later reactivation but no longer cause false **Forced Command** or **Accesses complete** failures.
+- Disabled access assignments are shown separately as informational counts. Existing active keys are still checked for the repository-scoped forced command.
+
+### Switchable server logs and persistent debug log
+
+- System diagnostics now uses three log tabs for `sshd`, `borg-serve` and the new debug/error log instead of rendering two long logs consecutively.
+- `/data/logs/debug.log` captures unexpected HTTP tracebacks, scheduler failures, unhandled thread exceptions and asyncio/background-task errors. It uses the existing size limit and rotation policy.
+- Expected Borg run output remains in the corresponding run log and is not duplicated into the debug log.
+
+### Managed repository folder browser
+
+- The automatic discovery of existing local repositories remains available.
+- A separate folder browser lists the contents below `/repositories`, supports safe directory navigation and allows a detected direct-child Borg repository to be selected deliberately.
+- Traversal outside `/repositories` and symbolic-link navigation are rejected; listings are limited to 500 entries.
+
+### Verification
+
+- Regression tests cover disabled-device diagnostics, active access failures, forced-command validation, repository-browser containment, symlink rejection, debug-log persistence and the three-tab UI.
+
+## v1.0.52
+
+### Compact dashboard and improved mobile layouts
+
+- **Latest run** now uses three compact rows: run ID with date/time, status with duration, and schedule or manual trigger. The dashboard column width is unchanged.
+- On mobile devices the latest-backup size stack no longer inherits the desktop table minimum width, so values remain inside the visible card instead of appearing after a large empty horizontal scroll area.
+- Archive overview cards wrap metadata and actions directly below one another on narrow screens, removing the large gap between archive ID/details and action buttons.
+- The archive browser switches to readable metadata cards on mobile while preserving name, size, type, permissions, owner and modification time.
+- System diagnostics now render server checks as compact status cards; filesystem tables and logs stay within the mobile viewport and long log lines wrap safely.
+
+### Verification
+
+- Regression tests cover the three-row latest-run layout, mobile dashboard width overrides, archive-card wrapping, mobile archive-browser cards and responsive diagnostics.
+
 ## v1.0.51
 
 ### Bulk archive deletion with encrypted repositories

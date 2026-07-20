@@ -34,7 +34,9 @@ def test_dashboard_uses_compact_stacked_job_metadata_blocks():
     assert 'class="dashboard-size-stack"' in javascript
     assert 'class="dashboard-run-stack"' in javascript
     assert 'class="source-stat-copy"' in javascript
-    assert "<span>Dauer</span> ${esc(formatDuration(last.duration_seconds))}" in javascript
+    assert 'class="dashboard-run-result"' in javascript
+    assert '<span>Dauer</span> ${esc(formatDuration(last.duration_seconds))}' in javascript
+    assert 'class="dashboard-run-trigger"' in javascript
     assert "const sourceLabel = job.source_stats_origin === 'scan' ? 'Live-Scan vor Ausschlüssen' : 'Letztes Backup'" in javascript
     assert "${sourceLabel} · ${esc(checked)}" in javascript
     assert ".dashboard-size-stack > span" in stylesheet

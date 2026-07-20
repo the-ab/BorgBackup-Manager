@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.0.51
+# Installation und Betrieb – BorgBackup Manager 1.0.53
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.0.51.zip
+BorgBackup-Manager-1.0.53.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.51.zip
+unzip /pfad/BorgBackup-Manager-1.0.53.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -114,6 +114,7 @@ BBM_STORAGE_GUARD_THRESHOLD_PERCENT=95
 BBM_HEALTH_REQUIRE_SSHD=1
 BBM_LOG_MAX_BYTES=10485760
 BBM_LOG_ROTATIONS=5
+BBM_DEBUG_LOG_LEVEL=WARNING
 ```
 
 `BBM_SESSION_COOKIE_SECURE=always` ist der empfohlene und voreingestellte Wert. Der Manager wird selbst per HTTPS ausgeliefert. `auto` und insbesondere `never` sind nur für ausdrücklich geprüfte Sonderfälle vorgesehen. Proxy-Header beeinflussen Scheme, Client-IP oder Origin ausschließlich, wenn die unmittelbare Proxy-Adresse in `BBM_TRUSTED_PROXY_CIDRS` liegt. Bei einem separaten Docker-Reverse-Proxy muss dessen festes Container-Netz dort ausdrücklich ergänzt werden; eingehende Forwarded-Header sind am Proxy zu überschreiben.
@@ -133,7 +134,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.51.zip
+unzip /pfad/BorgBackup-Manager-1.0.53.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build
@@ -850,6 +851,7 @@ docker compose exec -T borg-manager pgrep -a sshd
 docker compose exec -T borg-manager /usr/sbin/sshd -t
 docker compose exec -T borg-manager tail -n 200 /data/logs/sshd.log
 docker compose exec -T borg-manager tail -n 200 /data/logs/borg-serve.log
+docker compose exec -T borg-manager tail -n 200 /data/logs/debug.log
 ```
 
 ## 26. Sicherheitsregeln

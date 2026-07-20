@@ -1,5 +1,42 @@
 # Release Notes
 
+## v1.0.53
+
+### Diagnose bei deaktivierten Geräten
+
+- Repository-Zugangsprüfungen vergleichen `authorized_keys` nur noch mit aktivierten Geräten. Gespeicherte Zugangszuordnungen deaktivierter Geräte bleiben für eine spätere Aktivierung erhalten, verursachen aber keine falschen Fehler bei **Forced Command** oder **Zugänge vollständig** mehr.
+- Deaktivierte Zugangszuordnungen werden separat als Information angezeigt. Vorhandene aktive Schlüssel werden weiterhin auf den repositorybezogenen Forced Command geprüft.
+
+### Umschaltbare Serverlogs und dauerhaftes Debug-Log
+
+- Die Systemdiagnose zeigt `sshd`, `borg-serve` und das neue Debug-/Fehlerlog über drei Reiter, statt zwei lange Logdateien direkt untereinander auszugeben.
+- `/data/logs/debug.log` erfasst unerwartete HTTP-Tracebacks, Scheduler-Fehler, unbehandelte Thread-Ausnahmen und Fehler aus asyncio beziehungsweise Hintergrundaufgaben. Für das Log gelten die vorhandenen Größen- und Rotationsgrenzen.
+- Erwartete Borg-Ausgaben bleiben im jeweiligen Ausführungsprotokoll und werden nicht in das Debug-Log dupliziert.
+
+### Dateibrowser für lokale Repositorys
+
+- Die automatische Suche nach vorhandenen lokalen Repositorys bleibt erhalten.
+- Ein zusätzlicher Dateibrowser listet den Inhalt unter `/repositories`, ermöglicht eine sichere Ordnernavigation und lässt erkannte Borg-Repositorys in direkten Unterordnern gezielt auswählen.
+- Pfadausbruch aus `/repositories` und Navigation über symbolische Links werden blockiert; pro Ansicht werden höchstens 500 Einträge angezeigt.
+
+### Prüfung
+
+- Regressionstests decken die Diagnose deaktivierter Geräte, echte Fehler aktiver Zugänge, Forced-Command-Prüfung, Pfadbegrenzung des Repository-Browsers, Symlink-Schutz, Debug-Log und die Drei-Reiter-Ansicht ab.
+
+## v1.0.52
+
+### Kompaktes Dashboard und verbesserte Mobilansichten
+
+- **Letzter Job** verwendet jetzt drei kompakte Zeilen: Ausführungs-ID mit Datum/Uhrzeit, Status mit Dauer sowie Zeitplan beziehungsweise manueller Start. Die Dashboard-Spalte wird nicht verbreitert.
+- Auf Mobilgeräten übernimmt die Größenanzeige der letzten Sicherung nicht mehr die Desktop-Mindestbreite der Tabelle. Die Werte bleiben innerhalb der sichtbaren Karte, statt erst nach einem großen leeren horizontalen Bereich zu erscheinen.
+- Archivkarten brechen Metadaten und Aktionen auf schmalen Ansichten direkt untereinander um. Der große Abstand zwischen Archiv-ID beziehungsweise Details und den Aktionsbuttons entfällt.
+- Der Archivbrowser wechselt mobil zu lesbaren Metadatenkarten und zeigt weiterhin Name, Größe, Typ, Rechte, Besitzer und Änderungsdatum.
+- Die Systemdiagnose stellt Serverprüfungen als kompakte Statuskarten dar. Dateisystemtabellen und Protokolle bleiben innerhalb der mobilen Ansicht; lange Protokollzeilen werden sicher umgebrochen.
+
+### Prüfung
+
+- Regressionstests decken die dreizeilige Darstellung des letzten Jobs, mobile Dashboard-Breiten, kompakte Archivkarten, den mobilen Archivbrowser und die responsive Systemdiagnose ab.
+
 ## v1.0.51
 
 ### Mehrfachlöschung von Archiven bei verschlüsselten Repositorys

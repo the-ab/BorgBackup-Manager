@@ -7,8 +7,8 @@
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
 <link href="/static/favicon.svg" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.0.51"></script>
-<link href="/static/style.css?v=1.0.51" rel="stylesheet"/>
+<script src="/static/theme-init.js?v=1.0.53"></script>
+<link href="/static/style.css?v=1.0.53" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
@@ -19,7 +19,7 @@
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.0.51</b></p>
+<p class="login-version">Version <b id="login-version">v1.0.53</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
@@ -130,7 +130,7 @@
 <div aria-live="polite" class="persistent-info hidden" id="repo-operation-status" role="status"></div>
 <div class="bounded-list" id="repo-list"></div>
 </div>
-<div class="panel"><div class="panel-head"><div><h2>Vorhandene lokale Repositories einbinden</h2><span>Durchsucht direkte Unterverzeichnisse des eingebundenen Repository-Pfads nach Borg-Konfigurationen.</span></div><button class="secondary" id="discover-repositories" type="button">Verzeichnis durchsuchen</button></div><div class="bounded-list" id="repository-discovery-list"><div class="empty">Suche bei Bedarf starten.</div></div></div>
+<div class="panel"><div class="panel-head responsive-head"><div><h2>Vorhandene lokale Repositories einbinden</h2><span>Automatisch nach Borg-Repositories suchen oder den Inhalt von <code>/repositories</code> gezielt durchsuchen.</span></div><div class="table-actions"><button class="secondary" id="discover-repositories" type="button">Automatisch suchen</button><button class="secondary" id="browse-repositories" type="button">Ordner auswählen</button></div></div><div class="bounded-list" id="repository-discovery-list"><div class="empty">Suche oder Dateibrowser bei Bedarf starten.</div></div><div class="repository-folder-browser hidden" id="repository-folder-browser"><div class="browser-toolbar"><button class="secondary" id="repository-browser-up" type="button">Eine Ebene höher</button><code id="repository-browser-path">/repositories</code><button class="secondary" id="close-repository-browser" type="button">Browser schließen</button></div><div class="repository-browser-list" id="repository-browser-list"></div><p class="hint">Nur direkte Unterordner von <code>/repositories</code> mit einer Borg-<code>config</code> können eingebunden werden. Symbolische Links werden nicht geöffnet.</p></div></div>
 </div>
 </section>
 <section class="view" id="view-jobs">
@@ -429,6 +429,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.0.51"></script><script src="/static/app.js?v=1.0.51"></script>
+<script src="/static/i18n.js?v=1.0.53"></script><script src="/static/app.js?v=1.0.53"></script>
 </body>
 </html>

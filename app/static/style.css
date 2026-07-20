@@ -1600,3 +1600,190 @@ body.compact .job-action-buttons button { min-height: 27px !important; padding: 
   .system-workspace-tabs { width: 100%; margin: 0; }
   .archive-browser-table { min-width: 780px; }
 }
+
+/* 1.0.52: compact dashboard runs and mobile archive/diagnostics layouts */
+.dashboard-run-result,
+.dashboard-run-trigger { overflow-wrap: anywhere; }
+.dashboard-run-result .status-text { font-weight: 750; }
+.diagnostic-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 7px;
+  min-width: 0;
+}
+.diagnostic-check {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.diagnostic-check > span { min-width: 0; overflow-wrap: anywhere; font-size: .78rem; font-weight: 700; }
+.diagnostic-check > small { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .68rem; }
+#system-diagnostics,
+#system-diagnostics > * { min-width: 0; max-width: 100%; }
+#system-diagnostics pre {
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@media (max-width: 760px) {
+  .archive-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .archive-row .archive-main {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+  .archive-row > .actions {
+    margin-top: 0;
+    justify-content: flex-start;
+  }
+  .diagnostics-panel,
+  #system-diagnostics { width: 100%; overflow: hidden; }
+  .diagnostic-check-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  .dashboard-jobs-table,
+  .archive-browser-table {
+    width: 100%;
+    min-width: 0;
+  }
+  .dashboard-jobs-scroll { overflow-x: visible; }
+  .dashboard-size-stack {
+    width: min(100%, 16rem);
+    min-width: 0;
+  }
+  .dashboard-size-stack > span {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+  .archive-browser-shell {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+  .archive-browser-table tbody {
+    display: grid;
+    gap: 8px;
+  }
+  .archive-browser-table tr {
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--surface);
+  }
+  .archive-browser-table td {
+    display: grid;
+    grid-template-columns: 82px minmax(0, 1fr);
+    gap: 7px;
+    width: 100%;
+    padding: 4px 0;
+  }
+  .archive-browser-table .browser-name-cell { min-width: 0; }
+  .archive-browser-table .browser-name-cell button,
+  .archive-browser-table .browser-name-cell > span {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .archive-browser-table code { white-space: normal; overflow-wrap: anywhere; }
+  .browser-target {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .diagnostic-check-grid { grid-template-columns: 1fr; }
+  .diagnostic-filesystems { overflow-x: visible; }
+}
+
+@media (max-width: 480px) {
+  .archive-row > .actions { display: grid; grid-template-columns: 1fr; }
+  .archive-row > .actions button { width: 100%; }
+  .archive-browser-table td {
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .dashboard-size-stack {
+    width: 100%;
+    max-width: 16rem;
+  }
+  .dashboard-size-label { white-space: nowrap; }
+  .archive-browser-table input[type="checkbox"] {
+    width: 17px;
+    min-height: 17px;
+    margin: 0;
+  }
+}
+
+/* 1.0.53: diagnostics log tabs and managed repository folder browser */
+.diagnostic-log-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 8px 0 0;
+}
+.diagnostic-log-tabs button {
+  min-height: 34px;
+  padding: 6px 11px;
+}
+.diagnostic-log-tabs button.active,
+.diagnostic-log-tabs button[aria-selected="true"] {
+  background: var(--primary-strong, var(--primary));
+  border-color: var(--primary-strong, var(--primary));
+  color: #fff;
+}
+.diagnostic-log-content { margin-top: 8px; min-height: 12rem; }
+.repository-folder-browser {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.repository-folder-browser .browser-toolbar { margin-bottom: 10px; }
+#repository-browser-path {
+  flex: 1 1 18rem;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--surface-3);
+  overflow-wrap: anywhere;
+}
+.repository-browser-list {
+  display: grid;
+  gap: 7px;
+  max-height: var(--list-max-height, 520px);
+  overflow: auto;
+}
+.repository-browser-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.repository-browser-entry > div:first-child { min-width: 0; }
+.repository-browser-entry b,
+.repository-browser-entry small { display: block; overflow-wrap: anywhere; }
+.repository-browser-entry small { margin-top: 3px; color: var(--muted); }
+
+@media (max-width: 620px) {
+  .diagnostic-log-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  .diagnostic-log-tabs button { flex: 0 0 auto; }
+  .repository-browser-entry { align-items: stretch; flex-direction: column; }
+  .repository-browser-entry .actions { width: 100%; }
+  .repository-browser-entry .actions button { flex: 1 1 9rem; }
+}

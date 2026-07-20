@@ -4,6 +4,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -44,6 +45,7 @@ from app.config import (
     DATA_DIR,
     EXPORT_DIR,
     RUN_LOG_DIR,
+    DEBUG_LOG_PATH,
     REPOSITORY_PUBLIC_HOST,
     REPOSITORY_ROOT,
     REPOSITORY_SSH_PORT,
@@ -68,6 +70,8 @@ from app.external_repository import (
     public_key_from_private, repository_location_uses_ssh, scan_repository_host_key,
 )
 from app.repository_diagnostics import compact_repository_diagnostic
+from app.system_diagnostics import repository_access_diagnostic
+from app.debug_logging import configure_debug_logging, install_asyncio_exception_handler
 from app.notifications import (
     NotificationSettingsInput, NotificationSettingsOut, NotificationTestIn,
     clear_deliveries, list_deliveries, notification_settings_out,
@@ -862,6 +866,9 @@ def recover_interrupted_runs() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global scheduler
+    configure_debug_logging()
+    loop = asyncio.get_running_loop()
+    previous_exception_handler = install_asyncio_exception_handler(loop)
     # AsyncIOScheduler binds itself to the current event loop when started.
     # Build a fresh instance for every application lifecycle so reloads and
     # clean restarts never reuse a scheduler attached to a closed loop.
@@ -895,9 +902,12 @@ async def lifespan(_: FastAPI):
     cleanup_run_history()
     scheduler.start()
     sync_schedules()
-    yield
-    scheduler.shutdown(wait=False)
-    _archive_cache_locks.clear()
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
+        loop.set_exception_handler(previous_exception_handler)
+        _archive_cache_locks.clear()
 
 
 app = FastAPI(title="BorgBackup Manager", version=APP_VERSION, lifespan=lifespan)
@@ -924,7 +934,13 @@ async def browser_security_headers(request: Request, call_next):
                 return JSONResponse({"detail": "Missing anti-CSRF request header"}, status_code=403)
             if not origin_matches_request(request):
                 return JSONResponse({"detail": "Request origin does not match this BorgBackup Manager"}, status_code=403)
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        logging.getLogger("bbm.http").exception(
+            "Unhandled HTTP exception: %s %s", request.method, request.url.path,
+        )
+        raise
     if request_uses_https(request):
         response.headers["Strict-Transport-Security"] = "max-age=31536000"
     response.headers["Content-Security-Policy"] = (
@@ -1435,10 +1451,17 @@ def system_diagnostics() -> dict:
             "guard_blocked": settings.storage_guard_enabled
             and float(storage["percent"]) >= settings.storage_guard_threshold_percent,
         }
-    borg_log_path = Path("/data/logs/borg-serve.log")
-    sshd_log_path = Path("/data/logs/sshd.log")
-    server_log = borg_log_path.read_text(encoding="utf-8", errors="replace")[-20_000:] if borg_log_path.is_file() else ""
-    sshd_log = sshd_log_path.read_text(encoding="utf-8", errors="replace")[-20_000:] if sshd_log_path.is_file() else ""
+    def read_diagnostic_log(path: Path, limit: int = 20_000) -> str:
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")[-limit:] if path.is_file() else ""
+        except OSError:
+            return ""
+
+    borg_log_path = DATA_DIR / "logs" / "borg-serve.log"
+    sshd_log_path = DATA_DIR / "logs" / "sshd.log"
+    server_log = read_diagnostic_log(borg_log_path)
+    sshd_log = read_diagnostic_log(sshd_log_path)
+    debug_log = read_diagnostic_log(DEBUG_LOG_PATH, 40_000)
     checks = {}
     # The production API already runs as the unprivileged ``borg`` user.
     # Only a root caller may use runuser; manager_borg_argv therefore executes
@@ -1472,20 +1495,14 @@ def system_diagnostics() -> dict:
         if line.strip() and not line.lstrip().startswith("#")
     ] if authorized_keys.is_file() else []
     checks["repository_sshd_listening"] = repository_sshd_listening()
-    checks["authorized_device_keys"] = len(authorized_lines)
-    key_format_valid = all(
-        line.startswith('restrict,command="/usr/local/bin/bbm-borg-serve --repository /repositories/')
-        and " bbm-access-h" in line
-        for line in authorized_lines
-    )
-    checks["repository_access_rows"] = 0
-    checks["repository_access_ready_rows"] = 0
     checks["managed_repositories_shared_across_hosts"] = 0
     with SessionLocal() as db:
-        checks["repository_access_rows"] = db.scalar(select(func.count()).select_from(HostRepositoryAccess)) or 0
-        checks["repository_access_ready_rows"] = db.scalar(
-            select(func.count()).select_from(HostRepositoryAccess).where(HostRepositoryAccess.public_key.is_not(None))
-        ) or 0
+        access_rows = list(db.scalars(
+            select(HostRepositoryAccess)
+            .options(joinedload(HostRepositoryAccess.host))
+            .order_by(HostRepositoryAccess.host_id, HostRepositoryAccess.repository_id)
+        ))
+        checks.update(repository_access_diagnostic(access_rows, authorized_lines))
         shared = db.execute(
             select(Job.repository_id, func.count(func.distinct(Job.host_id)))
             .join(Repository, Repository.id == Job.repository_id)
@@ -1494,19 +1511,11 @@ def system_diagnostics() -> dict:
             .having(func.count(func.distinct(Job.host_id)) > 1)
         ).all()
         checks["managed_repositories_shared_across_hosts"] = len(shared)
-    checks["all_keys_use_forced_command"] = key_format_valid and (
-        len(authorized_lines) == checks["repository_access_ready_rows"]
-    )
-    checks["repository_access_complete"] = (
-        checks["repository_access_rows"]
-        == checks["repository_access_ready_rows"]
-        == len(authorized_lines)
-    ) and checks["all_keys_use_forced_command"]
     return {
         "borg_version": borg_version, "repository_storage": storage,
         "repository_storage_filesystems": filesystems,
         "repository_server_checks": checks, "borg_serve_log": server_log,
-        "sshd_log": sshd_log,
+        "sshd_log": sshd_log, "debug_log": debug_log,
     }
 
 
@@ -1699,6 +1708,67 @@ async def bootstrap_job_repository(job_id: int) -> dict:
 def list_repositories():
     with SessionLocal() as db:
         return [repo_out(x) for x in db.scalars(select(Repository).order_by(Repository.name))]
+
+
+def _safe_repository_browser_path(relative_path: str) -> tuple[Path, Path]:
+    root = REPOSITORY_ROOT.resolve()
+    raw = (relative_path or "").strip().replace("\\", "/").strip("/")
+    if any(part in {"", ".", ".."} for part in raw.split("/") if raw) or "\x00" in raw:
+        raise HTTPException(400, "Ungültiger Repository-Browserpfad")
+    candidate = root
+    for part in raw.split("/") if raw else []:
+        candidate = candidate / part
+        if candidate.is_symlink():
+            raise HTTPException(400, "Symbolische Links werden im Repository-Browser nicht geöffnet")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "Repository-Browserpfad ist nicht vorhanden") from exc
+    except OSError as exc:
+        raise HTTPException(400, f"Repository-Browserpfad kann nicht geöffnet werden: {exc}") from exc
+    if resolved != root and root not in resolved.parents:
+        raise HTTPException(400, "Repository-Browserpfad liegt außerhalb von /repositories")
+    if not resolved.is_dir():
+        raise HTTPException(400, "Repository-Browserpfad ist kein Verzeichnis")
+    return root, resolved
+
+
+@app.get("/api/repositories/browse", dependencies=admin_protected)
+def browse_repository_directories(path: str = "") -> dict:
+    root, current = _safe_repository_browser_path(path)
+    try:
+        children = sorted(current.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold()))
+    except OSError as exc:
+        raise HTTPException(400, f"Repository-Verzeichnis kann nicht gelesen werden: {exc}") from exc
+    entries = []
+    truncated = len(children) > 500
+    for child in children[:500]:
+        try:
+            if child.is_symlink():
+                kind = "symlink"
+                is_directory = False
+                is_repository = False
+            else:
+                is_directory = child.is_dir()
+                kind = "directory" if is_directory else "file"
+                is_repository = is_directory and (child / "config").is_file()
+            relative = child.relative_to(root).as_posix()
+            stat_result = child.stat(follow_symlinks=False)
+            entries.append({
+                "name": child.name, "path": relative, "type": kind,
+                "is_directory": is_directory, "is_repository": is_repository,
+                "selectable": is_repository and child.parent == root,
+                "size": stat_result.st_size if not is_directory else None,
+                "modified_at": datetime.fromtimestamp(stat_result.st_mtime, timezone.utc).isoformat(),
+            })
+        except OSError:
+            continue
+    relative_current = "" if current == root else current.relative_to(root).as_posix()
+    parent = None if current == root else ("" if current.parent == root else current.parent.relative_to(root).as_posix())
+    return {
+        "root": str(root), "path": relative_current, "parent": parent,
+        "entries": entries, "truncated": truncated,
+    }
 
 
 @app.get("/api/repositories/discover", dependencies=admin_protected)

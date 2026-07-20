@@ -8,6 +8,7 @@ DATA_DIR = Path(os.getenv("BBM_DATA_DIR", "data"))
 BACKUP_DIR = DATA_DIR / "backups"
 EXPORT_DIR = DATA_DIR / "exports"
 RUN_LOG_DIR = DATA_DIR / "run-logs"
+DEBUG_LOG_PATH = Path(os.getenv("BBM_DEBUG_LOG_PATH", str(DATA_DIR / "logs" / "debug.log")))
 ARCHIVE_CACHE_DIR = Path(os.getenv("BBM_ARCHIVE_CACHE_DIR", str(DATA_DIR / "archive-cache")))
 SETTINGS_PATH = DATA_DIR / "settings.json"
 NOTIFICATION_SETTINGS_PATH = DATA_DIR / "notifications.json"
