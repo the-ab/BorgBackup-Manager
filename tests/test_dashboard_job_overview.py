@@ -41,3 +41,13 @@ def test_dashboard_uses_compact_stacked_job_metadata_blocks():
     assert "${sourceLabel} · ${esc(checked)}" in javascript
     assert ".dashboard-size-stack > span" in stylesheet
     assert "grid-template-columns: minmax(6.8rem, 1fr) auto" in stylesheet
+
+
+def test_dashboard_inline_warning_status_does_not_inherit_warning_box_spacing():
+    stylesheet = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+
+    assert ".warning:not(.badge):not(.status-text)" in stylesheet
+    assert ".notice, .warning:not(.badge):not(.status-text), .diagnosis-box" in stylesheet
+    assert "body.compact .warning:not(.badge):not(.status-text)" in stylesheet
+    assert ".status-text.warning { color: var(--warning); }" in stylesheet
+    assert ".warning { background: var(--warning-soft); color: var(--warning); }" not in stylesheet

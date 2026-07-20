@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.0.53
+# Installation and Operations — BorgBackup Manager 1.0.54
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.0.53.zip
+BorgBackup-Manager-1.0.54.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.53.zip
+unzip /path/BorgBackup-Manager-1.0.54.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.0.53.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.0.54.zip.sha256
 ```
 
 ## 3. Guided installation

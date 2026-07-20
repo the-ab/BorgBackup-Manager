@@ -328,10 +328,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 details { border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); }
 details > summary { padding: 10px 12px; cursor: pointer; font-weight: 700; }
 details > :not(summary) { margin-left: 12px; margin-right: 12px; }
-.hint, .notice, .warning { margin: 0; font-size: .82rem; }
-.notice, .warning, .diagnosis-box { padding: 12px 14px; border-radius: 9px; }
+.hint, .notice, .warning:not(.badge):not(.status-text) { margin: 0; font-size: .82rem; }
+.notice, .warning:not(.badge):not(.status-text), .diagnosis-box { padding: 12px 14px; border-radius: 9px; }
 .notice { background: var(--primary-soft); color: var(--text); }
-.warning { background: var(--warning-soft); color: var(--warning); }
+.warning:not(.badge):not(.status-text) { background: var(--warning-soft); color: var(--warning); }
 .key-box { display: block; max-height: 120px; overflow: auto; padding: 11px; border-radius: 8px; background: var(--surface-3); word-break: break-all; }
 
 .bounded-list { max-height: var(--list-max-height); overflow: auto; padding-right: 3px; }
@@ -951,7 +951,7 @@ body.compact .table-actions button { min-height: 26px !important; padding: 3px 6
 body.compact .badge { min-height: 19px; padding: 2px 6px; font-size: .64rem; }
 body.compact .hint,
 body.compact .notice,
-body.compact .warning { font-size: .74rem; }
+body.compact .warning:not(.badge):not(.status-text) { font-size: .74rem; }
 body.compact .entity,
 body.compact .run { gap: 10px; padding: 7px 1px; }
 body.compact .log-console { font-size: .75rem; line-height: 1.42; }
@@ -1787,3 +1787,6 @@ body.compact .job-action-buttons button { min-height: 27px !important; padding: 
   .repository-browser-entry .actions { width: 100%; }
   .repository-browser-entry .actions button { flex: 1 1 9rem; }
 }
+
+
+/* 1.0.54: keep inline warning status text separate from warning notice boxes */

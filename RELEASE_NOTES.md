@@ -1,5 +1,22 @@
 # Release Notes
 
+## v1.0.54
+
+### Dashboard warning indicator
+
+- The inline **Warning** status in the dashboard backup-job table no longer inherits the padding, rounded background and enlarged typography of a full warning notice box.
+- Warning notice boxes and warning badges retain their existing appearance. The CSS selectors now distinguish inline status text, badges and notice containers explicitly, including compact display mode.
+
+### Static demo alignment
+
+- The separately supplied standalone demo was checked again against the v1.0.54 interface. Repository **Usage** now shows the number of assigned jobs and devices, while repository size remains in the separate **Size** column.
+- Dashboard backup metadata, backup-job lists, schedules, users and repository rows now follow the structures and labels of the real interface more closely.
+
+### Verification
+
+- A regression test protects inline warning status text from inheriting warning-box spacing.
+- The static demo was rendered and checked with dummy repositories, devices, jobs, schedules, users and runs.
+
 ## v1.0.53
 
 ### Diagnostics for disabled devices

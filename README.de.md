@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.53
+# BorgBackup Manager 1.0.54
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -30,7 +30,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.0.53.zip
+BorgBackup-Manager-1.0.54.zip
 ```
 
 ## Sicherheit und Härtung
@@ -670,7 +670,7 @@ Release Notes werden passend zur persönlichen Spracheinstellung auf Deutsch ode
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.53.zip
+unzip /pfad/BorgBackup-Manager-1.0.54.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh

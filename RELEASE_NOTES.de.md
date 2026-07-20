@@ -1,5 +1,22 @@
 # Release Notes
 
+## v1.0.54
+
+### Warnungsmarkierung im Dashboard
+
+- Der Inline-Status **Warnung** in der Backup-Job-Tabelle des Dashboards übernimmt nicht mehr die Innenabstände, den abgerundeten Hintergrund und die vergrößerte Schrift einer vollständigen Warnhinweis-Box.
+- Warnhinweis-Boxen und Warnungs-Badges behalten ihre bisherige Darstellung. Die CSS-Selektoren unterscheiden jetzt ausdrücklich zwischen Inline-Statustext, Badge und Hinweiscontainer, einschließlich der kompakten Darstellung.
+
+### Statische Demo abgeglichen
+
+- Die separat bereitgestellte eigenständige Demo wurde erneut mit der Oberfläche von v1.0.54 abgeglichen. Unter Repository **Nutzung** stehen jetzt die Anzahl der zugeordneten Jobs und Geräte; die Repository-Größe bleibt in der getrennten Spalte **Größe**.
+- Dashboard-Metadaten, Backup-Job-Liste, Zeitpläne, Benutzer und Repository-Zeilen entsprechen nun genauer der Struktur und den Bezeichnungen der echten Oberfläche.
+
+### Prüfung
+
+- Ein Regressionstest verhindert, dass der Inline-Warnungsstatus erneut Abstände einer Warnhinweis-Box übernimmt.
+- Die statische Demo wurde mit Dummy-Repositorys, Geräten, Jobs, Zeitplänen, Benutzern und Ausführungen gerendert und geprüft.
+
 ## v1.0.53
 
 ### Diagnose bei deaktivierten Geräten
