@@ -78,7 +78,8 @@ from app.notifications import (
     save_notification_settings, send_test_notification,
 )
 from app.repository_state import managed_repository_present
-from app.log_filter import extract_error_output
+from app.release import APP_RELEASE_DATE
+from app.log_filter import extract_error_output, strip_borg_item_lines
 from app.models import ArchiveMount, BackupSchedule, Host, HostRepositoryAccess, Job, JobIdReservation, Repository, Run
 from app.runner import (
     archive_export_command,
@@ -136,7 +137,7 @@ from app.repository_sizes import (
     managed_repository_filesystem_size, repository_statistics_from_borg_info,
     store_repository_statistics,
 )
-from app.run_logs import append_run_log, cleanup_orphan_run_logs, delete_run_log, read_run_log, run_log_path, run_log_storage_bytes
+from app.run_logs import append_run_log, cleanup_orphan_run_logs, delete_run_log, read_run_log, read_run_log_delta, run_log_path, run_log_storage_bytes
 from app.settings import load_settings, save_settings
 from app.storage_guard import effective_storage_guard, repository_storage_filesystems
 from app.time_utils import APP_TIMEZONE, APP_TIMEZONE_NAME, iso_utc, normalize_borg_timestamp
@@ -570,6 +571,17 @@ def assign_archive_owners(archives: list[dict], repository_jobs: list[Job], sele
     return archives
 
 
+def archive_owner_job(archive_name: str, repository_jobs: list[Job]) -> Job | None:
+    """Return the most specific job whose archive prefix owns ``archive_name``."""
+    candidates = [
+        (prefix, job)
+        for job in repository_jobs
+        for prefix in job_archive_prefixes(job)
+        if archive_name.startswith(prefix)
+    ]
+    return max(candidates, key=lambda item: len(item[0]))[1] if candidates else None
+
+
 def _archive_device_key(value: str | None) -> str:
     normalized = unicodedata.normalize("NFKD", str(value or "")).casefold()
     return "".join(character for character in normalized if character.isalnum())
@@ -812,16 +824,25 @@ def migrate_run_payloads_to_files() -> int:
             )
         ).all()
         for row in rows:
+            changed = False
             combined = row.log_output or (row.output + ("\n" if row.output and row.error else "") + row.error)
             if combined and not run_log_path(row.id).is_file():
                 append_run_log(row.id, combined, max_file_bytes)
-            new_output = (row.output or "")[-preview_stdout:]
-            new_error = extract_error_output(row.error or "")[-preview_stderr:]
-            new_log = (combined or "")[-preview_log:]
+            if row.action == "backup" and row.status == "warning" and not row.warning_summary_json:
+                summary = parse_borg_warnings(combined)
+                if summary:
+                    row.warning_summary_json = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
+                    changed = True
+            new_output = strip_borg_item_lines(row.output or "")[-preview_stdout:]
+            new_error = strip_borg_item_lines(extract_error_output(row.error or ""))[-preview_stderr:]
+            preview_parts = [part for part in (new_output, new_error) if part]
+            new_log = "\n".join(preview_parts)[-preview_log:]
             if row.output != new_output or row.error != new_error or row.log_output != new_log:
                 row.output = new_output
                 row.error = new_error
                 row.log_output = new_log
+                changed = True
+            if changed:
                 migrated += 1
         if migrated:
             db.commit()
@@ -1333,6 +1354,7 @@ def system_info() -> dict:
         public_key = None
     return {
         "app_version": APP_VERSION,
+        "release_date": APP_RELEASE_DATE,
         "controller_public_key": public_key,
         "repository_endpoint": f"{REPOSITORY_PUBLIC_HOST}:{REPOSITORY_SSH_PORT}",
         "backup_directory": str(BACKUP_DIR),
@@ -2724,13 +2746,29 @@ async def rename_archive(job_id: int, data: ArchiveRenameIn) -> dict:
 @app.post("/api/jobs/{job_id}/archive-diff", status_code=202, dependencies=admin_protected)
 async def diff_archives(job_id: int, data: ArchiveDiffIn) -> dict:
     with SessionLocal() as db:
-        job = load_job_with_connections(db, job_id, require_client_access=False)
-    names = await repository_archive_names(job)
+        requested_job = load_job_with_connections(db, job_id, require_client_access=False)
+        repository_jobs = list(db.scalars(
+            select(Job)
+            .options(joinedload(Job.host), joinedload(Job.repository))
+            .where(Job.repository_id == requested_job.repository_id)
+        ))
+        first_owner = archive_owner_job(data.archive, repository_jobs)
+        second_owner = archive_owner_job(data.second_archive, repository_jobs)
+        # Archive comparisons are repository-side operations. When both selected
+        # archives belong to the same job, use that actual owner for the run
+        # label instead of whichever repository job happened to be created first.
+        effective_job = (
+            first_owner
+            if first_owner and second_owner and first_owner.id == second_owner.id
+            else requested_job
+        )
+        db.expunge(effective_job)
+    names = await repository_archive_names(effective_job)
     missing = [name for name in (data.archive, data.second_archive) if name not in names]
     if missing:
         raise HTTPException(404, f"Archive not found: {', '.join(missing)}")
     try:
-        return {"run_id": queue_job_action(job_id, "diff-archives", data.model_dump())}
+        return {"run_id": queue_job_action(effective_job.id, "diff-archives", data.model_dump())}
     except (LookupError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -2980,12 +3018,34 @@ async def unmount_archive(mount_id: int):
     return Response(status_code=204)
 
 
-def run_json(row: Run, *, include_details: bool = True) -> dict:
+def run_json(
+    row: Run,
+    *,
+    include_details: bool = True,
+    log_max_bytes: int | None = None,
+    log_offset: int | None = None,
+) -> dict:
     file_log = None
+    live_log_offset: int | None = None
+    live_log_reset = False
+    live_log_truncated = False
     if include_details:
         settings = load_settings()
-        file_log = read_run_log(row.id, settings.run_log_view_kib * 1024)
-        combined = file_log or row.log_output or ((row.output or "") + ("\n" if row.output and row.error else "") + (row.error or ""))
+        effective_log_max = settings.run_log_view_kib * 1024
+        if log_max_bytes is not None:
+            effective_log_max = min(effective_log_max, max(64 * 1024, int(log_max_bytes)))
+        if log_offset is not None:
+            delta = read_run_log_delta(row.id, log_offset, effective_log_max)
+            file_log = str(delta["text"])
+            live_log_offset = int(delta["offset"])
+            live_log_reset = bool(delta["reset"])
+            live_log_truncated = bool(delta["truncated"])
+        else:
+            file_log = read_run_log(row.id, effective_log_max)
+        if log_offset is not None:
+            combined = file_log or ""
+        else:
+            combined = file_log or row.log_output or ((row.output or "") + ("\n" if row.output and row.error else "") + (row.error or ""))
     else:
         # Lists use only the bounded SQLite preview. The complete output is
         # read from /data/run-logs exclusively for the selected execution.
@@ -2994,7 +3054,8 @@ def run_json(row: Run, *, include_details: bool = True) -> dict:
     # The complete file log can be compacted and the bounded database log keeps
     # only a tail. The separately filtered stderr preview therefore remains an
     # important source for warning causes such as ``C``/``E`` item lines.
-    diagnostic_text = combined + ("\n" + row.error if row.error else "")
+    diagnostic_base = (row.log_output or row.output or "") if log_offset is not None else combined
+    diagnostic_text = diagnostic_base + ("\n" + row.error if row.error else "")
     # Live fragments are not reliable enough for an error diagnosis. In
     # particular Borg can emit transient passphrase-related helper text before
     # a successful final result. Diagnostics are therefore final-state only.
@@ -3029,13 +3090,14 @@ def run_json(row: Run, *, include_details: bool = True) -> dict:
         elif finished.tzinfo is None:
             finished = finished.replace(tzinfo=timezone.utc)
         duration = max(0, int((finished - started).total_seconds()))
-    version = row.borg_version if version_tuple(row.borg_version) else parse_borg_version(combined)
+    version_source = diagnostic_text if log_offset is not None else combined
+    version = row.borg_version if version_tuple(row.borg_version) else parse_borg_version(version_source)
     compatibility = classify_borg_version(version) if version else None
     display_error = extract_error_output(row.error or "")
     if not display_error and row.status in {"failed", "warning"}:
         display_error = extract_error_output(diagnostic_text)
     backup_statistics = {}
-    if row.action == "backup":
+    if row.action == "backup" and log_offset is None:
         backup_statistics = parse_backup_statistics(combined)
     return {
         "id": row.id, "job_id": row.job_id,
@@ -3043,7 +3105,9 @@ def run_json(row: Run, *, include_details: bool = True) -> dict:
         "action": row.action, "status": row.status,
         "command_preview": row.command_preview if include_details else "",
         "output": row.output if include_details else "", "error": display_error if include_details else "",
-        "log_output": combined if include_details else "", "log_file_available": bool(file_log),
+        "log_output": combined if include_details else "",
+        "log_file_available": run_log_path(row.id).is_file(),
+        "log_offset": live_log_offset, "log_reset": live_log_reset, "log_truncated": live_log_truncated,
         "created_at": iso_utc(row.created_at), "started_at": iso_utc(row.started_at), "finished_at": iso_utc(row.finished_at),
         "duration_seconds": duration, "diagnosis": diagnosis,
         "warning_summary": warning_summary,
@@ -3182,11 +3246,18 @@ def cleanup_runs(data: RunCleanupIn):
 
 
 @app.get("/api/runs/{run_id}", dependencies=admin_protected)
-def get_run(run_id: int):
+def get_run(run_id: int, include_details: bool = True, live: bool = False, log_offset: int | None = None):
     with SessionLocal() as db:
         row = db.scalar(select(Run).options(joinedload(Run.job)).where(Run.id == run_id))
         if not row: raise HTTPException(404, "Run not found")
-        return run_json(row)
+        return run_json(
+            row,
+            include_details=include_details,
+            # Active live polling needs a representative head/tail window, not
+            # the complete configured multi-megabyte view on every request.
+            log_max_bytes=256 * 1024 if live else None,
+            log_offset=log_offset if live else None,
+        )
 
 
 @app.get("/api/backups", dependencies=admin_protected)

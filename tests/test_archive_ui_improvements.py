@@ -53,3 +53,17 @@ def test_archive_browser_uses_file_table_with_metadata_columns():
         assert heading in javascript
     assert ".archive-browser-table" in css
     assert "entry.mode" in javascript and "entry.user" in javascript
+
+
+def test_archive_diff_uses_selected_owner_job_and_readable_output():
+    html = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    runner = (PROJECT_ROOT / "app/runner.py").read_text(encoding="utf-8")
+    main = (PROJECT_ROOT / "app/main.py").read_text(encoding="utf-8")
+    assert 'id="archive-diff-context"' in html
+    assert "const ownerJobId = firstJobId && secondJobId" in javascript
+    assert "archive_owner_job(data.archive, repository_jobs)" in main
+    assert "first_owner.id == second_owner.id" in main
+    assert 'parts = [*_borg_base("diff")]' in runner
+    assert '"--json-lines"' not in runner.split("def diff_archives_command", 1)[1].split("def browse_archive_command", 1)[0]
+    assert "ARCHIVVERGLEICH" in runner

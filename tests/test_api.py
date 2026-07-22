@@ -2892,3 +2892,83 @@ def test_editing_job_source_configuration_clears_stale_source_statistics():
     assert row.source_file_count is None
     assert row.source_stats_checked_at is None
     assert row.source_stats_origin is None
+
+
+def test_run_json_can_limit_active_live_log_window(monkeypatch):
+    requested_limits = []
+
+    def fake_read_run_log(_run_id, max_bytes):
+        requested_limits.append(max_bytes)
+        return "live output"
+
+    monkeypatch.setattr(main_module, "read_run_log", fake_read_run_log)
+    row = Run(id=10001, action="backup", status="running", log_output="preview")
+    payload = main_module.run_json(row, log_max_bytes=256 * 1024)
+
+    assert requested_limits == [256 * 1024]
+    assert payload["log_output"] == "live output"
+
+
+def test_run_json_uses_offset_based_live_delta(monkeypatch):
+    requested = []
+
+    def fake_delta(run_id, offset, max_bytes):
+        requested.append((run_id, offset, max_bytes))
+        return {"text": "new lines\n", "offset": 1234, "reset": False, "truncated": False}
+
+    monkeypatch.setattr(main_module, "read_run_log_delta", fake_delta)
+    monkeypatch.setattr(main_module, "run_log_path", lambda _run_id: Path("/tmp/does-not-exist"))
+    row = Run(id=10002, action="backup", status="running", log_output="old preview")
+    payload = main_module.run_json(row, log_max_bytes=256 * 1024, log_offset=999)
+
+    assert requested == [(10002, 999, 256 * 1024)]
+    assert payload["log_output"] == "new lines\n"
+    assert payload["log_offset"] == 1234
+    assert payload["log_reset"] is False
+
+
+def test_execute_run_keeps_raw_file_list_out_of_sqlite_previews(monkeypatch):
+    suffix = str(time.time_ns())
+    raw_error = (
+        "A srv/data/one.txt\n"
+        "M srv/data/two.txt\n"
+        "C var/lib/app/live.db\n"
+        "terminating with warning status, rc 1\n"
+    )
+
+    async def warning_execute(_command, on_output_bytes=None, **_kwargs):
+        assert on_output_bytes is not None
+        await on_output_bytes("stdout", b"BACKUP-JOB: database-preview\n")
+        await on_output_bytes("stderr", raw_error.encode())
+        return 1, "BACKUP-JOB: database-preview\n", raw_error
+
+    monkeypatch.setattr(service, "execute", warning_execute)
+
+    with SessionLocal() as db:
+        repository = Repository(
+            name=f"db-preview-{suffix}", location=f"/tmp/db-preview-{suffix}", initialized=True,
+        )
+        db.add(repository)
+        db.flush()
+        run = Run(
+            repository_id=repository.id, job_id=None, job_name_snapshot="Database preview",
+            action="backup", status="queued", command_preview="borg create",
+        )
+        db.add(run)
+        db.commit()
+        run_id = run.id
+
+    asyncio.run(service.execute_run(
+        run_id, runner.Command(argv=["true"], preview="borg create"), refresh_size_after=False,
+    ))
+
+    with SessionLocal() as db:
+        completed = db.get(Run, run_id)
+        assert completed.status == "warning"
+        assert "srv/data/one.txt" not in completed.output
+        assert "srv/data/one.txt" not in completed.error
+        assert "srv/data/one.txt" not in completed.log_output
+        assert "srv/data/two.txt" not in completed.log_output
+        assert "var/lib/app/live.db" not in completed.error
+        assert "var/lib/app/live.db" not in completed.log_output
+        assert "var/lib/app/live.db" in completed.warning_summary_json

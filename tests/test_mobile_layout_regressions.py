@@ -44,3 +44,16 @@ def test_system_diagnostics_use_responsive_status_cards_and_wrapped_logs():
     assert "#system-diagnostics pre" in css
     assert "white-space: pre-wrap;" in css
     assert "overflow-wrap: anywhere;" in css
+
+
+def test_compact_job_schedule_and_archive_forms_stack_on_mobile():
+    html = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+
+    assert 'class="job-create-layout"' in html
+    assert 'class="schedule-create-layout"' in html
+    assert 'class="panel archive-compare archive-compare-compact"' in html
+    assert """.job-create-layout,
+  .schedule-create-layout,
+  .archive-compare-grid { grid-template-columns: 1fr; }""" in css
+    assert ".schedule-editor-head { align-items: stretch; flex-direction: column; }" in css

@@ -93,3 +93,26 @@ def test_remote_status_and_unmatched_pattern_are_detected():
 
 def test_lowercase_file_type_status_is_not_misclassified_as_changed():
     assert parse_borg_warnings("c dev/ttyS0\n") is None
+
+
+def test_full_file_listing_fast_path_skips_normal_status_regexes(monkeypatch):
+    import app.borg_warnings as warnings_module
+
+    original = warnings_module._warning_item
+    calls = []
+
+    def counted(line):
+        calls.append(line)
+        return original(line)
+
+    monkeypatch.setattr(warnings_module, "_warning_item", counted)
+    collector = warnings_module.BorgWarningCollector(max_items=10)
+    normal = "".join(f"A srv/data/file-{index}\n" for index in range(5000))
+    collector.feed(normal + "C srv/data/live.db\nE srv/data/unreadable\n", stream="stderr")
+    collector.finalize()
+
+    summary = collector.summary()
+    assert summary is not None
+    assert summary["changed_count"] == 1
+    assert summary["error_count"] == 1
+    assert len(calls) == 2

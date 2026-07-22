@@ -6,7 +6,7 @@ cd "$project_root"
 
 required_files=(
   LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md
-  .gitignore .dockerignore
+  .gitignore .dockerignore VERSION app/release.py
 )
 for file in "${required_files[@]}"; do
   test -s "$file" || { echo "Missing required release file: $file" >&2; exit 1; }

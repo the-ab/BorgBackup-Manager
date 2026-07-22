@@ -1,7 +1,7 @@
 const state = {
   currentUser: null, users: [], securityStatus: null,
   hosts: [], repos: [], jobs: [], schedules: [], runs: [], mounts: [], system: {}, settings: null, backups: [], runStorage: null, notifications: null, notificationDeliveries: [],
-  liveRunId: null, liveTimer: null, refreshTimer: null,
+  liveRunId: null, liveLogOffset: 0, liveLogSession: 0, liveLogRequestPending: false, liveTimer: null, refreshTimer: null,
   archiveData: null, archiveRequestId: 0, archiveSelection: new Set(), activeBrowser: null, browserPath: '', browserSelection: new Set(),
   openJobActions: new Set(), backgroundRefresh: false,
   runFilter: 'all', runSearch: '', jobSearch: '', jobStatus: 'all',
@@ -151,6 +151,30 @@ function serverDate(value) {
 function formatDate(value) {
   const date = serverDate(value);
   return date ? dateFormatter.format(date) : '–';
+}
+
+
+function runActionLabel(action) {
+  const labels = currentLanguage() === 'en' ? {
+    backup: 'Backup', 'diff-archives': 'Compare archives', restore: 'Restore',
+    prune: 'Retention', compact: 'Compact', check: 'Repository check',
+    verify: 'Full verification', info: 'Job info', probe: 'Connection test',
+    'source-stats': 'Source statistics', 'delete-archive': 'Delete archive',
+    'rename-archive': 'Rename archive', version: 'Borg version',
+  } : {
+    backup: 'Backup', 'diff-archives': 'Archive vergleichen', restore: 'Wiederherstellung',
+    prune: 'Aufbewahrung', compact: 'Compact', check: 'Repository-Prüfung',
+    verify: 'Vollprüfung', info: 'Job-Info', probe: 'Verbindungstest',
+    'source-stats': 'Quellenstatistik', 'delete-archive': 'Archiv löschen',
+    'rename-archive': 'Archiv umbenennen', version: 'Borg-Version',
+  };
+  return labels[action] || action || (currentLanguage() === 'en' ? 'Run' : 'Ausführung');
+}
+
+function formatReleaseDate(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return '';
+  return currentLanguage() === 'en' ? `${match[1]}-${match[2]}-${match[3]}` : `${match[3]}.${match[2]}.${match[1]}`;
 }
 
 function archiveTimestampFromName(name) {
@@ -703,7 +727,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.56`, {cache: 'no-store'});
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.62`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -905,15 +929,47 @@ function watchRunCompletion(runId, context = {}) {
 async function pollRun(runId) {
   const tracker = state.actionRuns.get(runId);
   if (!tracker) return;
+  let ownsLiveRequest = false;
+  let requestedOffset = 0;
+  let liveSession = state.liveLogSession;
   try {
-    const run = await api('/runs/' + runId);
+    const liveDialogOpen = state.liveRunId === runId && $('#log-dialog').open;
+    const requestLiveLog = liveDialogOpen && !state.liveLogRequestPending;
+    requestedOffset = Number(state.liveLogOffset || 0);
+    liveSession = state.liveLogSession;
+    if (requestLiveLog) {
+      state.liveLogRequestPending = true;
+      ownsLiveRequest = true;
+    }
+    const liveQuery = requestLiveLog
+      ? `?live=true&log_offset=${requestedOffset}`
+      : '?include_details=false';
+    let run = await api('/runs/' + runId + liveQuery);
     updateActiveRun(run);
     if (!tracker.repositoryId && run.job_id) tracker.repositoryId = state.jobs.find((job) => job.id === run.job_id)?.repository_id || null;
-    if (state.liveRunId === runId && $('#log-dialog').open) renderRunDialog(run);
+    const sameLiveSession = state.liveRunId === runId && state.liveLogSession === liveSession && $('#log-dialog').open;
+    if (requestLiveLog && sameLiveSession) {
+      // Ignore a stale response when another request has already advanced the
+      // file offset. This prevents the same header block from being appended
+      // repeatedly when the dialog is opened while a status poll is in flight.
+      const currentOffset = Number(state.liveLogOffset || 0);
+      if (run.log_reset || currentOffset === requestedOffset) {
+        renderRunDialog(run, {appendLog: true});
+        if (run.log_offset != null) state.liveLogOffset = Number(run.log_offset);
+      }
+    }
     if (activeRunStatus(run.status)) {
       setSyncState(`Ausführung #${runId} ${run.status === 'queued' ? 'wartet' : 'läuft'} …`, 'pending', true);
-      tracker.timer = setTimeout(() => pollRun(runId), 850);
+      tracker.timer = setTimeout(() => pollRun(runId), liveDialogOpen ? 1800 : 1500);
       return;
+    }
+    if (sameLiveSession) {
+      // Load the configured complete view exactly once after completion. During
+      // the run a bounded head/tail view avoids repeatedly reading and encoding
+      // several megabytes of file-list output.
+      run = await api('/runs/' + runId);
+      updateActiveRun(run);
+      renderRunDialog(run);
     }
     await refreshAreas(tracker.areas, `Ausführung #${runId} abgeschlossen · Ansichten werden aktualisiert …`);
     state.actionRuns.delete(runId);
@@ -927,6 +983,8 @@ async function pollRun(runId) {
   } catch (error) {
     tracker.timer = setTimeout(() => pollRun(runId), 1500);
     setSyncState(`Status von Ausführung #${runId} wird erneut abgefragt …`, 'pending', true);
+  } finally {
+    if (ownsLiveRequest && state.liveLogSession === liveSession) state.liveLogRequestPending = false;
   }
 }
 
@@ -1152,7 +1210,7 @@ function renderJobs() {
     const open = state.openJobActions.has(job.id);
     const admin = state.currentUser?.role === 'admin';
     const jobLink = admin ? `<button class="entity-link" ${bbmAction('editJob', job.id)}>${esc(job.name)}</button>` : `<b>${esc(job.name)}</b>`;
-    const manageSection = admin ? `<section class="job-action-group"><div class="job-action-heading"><h4>Verwalten</h4></div><div class="job-action-buttons"><button class="${job.enabled ? 'danger ghost' : 'secondary'}" ${bbmAction('setJobEnabled', job.id, !job.enabled)}>${job.enabled ? 'Deaktivieren' : 'Aktivieren'}</button><button ${bbmAction('editJob', job.id)}>Job bearbeiten</button><button class="danger" ${bbmAction('removeEntity', 'jobs', job.id)}>Job löschen</button></div></section>` : '';
+    const manageSection = admin ? `<section class="job-action-group"><div class="job-action-heading"><h4>Verwalten</h4></div><div class="job-action-buttons"><button class="${job.enabled ? 'danger ghost' : 'secondary'}" ${bbmAction('setJobEnabled', job.id, !job.enabled)}>${job.enabled ? 'Deaktivieren' : 'Aktivieren'}</button><button class="danger" ${bbmAction('removeEntity', 'jobs', job.id)}>Job löschen</button></div></section>` : '';
     const relocationButton = admin ? `<button class="secondary" ${bbmAction('confirmRepositoryLocation', job.id)}>Geänderten Repository-Standort bestätigen</button>` : '';
     const accessRequired = Boolean(repo?.managed);
     const accessReady = !accessRequired || job.repository_access_ready;
@@ -1173,7 +1231,7 @@ function renderJobs() {
     if (!admin) {
       return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span>${!repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><span class="muted">Nur Ansicht</span></td></tr>`;
     }
-    return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span>${!repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><div class="table-actions"><button ${bbmAction('action', job.id, 'backup')} ${startDisabled ? 'disabled' : ''} title="${esc(startTitle)}">Starten</button><button class="secondary" ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button><button class="secondary" data-job-toggle="${job.id}" ${bbmAction('toggleJobActions', job.id)}>${open ? 'Weniger' : 'Mehr'}</button></div></td></tr><tr class="job-detail-row ${open ? '' : 'hidden'}" data-job-detail="${job.id}"><td colspan="7"><div class="job-more-grid"><section class="job-action-group job-action-group-wide"><div class="job-action-heading"><h4>Prüfen</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'probe')} ${accessReady && repositoryReady ? '' : 'disabled'}>Verbindung</button><button ${bbmAction('action', job.id, 'info')} ${accessReady && repositoryReady ? '' : 'disabled'}>Job-Info</button><button ${bbmAction('action', job.id, 'version')}>Borg-Version</button><button ${bbmAction('action', job.id, 'source-stats')} ${host?.enabled ? '' : 'disabled'}>Quellenstatistik</button><button ${bbmAction('action', job.id, 'check')} ${accessReady && repositoryReady ? '' : 'disabled'}>Repository</button><button ${bbmAction('action', job.id, 'verify')} ${accessReady && repositoryReady ? '' : 'disabled'}>Vollprüfung</button>${relocationButton}</div></section>${accessSection}<section class="job-action-group"><div class="job-action-heading"><h4>Speicherpflege</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'prune')} ${accessReady && repositoryReady ? '' : 'disabled'}>Aufbewahrung</button><button ${bbmAction('action', job.id, 'compact')} ${accessReady && repositoryReady ? '' : 'disabled'}>Compact</button><button ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button></div></section>${manageSection}</div></td></tr>`;
+    return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span>${!repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><div class="table-actions"><button ${bbmAction('action', job.id, 'backup')} ${startDisabled ? 'disabled' : ''} title="${esc(startTitle)}">Starten</button><button class="secondary" ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button><button class="secondary" ${bbmAction('editJob', job.id)}>Bearbeiten</button><button class="secondary" data-job-toggle="${job.id}" ${bbmAction('toggleJobActions', job.id)}>${open ? 'Weniger' : 'Mehr'}</button></div></td></tr><tr class="job-detail-row ${open ? '' : 'hidden'}" data-job-detail="${job.id}"><td colspan="7"><div class="job-more-grid"><section class="job-action-group job-action-group-wide"><div class="job-action-heading"><h4>Prüfen</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'probe')} ${accessReady && repositoryReady ? '' : 'disabled'}>Verbindung</button><button ${bbmAction('action', job.id, 'info')} ${accessReady && repositoryReady ? '' : 'disabled'}>Job-Info</button><button ${bbmAction('action', job.id, 'version')}>Borg-Version</button><button ${bbmAction('action', job.id, 'source-stats')} ${host?.enabled ? '' : 'disabled'}>Quellenstatistik</button><button ${bbmAction('action', job.id, 'check')} ${accessReady && repositoryReady ? '' : 'disabled'}>Repository</button><button ${bbmAction('action', job.id, 'verify')} ${accessReady && repositoryReady ? '' : 'disabled'}>Vollprüfung</button>${relocationButton}</div></section>${accessSection}<section class="job-action-group"><div class="job-action-heading"><h4>Speicherpflege</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'prune')} ${accessReady && repositoryReady ? '' : 'disabled'}>Aufbewahrung</button><button ${bbmAction('action', job.id, 'compact')} ${accessReady && repositoryReady ? '' : 'disabled'}>Compact</button><button ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button></div></section>${manageSection}</div></td></tr>`;
   }).join('');
   list.innerHTML = `<div class="table-scroll"><table class="data-table jobs-table"><thead><tr><th>Status</th><th>Job</th><th>Gerät</th><th>Repository</th><th>Quellen</th><th>Zeitplan</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -1315,7 +1373,8 @@ function renderSystem() {
   $('#controller-key').textContent = controllerKey;
   const settingsKey = $('#settings-controller-key');
   if (settingsKey) settingsKey.textContent = controllerKey;
-  $('#version-link').textContent = 'v' + (state.system.app_version || '?');
+  const releaseDate = formatReleaseDate(state.system.release_date);
+  $('#version-link').textContent = 'v' + (state.system.app_version || '?') + (releaseDate ? ` · ${releaseDate}` : '');
   $('#backup-path').textContent = state.system.backup_directory || '';
 }
 
@@ -1852,10 +1911,36 @@ function renderWarningCauses(summary) {
   box.classList.remove('hidden');
 }
 
-function renderRunDialog(run) {
-  $('#log-dialog h2').textContent = `${run.job_name || 'Repository-Verwaltung'} · ${run.action}`;
-  const readable = (run.log_output || `${run.output || ''}\n${run.error || ''}`).trim();
-  $('#log-content').textContent = readable || 'Noch keine Ausgabe vorhanden …';
+function renderRunDialog(run, {appendLog = false} = {}) {
+  $('#log-dialog h2').textContent = `${run.job_name || 'Repository-Verwaltung'} · ${runActionLabel(run.action)}`;
+  $('#log-content').classList.toggle('archive-diff-output', run.action === 'diff-archives');
+  // An incremental response may intentionally contain no new file bytes. In
+  // that case never fall back to the bounded SQLite preview, otherwise the
+  // already displayed header would be appended again on every status poll.
+  const rawReadable = appendLog
+    ? String(run.log_output ?? '')
+    : (run.log_output || `${run.output || ''}\n${run.error || ''}`);
+  const readable = rawReadable.trim();
+  const logContent = $('#log-content');
+  if (appendLog && !run.log_reset) {
+    if (rawReadable) {
+      if (logContent.dataset.emptyPlaceholder === '1') logContent.textContent = '';
+      logContent.dataset.emptyPlaceholder = '0';
+      logContent.textContent += rawReadable;
+    }
+  } else {
+    const prefix = run.log_truncated
+      ? '… Live-Ansicht auf den neuesten Ausschnitt begrenzt …\n'
+      : '';
+    logContent.dataset.emptyPlaceholder = readable ? '0' : '1';
+    logContent.textContent = prefix + (readable || 'Noch keine Ausgabe vorhanden …');
+  }
+  // Keep browser rendering bounded during very large --list runs. The complete
+  // configured head/tail view is loaded once after the run has finished.
+  const liveDomLimit = 768 * 1024;
+  if (appendLog && logContent.textContent.length > liveDomLimit) {
+    logContent.textContent = '… ältere Live-Ausgabe ausgeblendet …\n' + logContent.textContent.slice(-(liveDomLimit - 48));
+  }
   $('#log-command').textContent = run.command_preview || 'Kein Befehl gespeichert.';
   $('#log-stdout').textContent = run.output || 'Keine Standardausgabe.';
   $('#log-stderr').textContent = run.error || 'Keine Fehler oder Warnungen erkannt.';
@@ -1881,6 +1966,9 @@ function renderRunDialog(run) {
 function showTextDialog(title, text) {
   clearTimeout(state.liveTimer);
   state.liveRunId = null;
+  state.liveLogOffset = 0;
+  state.liveLogSession += 1;
+  state.liveLogRequestPending = false;
   $('#log-dialog h2').textContent = title;
   $('#log-live-state').textContent = '';
   $('#log-diagnosis').classList.add('hidden');
@@ -1896,13 +1984,25 @@ function showTextDialog(title, text) {
 
 
 async function showRun(id) {
-  state.liveRunId = Number(id);
+  const runId = Number(id);
+  const liveSession = state.liveLogSession + 1;
+  state.liveLogSession = liveSession;
+  state.liveRunId = runId;
+  state.liveLogOffset = 0;
+  state.liveLogRequestPending = true;
   try {
-    const run = await api('/runs/' + id);
+    let run = await api('/runs/' + runId + '?live=true&log_offset=0');
+    if (state.liveRunId !== runId || state.liveLogSession !== liveSession) return;
+    if (!activeRunStatus(run.status)) run = await api('/runs/' + runId);
+    if (state.liveRunId !== runId || state.liveLogSession !== liveSession) return;
     renderRunDialog(run);
+    if (run.log_offset != null) state.liveLogOffset = Number(run.log_offset);
     $('#log-dialog').showModal();
-    if (activeRunStatus(run.status)) watchRunCompletion(id, {areas: ['dashboard', 'runs']});
+    if (activeRunStatus(run.status)) watchRunCompletion(runId, {areas: ['dashboard', 'runs']});
   } catch (error) { toast(error.message, true); }
+  finally {
+    if (state.liveLogSession === liveSession) state.liveLogRequestPending = false;
+  }
 }
 
 async function cancelExecution(id) {
@@ -2431,13 +2531,40 @@ function renderArchives() {
   const second = $('#archive-diff-second');
   const previousFirst = first.value;
   const previousSecond = second.value;
-  const options = archives.map((archive) => `<option value="${esc(archive.name)}">${esc(archive.name)}</option>`).join('');
+  const options = archives.map((archive) => {
+    const owner = archive.job_name ? ` · ${archive.job_name}` : '';
+    return `<option value="${esc(archive.name)}">${esc(archive.name)}${esc(owner)}</option>`;
+  }).join('');
   first.innerHTML = options || '<option value="">Keine Archive vorhanden</option>';
   second.innerHTML = options || '<option value="">Keine Archive vorhanden</option>';
   if (archives.length >= 2) {
     first.value = archives.some((item) => item.name === previousFirst) ? previousFirst : archives[1].name;
     second.value = archives.some((item) => item.name === previousSecond) ? previousSecond : archives[0].name;
   }
+  const updateDiffContext = () => {
+    const firstArchive = allArchives.find((item) => item.name === first.value);
+    const secondArchive = allArchives.find((item) => item.name === second.value);
+    const firstJobId = firstArchive?.job_id || firstArchive?.action_job_id || null;
+    const secondJobId = secondArchive?.job_id || secondArchive?.action_job_id || null;
+    const sameJob = firstJobId && secondJobId && Number(firstJobId) === Number(secondJobId)
+      ? state.jobs.find((job) => Number(job.id) === Number(firstJobId))
+      : null;
+    const context = $('#archive-diff-context');
+    if (sameJob) {
+      const host = state.hosts.find((item) => item.id === sameJob.host_id);
+      context.textContent = `${currentLanguage() === 'en' ? 'Backup job' : 'Backup-Job'}: ${sameJob.name}${host ? ` · ${currentLanguage() === 'en' ? 'Device' : 'Gerät'}: ${host.name}` : ''}`;
+      context.classList.remove('warning-text');
+    } else if (firstJobId && secondJobId && Number(firstJobId) !== Number(secondJobId)) {
+      context.textContent = currentLanguage() === 'en' ? 'The selected archives belong to different backup jobs.' : 'Die ausgewählten Archive gehören zu unterschiedlichen Backup-Jobs.';
+      context.classList.add('warning-text');
+    } else {
+      context.textContent = currentLanguage() === 'en' ? 'The backup job cannot be resolved unambiguously for at least one archive.' : 'Backup-Job kann für mindestens ein Archiv nicht eindeutig ermittelt werden.';
+      context.classList.add('warning-text');
+    }
+  };
+  first.onchange = updateDiffContext;
+  second.onchange = updateDiffContext;
+  updateDiffContext();
   $('#compare-archives').disabled = archives.length < 2 || !repositoryJobs.length;
   const admin = state.currentUser?.role === 'admin';
   $('#archive-list').innerHTML = archives.length ? archives.map((archive) => {
@@ -2530,9 +2657,16 @@ async function renameArchive(jobId, archive) {
 
 async function compareArchives() {
   const repositoryId = +$('#archive-repository').value;
-  const accessJob = state.jobs.find((job) => job.repository_id === repositoryId);
   const archive = $('#archive-diff-first').value;
   const secondArchive = $('#archive-diff-second').value;
+  const archiveItems = state.archiveData?.archives || [];
+  const firstItem = archiveItems.find((item) => item.name === archive);
+  const secondItem = archiveItems.find((item) => item.name === secondArchive);
+  const firstJobId = firstItem?.job_id || firstItem?.action_job_id || null;
+  const secondJobId = secondItem?.job_id || secondItem?.action_job_id || null;
+  const ownerJobId = firstJobId && secondJobId && Number(firstJobId) === Number(secondJobId) ? Number(firstJobId) : 0;
+  const accessJob = state.jobs.find((job) => job.id === ownerJobId)
+    || state.jobs.find((job) => job.repository_id === repositoryId);
   if (!accessJob) return toast('Für den Archivvergleich wird derzeit ein Backup-Job dieses Repositorys benötigt', true);
   if (!archive || !secondArchive) return toast('Zwei Archive auswählen', true);
   if (archive === secondArchive) return toast('Für den Vergleich zwei unterschiedliche Archive auswählen', true);
@@ -2810,7 +2944,7 @@ $('#runs-filter').onchange = (event) => goToRuns(event.target.value);
 $('#runs-search').oninput = (event) => { state.runSearch = event.target.value; renderRuns(); };
 $('#sync-state').onclick = openCurrentActiveRun;
 $('#refresh').onclick = async (event) => { const release = markButtonBusy(event.currentTarget, 'Aktualisiere …'); try { await loadAll(false); } finally { release(); } };
-$('#close-dialog').onclick = () => { state.liveRunId = null; $('#log-dialog').close(); };
+$('#close-dialog').onclick = () => { state.liveRunId = null; state.liveLogOffset = 0; state.liveLogSession += 1; state.liveLogRequestPending = false; $('#log-dialog').close(); };
 $('#scan-host-key').onclick = async (event) => {
   const form = $('#host-form'); const address = form.elements.address.value.trim(); const port = +form.elements.port.value;
   if (!address) return toast('Adresse zuerst eingeben', true);

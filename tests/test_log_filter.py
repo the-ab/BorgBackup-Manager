@@ -68,3 +68,26 @@ terminating with warning status, rc 1
     assert "C var/lib/app/live.db" in filtered
     assert "file changed while we backed it up" in filtered
     assert "rc 1" in filtered
+
+
+def test_database_preview_strips_all_borg_item_status_paths():
+    from app.log_filter import strip_borg_item_lines
+
+    raw = """==============================================================================
+BACKUP-JOB: demo
+------------------------------------------------------------------------------
+A srv/data/normal.txt
+Remote: M srv/data/modified.txt
+C var/lib/app/live.db
+E var/lib/app/unreadable.db
+Archive name: bbm-demo
+Number of files: 4
+"""
+    filtered = strip_borg_item_lines(raw)
+    assert "BACKUP-JOB: demo" in filtered
+    assert "Archive name: bbm-demo" in filtered
+    assert "Number of files: 4" in filtered
+    assert "normal.txt" not in filtered
+    assert "modified.txt" not in filtered
+    assert "live.db" not in filtered
+    assert "unreadable.db" not in filtered

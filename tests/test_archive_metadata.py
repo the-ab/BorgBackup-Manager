@@ -45,3 +45,16 @@ def test_archive_browser_listing_exposes_file_metadata():
     assert entry["mode"] == "-rw-r-----"
     assert entry["user"] == "root" and entry["group"] == "backup"
     assert entry["uid"] == 0 and entry["gid"] == 1000
+
+
+def test_archive_owner_job_prefers_actual_longest_matching_series():
+    from app.main import archive_owner_job
+    from app.models import Job
+
+    first = Job(id=1, name="NAS-PBS", archive_prefix="bbm-job-1-")
+    second = Job(id=2, name="VM-OVPN", archive_prefix="bbm-job-2-long-")
+    second.archive_prefix_history_json = '["bbm-job-2-old-"]'
+
+    assert archive_owner_job("bbm-job-2-long-2026-07-22T02:00:00", [first, second]) is second
+    assert archive_owner_job("bbm-job-2-old-2026-07-20T02:00:00", [first, second]) is second
+    assert archive_owner_job("foreign-archive", [first, second]) is None

@@ -62,11 +62,16 @@ def test_updater_preserves_public_repository_files_and_removes_legacy_automation
     update = (ROOT / "update.sh").read_text(encoding="utf-8")
     for name in [
         "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md",
-        "THIRD-PARTY-NOTICES.md", "pytest.ini", "scripts",
+        "THIRD-PARTY-NOTICES.md", "pytest.ini", "scripts", "app",
     ]:
         assert name in update
     assert 'legacy_github = target / ".github"' in update
     assert '".github",' not in update
+
+
+def test_release_metadata_is_inside_updater_managed_app_directory():
+    assert (ROOT / "app/release.py").is_file()
+    assert not (ROOT / "RELEASE_DATE").exists()
 
 
 def test_container_image_includes_license_and_notice_files():

@@ -7,8 +7,8 @@
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
 <link href="/static/favicon.svg" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.0.56"></script>
-<link href="/static/style.css?v=1.0.56" rel="stylesheet"/>
+<script src="/static/theme-init.js?v=1.0.62"></script>
+<link href="/static/style.css?v=1.0.62" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
@@ -19,7 +19,7 @@
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.0.56</b></p>
+<p class="login-version">Version <b id="login-version">v1.0.62</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
@@ -137,29 +137,12 @@
 <div class="jobs-stack">
 <form class="panel job-form-compact" data-admin-only-block="" id="job-form"><div class="panel-head"><div><h2 id="job-form-title">Backup-Job erstellen</h2><span>Grunddaten kompakt festlegen; erweiterte Optionen bei Bedarf öffnen.</span></div></div>
 <input name="id" type="hidden"/>
-<div class="job-form-grid basics">
+<div class="job-create-layout">
+<div class="job-create-basics">
 <label>Name<input name="name" placeholder="Dokumente täglich" required=""/></label>
 <label>Gerät<select name="host_id" required=""></select></label>
 <label>Repository<select name="repository_id" required=""></select></label>
-</div>
 <p class="hint">Automatische Ausführungen werden zentral unter <button class="section-link" data-target-view="schedules" type="button">Zeitpläne</button> zugeordnet. Ohne Zuordnung bleibt dieser Job manuell.</p>
-<div class="job-form-grid paths">
-<label>Quellpfade <span>(einer pro Zeile)</span><textarea name="source_paths" placeholder="/home
-/etc" required="" rows="5"></textarea></label>
-<div class="job-exclude-column">
-<div class="exclude-template-apply">
-<label>Ausschlussvorlage<select id="job-exclude-template"><option value="">Keine Vorlage ausgewählt</option></select></label>
-<button class="secondary" id="apply-exclude-template" type="button">Vorlage zur Liste hinzufügen</button>
-</div>
-<label>Ausschlüsse <span>(einer pro Zeile)</span><textarea name="exclude_patterns" placeholder="/proc
-/sys
-/dev
-/run
-/tmp
-*/.cache" rows="5"></textarea></label>
-<p class="hint">Vorlagen ergänzen ohne Duplikate. <button class="section-link" data-target-view="settings" type="button">Vorlagen bearbeiten</button></p>
-</div>
-</div>
 <div class="job-form-grid archive-settings">
 <label>Archivnamensvorlage<input name="archive_template" required="" value="{hostname}-{now:%Y-%m-%dT%H:%M:%S}"/><span id="archive-prefix-hint">Automatisches Job-Präfix wird beim Speichern ergänzt.</span></label>
 <label>Kompression<select name="compression">
@@ -169,6 +152,23 @@
 <option value="obfuscate,110,zstd,3">obfuscate,110,zstd,3</option><option value="custom">Erweiterte Borg-Spezifikation …</option>
 </select></label>
 <label class="hidden" id="compression-custom-field">Eigene Kompressionsspezifikation<input name="compression_custom" placeholder="zstd,15 oder obfuscate,110,auto,zstd,6"/><span>Unterstützt unter Borg 1.2 bis 1.4: none, lz4, zstd, zlib, lzma, auto und obfuscate.</span></label>
+</div>
+</div>
+<div class="job-create-paths">
+<label>Quellpfade <span>(einer pro Zeile)</span><textarea name="source_paths" placeholder="/home
+/etc" required="" rows="4"></textarea></label>
+<div class="exclude-template-apply">
+<label>Ausschlussvorlage<select id="job-exclude-template"><option value="">Keine Vorlage ausgewählt</option></select></label>
+<button class="secondary" id="apply-exclude-template" type="button">Vorlage zur Liste hinzufügen</button>
+</div>
+<label>Ausschlüsse <span>(einer pro Zeile)</span><textarea name="exclude_patterns" placeholder="/proc
+/sys
+/dev
+/run
+/tmp
+*/.cache" rows="4"></textarea></label>
+<p class="hint">Vorlagen ergänzen ohne Duplikate. <button class="section-link" data-target-view="settings" type="button">Vorlagen bearbeiten</button></p>
+</div>
 </div>
 <details class="job-options"><summary>Dateisystem- und Konsistenzoptionen</summary>
 <div class="option-grid compact-options">
@@ -197,12 +197,14 @@
 <div class="panel-head"><div><h2 id="schedule-form-title">Zentralen Zeitplan erstellen</h2><span>Ein Zeitplan kann einzelne oder mehrere Geräte, ausgewählte Jobs oder alle Jobs eines Repositorys steuern.</span></div></div>
 <input name="id" type="hidden"/>
 <input name="expressions" type="hidden"/>
-<div class="schedule-form-grid">
+<div class="schedule-create-layout">
+<div class="schedule-create-basics">
 <label>Name<input maxlength="100" name="name" placeholder="Produktivsysteme nachts" required=""/></label>
 <label>Zielgruppe<select id="schedule-target-mode" name="target_mode"><option value="hosts">Ausgewählte Geräte</option><option value="repository">Alle Geräte/Jobs eines Repositorys</option><option value="jobs">Ausgewählte Backup-Jobs</option></select></label>
 <label>Rhythmus<select id="schedule-mode"><option value="daily">Täglich</option><option value="weekdays">Montag bis Freitag</option><option value="weekends">Wochenende</option><option value="selected">Ausgewählte Wochentage</option><option value="monthly">Monatlich</option><option value="custom">Erweiterter Cron-Zeitplan</option></select></label>
 <label>Maximal parallele Ausführungen<input max="64" min="0" name="parallel_limit" type="number" value="0"/><span>0 = nur globale Grenze</span></label>
 </div>
+<div class="schedule-create-details">
 <div class="schedule-target" id="schedule-target-hosts"><label>Geräte <span>(Mehrfachauswahl möglich)</span><select multiple="" name="target_host_ids" size="6"></select></label></div>
 <div class="schedule-target hidden" id="schedule-target-repository"><label>Repository<select name="target_repository_id"></select></label><p class="hint">Erfasst automatisch alle aktiven Backup-Jobs dieses Repositorys – auch später neu angelegte.</p></div>
 <div class="schedule-target hidden" id="schedule-target-jobs"><label>Backup-Jobs <span>(Mehrfachauswahl möglich)</span><select multiple="" name="target_job_ids" size="7"></select></label></div>
@@ -217,6 +219,8 @@
 30 14 * * mon-fri" rows="4"></textarea></label>
 <p class="hint" id="schedule-preview"></p>
 </section>
+</div>
+</div>
 <div class="job-form-footer"><label class="check"><input checked="" name="enabled" type="checkbox"/> Zeitplan aktivieren</label><div class="form-actions"><button type="submit">Zeitplan speichern</button><button class="secondary hidden" id="cancel-schedule-edit" type="button">Abbrechen</button></div></div>
 </form>
 <div class="panel"><div class="panel-head responsive-head"><div><h2>Zentrale Zeitpläne</h2><span id="schedule-count">0 Zeitpläne</span></div></div><div id="schedule-list"></div></div>
@@ -225,7 +229,7 @@
 <section class="view" id="view-runs"><div class="panel"><div class="panel-head responsive-head"><div><h2>Ausführungsprotokolle</h2><span><span id="runs-filter-label">Alle Ausführungen</span> · <span id="runs-count">0 angezeigt</span> · Zeitzone Europe/Berlin</span></div><div class="list-controls"><label>Status<select id="runs-filter"><option value="all">Alle</option><option value="active">Laufend/wartend</option><option value="running">Laufend</option><option value="queued">Wartend</option><option value="failed">Fehlgeschlagen</option><option value="warning">Warnungen</option><option value="success">Erfolgreich</option><option value="cancelled">Abgebrochen</option></select></label><label>Suche<input id="runs-search" placeholder="Lauf, Job, Aktion oder Diagnose" type="search"/></label><label>Anzahl<select id="runs-limit"><option>10</option><option>25</option><option>50</option><option selected="">100</option><option>250</option><option>500</option></select></label></div></div><div id="run-list"></div></div></section>
 <section class="view" id="view-archives">
 <div class="panel archive-toolbar"><div class="row"><label>Repository<select id="archive-repository"></select></label><label>Archive anzeigen<select disabled="" id="archive-device-filter"><option value="">Alle Geräte / alle Archive</option></select></label><label class="check archive-check"><input id="archive-consider-checkpoints" type="checkbox"/> Unvollständige Checkpoint-Archive anzeigen</label></div><div class="form-actions"><button id="load-archives" type="button">Archive anzeigen</button><button class="secondary" id="refresh-archives" type="button">Neu aus Repository einlesen</button><span class="hint" id="archive-summary">Die zuletzt geladene Archivliste wird persistent zwischengespeichert.</span></div><div class="archive-selection-toolbar hidden" data-admin-only-block="" id="archive-selection-toolbar"><label class="check"><input disabled="" id="archive-select-visible" type="checkbox"/> Sichtbare Archive auswählen</label><button class="danger" disabled="" id="delete-selected-archives" type="button">Ausgewählte Archive löschen</button><span class="hint" id="archive-selection-summary">0 ausgewählt</span></div><p class="hint">Nach erfolgreichen Backups, Prune-Läufen, Umbenennungen oder Löschungen wird der Zwischenspeicher automatisch verworfen. „Neu aus Repository einlesen“ ist nur für Änderungen erforderlich, die außerhalb des Managers vorgenommen wurden.</p><div class="persistent-error hidden" id="archive-error"></div></div>
-<div class="panel archive-compare"><div class="panel-head"><div><h2>Archive vergleichen</h2><span>Änderungen zwischen zwei Sicherungsständen mit Borg Diff anzeigen.</span></div></div><div class="row"><label>Älteres Archiv<select id="archive-diff-first"><option value="">Archive anzeigen</option></select></label><label>Neueres Archiv<select id="archive-diff-second"><option value="">Archive anzeigen</option></select></label><label class="check archive-check"><input id="archive-diff-content-only" type="checkbox"/> Nur Inhaltsänderungen</label></div><label>Optionale Pfade, eine Zeile je relativer Archivpfad<textarea id="archive-diff-paths" placeholder="home/user/Documents" rows="3"></textarea></label><div class="form-actions"><button id="compare-archives" type="button">Archive vergleichen</button></div></div>
+<div class="panel archive-compare archive-compare-compact"><div class="panel-head"><div><h2>Archive vergleichen</h2><span>Änderungen zwischen zwei Sicherungsständen mit Borg Diff anzeigen.</span><span class="archive-diff-context" id="archive-diff-context">Backup-Job wird aus den ausgewählten Archiven ermittelt.</span></div></div><div class="archive-compare-grid"><div class="archive-compare-selects"><label>Älteres Archiv<select id="archive-diff-first"><option value="">Archive anzeigen</option></select></label><label>Neueres Archiv<select id="archive-diff-second"><option value="">Archive anzeigen</option></select></label><label class="check archive-check"><input id="archive-diff-content-only" type="checkbox"/> Nur Inhaltsänderungen</label></div><div class="archive-compare-paths"><label>Optionale Pfade <span>(einer je Zeile)</span><textarea id="archive-diff-paths" placeholder="home/user/Documents" rows="2"></textarea></label><div class="form-actions"><button id="compare-archives" type="button">Archive vergleichen</button></div></div></div></div>
 <div class="panel"><div class="panel-head"><div><h2>Archivübersicht</h2><span>Verwaltete Repositories werden direkt im Manager-Container geöffnet. SSH zum Backup-Client ist dafür nicht erforderlich.</span></div></div><div class="bounded-list" id="archive-list"><div class="empty">Zuerst ein Repository auswählen und die Archivliste anzeigen.</div></div></div>
 <div class="panel hidden" id="archive-browser-panel"><div class="panel-head"><div><h2>Archivinhalt durchsuchen</h2><span id="archive-browser-meta"></span></div><button class="secondary" id="close-archive-browser" type="button">Browser schließen</button></div><div class="persistent-error hidden" id="archive-browser-error"></div><div class="browser-toolbar"><button class="secondary" id="browser-up" type="button">Eine Ebene höher</button><div class="browser-breadcrumbs" id="browser-path"><button type="button" data-browse-path="">/</button></div><button class="secondary" id="export-browser-selection" type="button">Auswahl exportieren (.tar.gz)</button><button id="use-browser-selection" type="button">Auswahl wiederherstellen</button></div><div class="persistent-info hidden" id="archive-export-status"></div><div class="archive-browser-list" id="archive-browser-list"></div><div class="selection-box"><b>Ausgewählte Pfade</b><div class="hint" id="browser-selection">Noch nichts ausgewählt.</div></div></div>
 <div class="panel hidden" id="legacy-mount-panel"><div class="panel-head"><div><h2>Alte FUSE-Mounts</h2><span>Nur für Mount-Sitzungen aus Version 0.7/0.8. Neue Archivbrowser-Sitzungen benötigen kein FUSE.</span></div></div><div class="persistent-error hidden" id="legacy-mount-error"></div><div class="bounded-list" id="legacy-mount-list"></div></div>
@@ -429,6 +433,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.0.56"></script><script src="/static/app.js?v=1.0.56"></script>
+<script src="/static/i18n.js?v=1.0.62"></script><script src="/static/app.js?v=1.0.62"></script>
 </body>
 </html>

@@ -986,11 +986,34 @@ def diff_archives_command(
         if not value or value.startswith(("-", "/")) or ".." in path.parts or any(c in value for c in "\x00\r\n"):
             raise ValueError("Diff paths must be relative archive paths without '..'")
         safe_paths.append(value)
-    parts = [*_borg_base("diff"), "--json-lines"]
+    parts = [*_borg_base("diff")]
     if content_only:
         parts.append("--content-only")
     parts.extend([f"::{archive}", second_archive, *safe_paths])
-    return _repository_operation(job, parts)
+    path_label = ", ".join(safe_paths) if safe_paths else "gesamtes Archiv"
+    script = f"""
+set +e
+printf '%s\n' '=============================================================================='
+printf '%s\n' 'ARCHIVVERGLEICH'
+printf 'ÄLTERES ARCHIV: %s\n' {shlex.quote(archive)}
+printf 'NEUERES ARCHIV: %s\n' {shlex.quote(second_archive)}
+printf 'BEREICH:         %s\n' {shlex.quote(path_label)}
+printf 'INHALT-ONLY:     %s\n' {'ja' if content_only else 'nein'!r}
+printf '%s\n' '------------------------------------------------------------------------------'
+{shlex.join(parts)}
+bbm_rc=$?
+printf '%s\n' '------------------------------------------------------------------------------'
+if [ "$bbm_rc" -eq 0 ]; then
+  printf '%s\n' 'ERGEBNIS: Archivvergleich erfolgreich abgeschlossen.'
+elif [ "$bbm_rc" -eq 1 ]; then
+  printf '%s\n' 'ERGEBNIS: Archivvergleich mit Warnungen abgeschlossen.' >&2
+else
+  printf 'ERGEBNIS: Archivvergleich fehlgeschlagen (RC %s).\n' "$bbm_rc" >&2
+fi
+printf '%s\n' '=============================================================================='
+exit "$bbm_rc"
+""".strip()
+    return repository_access_command(job.repository, ["sh", "-c", script])
 
 
 def browse_archive_command(job: Job, archive: str, relative_path: str = "") -> Command:
@@ -1368,6 +1391,7 @@ async def execute(
     command: Command,
     on_output: Callable[[str, str], Awaitable[None] | None] | None = None,
     capture_limit_bytes: int | None = None,
+    on_output_bytes: Callable[[str, bytes], Awaitable[None] | None] | None = None,
 ) -> tuple[int, str, str]:
     process_env = {**os.environ, **command.env} if command.env else None
     temporary_directory: tempfile.TemporaryDirectory[str] | None = None
@@ -1421,26 +1445,26 @@ async def execute(
             env=process_env,
             start_new_session=True,
         )
-        output_parts: dict[str, list[str]] = {"stdout": [], "stderr": []}
-        output_sizes: dict[str, int] = {"stdout": 0, "stderr": 0}
+        output_parts: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
 
-        def capture(name: str, text: str) -> None:
-            output_parts[name].append(text)
-            output_sizes[name] += len(text.encode("utf-8", errors="replace"))
-            if not capture_limit_bytes or capture_limit_bytes <= 0:
-                return
-            while output_parts[name] and output_sizes[name] > capture_limit_bytes:
-                removed = output_parts[name].pop(0)
-                output_sizes[name] -= len(removed.encode("utf-8", errors="replace"))
+        def capture(name: str, chunk: bytes) -> None:
+            output_parts[name].extend(chunk)
+            if capture_limit_bytes and capture_limit_bytes > 0 and len(output_parts[name]) > capture_limit_bytes:
+                del output_parts[name][:-capture_limit_bytes]
 
         async def pump(name: str, stream: asyncio.StreamReader | None) -> None:
             if stream is None:
                 return
-            while chunk := await stream.read(4096):
-                text = chunk.decode(errors="replace")
-                capture(name, text)
-                if on_output:
-                    result = on_output(name, text)
+            # Large reads significantly reduce Python callback overhead for
+            # ``borg create --list`` while preserving the byte stream exactly.
+            while chunk := await stream.read(256 * 1024):
+                capture(name, chunk)
+                if on_output_bytes:
+                    result = on_output_bytes(name, chunk)
+                    if result is not None:
+                        await result
+                elif on_output:
+                    result = on_output(name, chunk.decode(errors="replace"))
                     if result is not None:
                         await result
 
@@ -1460,7 +1484,7 @@ async def execute(
             if not await wait_after_signal(signal.SIGTERM, 5):
                 await wait_after_signal(signal.SIGKILL, 5)
             await asyncio.gather(process_tasks, return_exceptions=True)
-            return 124, "".join(output_parts["stdout"]), "Command timed out"
+            return 124, output_parts["stdout"].decode(errors="replace"), "Command timed out"
         except asyncio.CancelledError:
             # Commands using the secret wrapper have a dedicated cancellation
             # channel: closing stdin after the payload makes the remote wrapper
@@ -1494,7 +1518,11 @@ async def execute(
                 forced=forced,
                 remote_cleanup_confirmed=wrapper_confirmed,
             )
-        return process.returncode or 0, "".join(output_parts["stdout"]), "".join(output_parts["stderr"])
+        return (
+            process.returncode or 0,
+            output_parts["stdout"].decode(errors="replace"),
+            output_parts["stderr"].decode(errors="replace"),
+        )
     finally:
         if process is not None and process.stdin and not process.stdin.is_closing():
             process.stdin.close()

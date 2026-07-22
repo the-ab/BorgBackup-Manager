@@ -136,6 +136,7 @@
     'Noch nichts ausgewählt.': 'Nothing selected yet.', 'Auswahl exportieren (.tar.gz)': 'Export selection (.tar.gz)',
     'Auswahl wiederherstellen': 'Restore selection', 'Archive vergleichen': 'Compare archives', 'Älteres Archiv': 'Older archive',
     'Neueres Archiv': 'Newer archive', 'Änderungen zwischen zwei Sicherungsständen mit Borg Diff anzeigen.': 'Show changes between two backup states using Borg Diff.',
+    'Backup-Job wird aus den ausgewählten Archiven ermittelt.': 'The backup job is resolved from the selected archives.',
     'Dateien wiederherstellen': 'Restore files', 'Zuerst Backup-Job auswählen': 'Select a backup job first',
     'Archivname': 'Archive name', 'Pfade im Archiv': 'Paths in archive', '(einer pro Zeile; für Originalpfad erforderlich)': '(one per line; required for original location)',
     'Wiederherstellungsziel': 'Restore target', 'Am ursprünglichen Speicherort': 'At original location',

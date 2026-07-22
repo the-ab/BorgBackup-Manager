@@ -1,5 +1,140 @@
 # Release Notes
 
+## v1.0.62 – 22.07.2026
+
+### Update von v1.0.60 wieder kompatibel
+
+- Der fehlgeschlagene Build von v1.0.61 wurde durch die neu eingeführte Datei `RELEASE_DATE` verursacht. Das noch laufende `update.sh` aus v1.0.60 kannte diese Datei nicht, kopierte aber bereits den neuen Dockerfile. Dadurch fehlte `RELEASE_DATE` im Docker-Build-Kontext.
+- Das Release-Datum liegt nun als statische Metadaten in `app/release.py`. Der komplette Ordner `app/` wird auch von älteren Updatern zuverlässig übernommen.
+- Der Dockerfile benötigt nur noch `VERSION` als separate Metadatendatei. Eine neue, dem alten Updater unbekannte Datei im Projektstamm ist nicht mehr erforderlich.
+- `update.sh`, Release-Prüfung und Regressionstests wurden entsprechend angepasst.
+- Der fehlgeschlagene v1.0.61-Updateversuch hat die bisherigen Projektdateien laut Updater erfolgreich wiederhergestellt; eine Datenbankmigration war nicht gestartet worden.
+
+### Prüfung
+
+- Update-Kompatibilität mit der Dateiauswahl von v1.0.60 simuliert.
+- Docker-Build-Kontext enthält alle im Dockerfile verwendeten Quellen.
+- Keine Datenbankschema-Migration erforderlich.
+
+## v1.0.61 – 22.07.2026
+
+### Fortlaufende Live-Ausgabe bei sparsamen Jobs
+
+- Der dateibasierte Live-Log-Writer wird nun zusätzlich zeitgesteuert geleert. Dadurch erscheint der Backup-Kopf auch dann während des laufenden Jobs, wenn die vollständige Dateiliste deaktiviert ist und Borg bis zur Abschlussstatistik keine weiteren Zeilen ausgibt.
+- Das normale Pufferlimit und das maximale Flush-Intervall bleiben erhalten; große Dateilisten behalten daher die CPU-Optimierungen aus v1.0.57 und v1.0.58.
+- Leere inkrementelle Abfragen verändern die Ansicht weiterhin nicht und doppelte Kopfblöcke bleiben verhindert.
+
+### Kompakterer Backup-Job-Editor
+
+- Quellpfade, Ausschlussvorlage und Ausschlüsse beginnen weiterhin oben in der rechten Spalte.
+- Archivnamensvorlage und Kompression wurden in die linke Grunddatenspalte verschoben. Dadurch wird der bisher freie Bereich unter Name, Gerät und Repository genutzt und der gesamte Formularblock kürzer.
+- Unterhalb von 820 Pixeln wechselt das Formular weiterhin vollständig in eine einspaltige Mobilansicht.
+
+### Korrekter und lesbarer Archivvergleich
+
+- Für zwei Archive desselben Backup-Jobs wird nun der tatsächliche Eigentümerjob anhand des längsten passenden Archivpräfixes ermittelt. Der zuerst angelegte Job des Repositorys wird nicht mehr als Beschriftung verwendet.
+- Die Archivauswahl zeigt den zugeordneten Job an; ein zusätzlicher Kontext nennt Backup-Job und Gerät beziehungsweise warnt bei unterschiedlichen oder nicht eindeutig zugeordneten Archiven.
+- `borg diff` verwendet wieder die menschenlesbare Standardausgabe statt unformatierter JSON-Zeilen. Ein klarer Kopf zeigt älteres Archiv, neueres Archiv, Pfadbereich und Inhaltsfilter.
+- Der Laufdialog zeigt für die Aktion die Bezeichnung **Archive vergleichen** und verwendet eine besser lesbare Zeilenhöhe.
+
+### Version und Veröffentlichungsdatum
+
+- Die Seitenleiste zeigt Version und Release-Datum gemeinsam als `v1.0.61 · 22.07.2026`.
+- Das Release-Datum wird aus der neuen Datei `RELEASE_DATE` gelesen und durch Dockerfile sowie Updater übernommen.
+
+### Prüfung
+
+- 448 automatisierte Tests bestanden, einschließlich zeitgesteuertem Live-Log-Flush, korrekter Archivbesitzer-Ermittlung, lesbarer Diff-Ausgabe und responsivem Backup-Job-Formular.
+- Python-, JavaScript-, Bash- und POSIX-Shell-Syntax erfolgreich geprüft.
+- Keine Datenbankschema-Migration erforderlich. Geräte, Repositorys, Backup-Jobs, Zeitpläne, Archive, Benutzer und Einstellungen bleiben unverändert.
+
+## v1.0.60
+
+### Live-Protokoll ohne wiederholten Kopfblock
+
+- Leere inkrementelle Live-Log-Antworten greifen nicht mehr auf die SQLite-Metadatenvorschau zurück. Dadurch wird der bereits angezeigte Backup-Kopf während eines laufenden Jobs nicht erneut angehängt.
+- Der Platzhalter wird weiterhin beim ersten echten Logblock ersetzt; Abfragen ohne neue Bytes verändern die sichtbare Ausgabe nicht.
+- Laufende Backup-Ausgaben werden für SQLite jetzt blockgrenzensicher gefiltert: normale Borg-Dateistatus und Pfade verbleiben ausschließlich im dateibasierten Protokoll, während kleine Metadaten weiterhin live verfügbar bleiben.
+
+### Kompaktere Bedienoberfläche
+
+- Backup-Jobs besitzen nun einen direkten **Bearbeiten**-Button zwischen **Archive** und **Mehr**.
+- Der Editor für Backup-Jobs ordnet Name, Gerät und Repository links sowie Quellpfade, Ausschlussvorlage und Ausschlüsse rechts an.
+- Der Editor für zentrale Zeitpläne ordnet Name, Zielgruppe, Rhythmus und Parallelitätsgrenze links sowie Zielauswahl und Ausführungszeiten rechts an.
+- **Archive vergleichen** verwendet eine kompakte zweispaltige Anordnung und eine kleinere Pfadeingabe.
+- Alle neuen Anordnungen wechseln auf Tablets und Mobilgeräten automatisch in eine einspaltige Ansicht; Aktionsflächen bleiben vollständig bedienbar.
+
+### Prüfung
+
+- 443 automatisierte Tests bestanden, einschließlich leerer Live-Log-Deltas, blockgrenzensicherer SQLite-Pfadfilterung, direktem Bearbeiten-Button und responsiven Formlayouts.
+
+## v1.0.59
+
+### Live-Protokoll ohne doppelte Startblöcke
+
+- Beim Öffnen eines laufenden Jobs werden initiale Logabfrage und Hintergrund-Polling jetzt serialisiert. Beide können nicht mehr gleichzeitig denselben Dateioffset lesen und denselben Kopfblock mehrfach an die Ansicht anhängen.
+- Verspätete Antworten einer älteren Live-Abfrage werden anhand von Sitzung und Dateioffset verworfen.
+- Der Platzhalter **Noch keine Ausgabe vorhanden …** wird beim ersten echten Logblock ersetzt und nicht mehr vor die Ausgabe geschrieben.
+- Rücksetzungen nach Logkürzung bleiben erhalten und ersetzen die Ansicht weiterhin kontrolliert.
+
+### Keine vollständigen Dateipfade mehr in SQLite-Vorschauen
+
+- Ein älterer Abschluss-Fallback schrieb trotz dateibasierter Protokolle noch einmal die letzten 16 KiB der rohen Borg-Ausgabe in `Run.log_output`. Dadurch konnten normale Dateipfade nach Laufende erneut in `manager.db` erscheinen. Dieser Fallback wurde entfernt.
+- Vollständige Borg-Status- und Pfadausgaben liegen ausschließlich in `/data/run-logs/run-ID.log`. SQLite enthält nur kleine Metadaten- und Diagnosevorschauen sowie die strukturierte Warnungszusammenfassung.
+- Normale Statuspfade werden aus `output`, `error` und `log_output` entfernt. Konkret betroffene Warnungspfade bleiben bewusst begrenzt in `warning_summary_json`, weil Ausführungsdetails und Benachrichtigungen davon abhängen.
+- Beim Start werden vorhandene ältere SQLite-Vorschauen automatisch bereinigt. Fehlende dateibasierte Logs werden vorher aus den Altinhalten erzeugt; anschließend kann die Datenbank wie bisher automatisch mit `VACUUM` verkleinert werden.
+
+### Prüfung
+
+- 439 automatisierte Tests bestanden, einschließlich paralleler Live-Abfragen, Platzhalterwechsel, SQLite-Vorschau-Bereinigung, Altprotokollmigration und strukturierter Warnungspfade.
+- Keine Schemaänderung erforderlich. Geräte, Repositorys, Jobs, Zeitpläne, Archive, Benutzer und Einstellungen bleiben unverändert.
+
+## v1.0.58
+
+### Zweite CPU-Optimierungsstufe für vollständige Dateilisten
+
+- Der produktive Hochvolumenpfad verarbeitet `borg create --list` jetzt als rohe Byte-Blöcke. Normale Dateinamen werden im Manager nicht mehr vollständig nach UTF-8 dekodiert und nicht mehr zeilenweise in Python zerlegt.
+- Ein schneller Byte-Block-Filter überspringt vollständige Blöcke mit normalen Borg-Statuszeilen in einem Schritt. Nur Blöcke mit `C`, `E` oder textuellen Warnungen werden für die strukturierte Warnungserfassung genauer ausgewertet.
+- Normale Dateistatus werden nicht mehr fortlaufend in die SQLite-Vorschau gespiegelt. SQLite erhält während des Laufs nur kleine stdout-Metadaten und tatsächlich geänderte Warnungszusammenfassungen; das vollständige Protokoll bleibt unverändert unter `/data/run-logs` erhalten.
+- Der Subprozessleser verwendet bis zu 256 KiB große Rohdatenblöcke. Der Log-Writer puffert bis zu 1 MiB beziehungsweise maximal 750 ms und hält die bekannte Dateigröße selbst nach, statt bei jedem Flush erneut `stat()` aufzurufen.
+- Die Warnungserfassung bleibt vollständig erhalten: geänderte Dateien (`C`), Datei-Zugriffsfehler (`E`), Berechtigungs-, E/A-, fehlende Pfad- und textuelle Borg-Warnungen werden weiterhin strukturiert gespeichert.
+
+### Inkrementelles Live-Protokoll
+
+- Ein geöffnetes Live-Protokoll lädt nur noch die seit der letzten Abfrage neu hinzugekommenen Bytes anhand eines Dateioffsets.
+- Die WebUI überträgt und rendert nicht mehr bei jedem Poll denselben 256-KiB-Ausschnitt erneut.
+- Fällt der Browser hinter die Ausgabe zurück oder wurde die Logdatei zwischenzeitlich gekürzt, liefert der Server automatisch den neuesten begrenzten Ausschnitt und setzt die Live-Ansicht kontrolliert zurück.
+- Die aktive Browseransicht ist auf 768 KiB begrenzt; die vollständige konfigurierte Kopf-/Endansicht wird nach Abschluss weiterhin einmalig geladen. Die Protokolldatei selbst bleibt davon unberührt.
+- Bei geöffnetem Dialog wird alle 1,8 Sekunden, bei geschlossenem Dialog alle 1,5 Sekunden abgefragt.
+
+### Prüfung
+
+- Synthetischer Vergleich mit 500.000 normalen Dateizeilen sowie je einer `C`- und `E`-Warnung: Die reine Manager-Verarbeitung sank in der Prüfumgebung von etwa 0,76–0,91 Sekunden auf etwa 0,17–0,24 Sekunden. Zusätzlich entfielen in diesem Test 62 SQLite-Vorschau-Flushes vollständig.
+- 436 automatisierte Tests bestanden, einschließlich Byte-Streaming, inkrementeller Log-Offsets, Log-Rücksetzung, Warnungserfassung und vollständigem Abschlusslauf.
+- Keine Datenbankmigration erforderlich. Geräte, Repositorys, Jobs, Zeitpläne, Archive, Benutzer und Einstellungen bleiben unverändert.
+
+## v1.0.57
+
+### CPU-optimierte Verarbeitung vollständiger Dateilisten
+
+- Die Option **Verarbeitete Dateien im Live-Protokoll anzeigen** bleibt vollständig erhalten, verarbeitet große `borg create --list`-Ausgaben aber jetzt gebündelt statt mit einem Dateizugriff je kleinem Prozessblock.
+- Das Ausführungsprotokoll verwendet während eines Laufs einen gepufferten, dauerhaft geöffneten Writer. Schreibvorgänge, Dateirechteprüfung und Größenkontrolle erfolgen nur noch in begrenzten Intervallen beziehungsweise nach größeren Datenblöcken.
+- Die gefilterte Fehleransicht wird nicht mehr für jeden einzelnen Borg-Ausgabeblock aus einem bis zu 256 KiB großen Textbereich neu berechnet, sondern nur beim begrenzten Datenbank-Flush.
+- Normale Borg-Dateistatus wie `A`, `M`, `U` oder `d` überspringen die vollständige Warnungs-Regulärauswertung. Warnungsrelevante Status `C` und `E` sowie textuelle Borg-Warnungen werden weiterhin vollständig erkannt und strukturiert gespeichert.
+- Der Subprozessleser verarbeitet größere Datenblöcke und hält bei begrenzter Ausgabeaufnahme weiterhin exakt das Ende von stdout und stderr fest.
+
+### Reduzierte Live-Abfragen der WebUI
+
+- Solange der Laufdialog geschlossen ist, fragt die WebUI nur Laufstatus und Metadaten ab und liest nicht mehr bei jedem Poll das dateibasierte Live-Protokoll.
+- Bei geöffnetem Live-Log wird während des Laufs eine begrenzte 256-KiB-Kopf-/Endansicht übertragen. Nach Abschluss wird die konfigurierte vollständige Protokollansicht einmalig geladen.
+- Das Live-Polling-Intervall wurde von 850 auf 1200 Millisekunden angehoben, ohne die Warnungserfassung oder den Laufstatus zu beeinflussen.
+
+### Prüfung
+
+- Ein synthetischer Vergleich mit 120.000 Borg-Dateizeilen und 4,2 MiB Ausgabe reduzierte die reine Manager-Verarbeitungszeit in der Prüfumgebung von rund 14,4 auf 0,46 Sekunden. Dies ist ein reproduzierbarer Belastungstest und keine Garantie für einen bestimmten Wert auf Produktivsystemen.
+- Warnungsdateien mit Status `C` und `E` bleiben bei aktivierter und deaktivierter vollständiger Dateiliste erhalten.
+- Keine Datenbankmigration erforderlich. Geräte, Repositorys, Jobs, Zeitpläne, Archive, Benutzer und Einstellungen bleiben unverändert.
+
 ## v1.0.56
 
 ### Manuelle GitHub-Veröffentlichung

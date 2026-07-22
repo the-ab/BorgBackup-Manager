@@ -480,7 +480,9 @@ def test_archive_rename_preserves_exact_names_and_diff_supports_paths(job):
     diff = diff_archives_command(job, first, second, ["home/user"], content_only=True)
     assert f"::{first}" in rename.preview
     assert renamed in rename.preview
-    assert "borg --lock-wait 600 diff --json-lines --content-only" in diff.preview
+    assert "borg --lock-wait 600 diff --content-only" in diff.preview
+    assert "ARCHIVVERGLEICH" in diff.preview
+    assert "ÄLTERES ARCHIV" in diff.preview
     assert f"::{first}" in diff.preview
     assert second in diff.preview
     assert "home/user" in diff.preview
@@ -911,3 +913,47 @@ def test_archive_browser_command_requests_owner_and_mode(job):
     from app.runner import browse_archive_command
     command = browse_archive_command(job, "archive-one", "etc")
     assert "{mode}{user}{group}{uid}{gid}" in command.preview
+
+
+def test_execute_capture_limit_keeps_exact_byte_tail():
+    command = Command(
+        argv=[
+            "python", "-c",
+            "import os; os.write(2, b'x' * 20000 + b'FINAL-TAIL')",
+        ],
+        preview="bounded capture test",
+    )
+
+    return_code, stdout, stderr = asyncio.run(execute(command, capture_limit_bytes=1024))
+
+    assert return_code == 0
+    assert stdout == ""
+    assert stderr.endswith("FINAL-TAIL")
+    assert len(stderr.encode()) == 1024
+
+
+def test_execute_prefers_raw_byte_callback_for_high_volume_output():
+    text_calls = []
+    byte_calls = []
+
+    async def on_text(stream, text):
+        text_calls.append((stream, text))
+
+    async def on_bytes(stream, data):
+        byte_calls.append((stream, data))
+
+    command = Command(
+        argv=["python", "-c", "import sys; sys.stderr.buffer.write(b'A file-1\\nC live.db\\n')"],
+        preview="raw byte callback",
+    )
+    return_code, stdout, stderr = asyncio.run(execute(
+        command,
+        on_output=on_text,
+        on_output_bytes=on_bytes,
+    ))
+
+    assert return_code == 0
+    assert stdout == ""
+    assert stderr == "A file-1\nC live.db\n"
+    assert text_calls == []
+    assert b"".join(data for stream, data in byte_calls if stream == "stderr") == b"A file-1\nC live.db\n"

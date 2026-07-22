@@ -15,7 +15,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt
-COPY VERSION ./VERSION
+COPY VERSION ./
 COPY README.md INSTALLATION.md RELEASE_NOTES.md ./
 COPY LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md ./
 COPY app ./app

@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.0.56
+# Installation and Operations — BorgBackup Manager 1.0.62
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.0.56.zip
+BorgBackup-Manager-1.0.62.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.56.zip
+unzip /path/BorgBackup-Manager-1.0.62.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.0.56.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.0.62.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -345,6 +345,8 @@ A controlled cancellation first signals the remote Borg process group and waits 
 Borg warning causes are captured while output is streaming and stored separately from the truncated log preview. The UI can identify changed files, missing files, permission errors, I/O errors and general Borg warnings.
 
 If Borg emits only return code 1 without a detailed warning line, the execution states that the cause was not emitted rather than inventing one.
+
+Complete status and path output is stored in `/data/run-logs/run-ID.log`. SQLite contains only bounded metadata and diagnostic previews plus structured warning causes; ordinary file paths are removed from database previews at run completion and from older previews during startup cleanup.
 
 ## 15. Archive overview
 

@@ -37,7 +37,7 @@ from app.repository_state import (
     managed_repository_present, require_empty_managed_repository,
     require_initializable_managed_repository,
 )
-from app.run_logs import append_run_log
+from app.run_logs import RunLogWriter, append_run_log
 from app.runner import (
     Command,
     CommandCancelled,
@@ -60,11 +60,59 @@ from app.runner import (
 )
 from app.external_repository import generate_ed25519_keypair
 from app.vault import get_system_secret, set_repository_secret, set_system_secret
-from app.log_filter import extract_error_output
+from app.log_filter import extract_error_output, strip_borg_item_lines
 from app.notifications import notify_run_completion
 from app.settings import load_settings
 from app.storage_guard import repository_storage_status
 
+
+
+_SQLITE_BORG_ITEM_LINE_BYTES_RE = re.compile(
+    rb"^[ \t]*(?:[Rr][Ee][Mm][Oo][Tt][Ee]:[ \t]*)?[AMUCERdbchsfipx?+\-.][ \t]+\S"
+)
+_SQLITE_ONLY_BORG_ITEM_BLOCK_BYTES_RE = re.compile(
+    rb"(?:(?:[ \t]*(?:[Rr][Ee][Mm][Oo][Tt][Ee]:[ \t]*)?"
+    rb"[AMUCERdbchsfipx?+\-.][ \t]+[^\r\n]*(?:\r?\n)))+\Z"
+)
+
+
+class _BackupSqlitePreviewFilter:
+    """Keep readable metadata while excluding every Borg item path.
+
+    Complete item-only blocks take a regex fast path in C. Mixed blocks are
+    inspected line by line, with a carry buffer so a path split across process
+    chunks can never leak its continuation into the database preview.
+    """
+
+    def __init__(self) -> None:
+        self._carry = bytearray()
+
+    def feed(self, data: bytes) -> str:
+        if not data:
+            return ""
+        payload = bytes(self._carry) + data
+        newline = payload.rfind(b"\n")
+        if newline < 0:
+            self._carry[:] = payload
+            return ""
+        complete = payload[: newline + 1]
+        self._carry[:] = payload[newline + 1 :]
+        if _SQLITE_ONLY_BORG_ITEM_BLOCK_BYTES_RE.fullmatch(complete):
+            return ""
+        kept = [
+            line for line in complete.splitlines(keepends=True)
+            if not _SQLITE_BORG_ITEM_LINE_BYTES_RE.match(line)
+        ]
+        return b"".join(kept).decode("utf-8", errors="replace")
+
+    def finalize(self) -> str:
+        if not self._carry:
+            return ""
+        final = bytes(self._carry)
+        self._carry.clear()
+        if _SQLITE_BORG_ITEM_LINE_BYTES_RE.match(final):
+            return ""
+        return final.decode("utf-8", errors="replace")
 
 _key_file_lock = Lock()
 _repository_init_lock = Lock()
@@ -542,73 +590,101 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
 
     settings = load_settings()
     log_file_max_bytes = settings.run_log_max_mib * 1024 * 1024
-    # Vollständige Ausgaben liegen ausschließlich in /data/run-logs. SQLite
-    # enthält nur kleine Vorschauen für Listen, Diagnose und technische Details.
+    # Complete high-volume output is file-backed. SQLite stores only small
+    # metadata previews and structured warning causes; normal --list item lines
+    # never enter the database write path.
     db_log_tail_bytes = 16 * 1024
     stdout_tail_bytes = 4 * 1024
     stderr_tail_bytes = 32 * 1024
-    pending: dict[str, str | None] = {
-        "stdout": "", "stderr": None, "log": "", "warning_summary_json": None,
-    }
+    pending_stdout: list[str] = []
+    pending_warning_summary_json: str | None = None
+    pending_borg_version: str | None = None
+    version_probe_bytes = bytearray()
+    backup_preview_filter = _BackupSqlitePreviewFilter() if action == "backup" else None
     warning_collector = BorgWarningCollector(max_items=100) if action == "backup" else None
-    stderr_analysis_tail = ""
     last_flush = 0.0
     flush_lock = asyncio.Lock()
+    log_writer = RunLogWriter(run_id, log_file_max_bytes)
+
+    async def flush_live_log_periodically() -> None:
+        # Sparse jobs (full file list disabled) can emit a header and then stay
+        # silent until Borg prints final statistics. A time-driven flush keeps
+        # that header and later warning lines visible without increasing the
+        # high-volume writer's configured flush frequency.
+        interval = min(0.25, max(0.05, log_writer.flush_interval / 2))
+        while True:
+            await asyncio.sleep(interval)
+            log_writer.flush_if_due()
+
+    live_log_flush_task = asyncio.create_task(flush_live_log_periodically())
 
     async def flush_output(force: bool = False) -> None:
-        nonlocal last_flush
+        nonlocal last_flush, pending_warning_summary_json, pending_borg_version
+        if not pending_stdout and pending_warning_summary_json is None and pending_borg_version is None:
+            return
+        now = time.monotonic()
+        if not force and now - last_flush < 1.5:
+            return
         async with flush_lock:
             now = time.monotonic()
-            if not force and now - last_flush < 0.5:
+            if not force and now - last_flush < 1.5:
                 return
-            if (
-                not pending["stdout"]
-                and pending["stderr"] is None
-                and not pending["log"]
-                and pending["warning_summary_json"] is None
-            ):
+            if not pending_stdout and pending_warning_summary_json is None and pending_borg_version is None:
                 return
+            stdout_text = "".join(pending_stdout)
             with SessionLocal() as db:
                 current = db.get(Run, run_id)
                 if current:
-                    if pending["stdout"]:
-                        current.output = ((current.output or "") + str(pending["stdout"]))[-stdout_tail_bytes:]
-                    if pending["stderr"] is not None:
-                        current.error = str(pending["stderr"])[-stderr_tail_bytes:]
-                    if pending["log"]:
-                        current.log_output = ((current.log_output or "") + str(pending["log"]))[-db_log_tail_bytes:]
-                        detected_version = parse_borg_version(current.log_output)
+                    if stdout_text:
+                        current.output = ((current.output or "") + stdout_text)[-stdout_tail_bytes:]
+                        detected_version = parse_borg_version(current.output)
                         if detected_version:
                             current.borg_version = detected_version
-                    if pending["warning_summary_json"] is not None:
-                        current.warning_summary_json = str(pending["warning_summary_json"])
+                    if pending_borg_version is not None:
+                        current.borg_version = pending_borg_version
+                    if pending_warning_summary_json is not None:
+                        current.warning_summary_json = pending_warning_summary_json
                     db.commit()
-            pending["stdout"] = ""
-            pending["stderr"] = None
-            pending["log"] = ""
-            pending["warning_summary_json"] = None
+            pending_stdout.clear()
+            pending_warning_summary_json = None
+            pending_borg_version = None
             last_flush = now
 
+    async def append_output_bytes(stream: str, data: bytes) -> None:
+        nonlocal pending_warning_summary_json, pending_borg_version
+        # The normal production path stays binary: millions of file names are
+        # written without UTF-8 decoding, line splitting or SQLite mirroring.
+        log_writer.append_bytes(data)
+        warning_changed = False
+        if warning_collector:
+            warning_changed = warning_collector.feed_bytes(data, stream=stream)
+            if warning_changed:
+                pending_warning_summary_json = json.dumps(
+                    warning_collector.summary(), ensure_ascii=False, separators=(",", ":"),
+                )
+        if action == "backup":
+            # The file-backed log is the authoritative live-output source.
+            # SQLite receives only non-item metadata; all A/M/U/C/E/... path
+            # lines are filtered with chunk-boundary protection.
+            if stream == "stdout" and backup_preview_filter is not None:
+                preview_text = backup_preview_filter.feed(data)
+                if preview_text:
+                    pending_stdout.append(preview_text)
+            if pending_borg_version is None and len(version_probe_bytes) < 8192:
+                remaining = 8192 - len(version_probe_bytes)
+                version_probe_bytes.extend(data[:remaining])
+                detected = parse_borg_version(version_probe_bytes.decode("utf-8", errors="replace"))
+                if detected:
+                    pending_borg_version = detected
+        elif stream == "stdout":
+            pending_stdout.append(data.decode("utf-8", errors="replace"))
+        if warning_changed or pending_stdout or pending_borg_version is not None:
+            await flush_output()
+
     async def append_output(stream: str, text: str) -> None:
-        nonlocal stderr_analysis_tail
-        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-        append_run_log(run_id, normalized, log_file_max_bytes)
-        if warning_collector and warning_collector.feed(normalized, stream=stream):
-            pending["warning_summary_json"] = json.dumps(
-                warning_collector.summary(), ensure_ascii=False, separators=(",", ":"),
-            )
-        if stream == "stderr":
-            # Borg intentionally writes file activity and statistics to stderr.
-            # Keep the complete stream only in the file-backed live log and
-            # expose a filtered diagnostic preview in the error tab.
-            stderr_analysis_tail = (stderr_analysis_tail + normalized)[-(256 * 1024):]
-            pending["stderr"] = extract_error_output(stderr_analysis_tail)[-stderr_tail_bytes:]
-        else:
-            pending["stdout"] = str(pending["stdout"] or "") + text
-        # Preserve arrival order for the normal live view. Borg writes statistics
-        # mostly to stderr, while headings and helper output use stdout.
-        pending["log"] = str(pending["log"] or "") + normalized
-        await flush_output()
+        # Compatibility callback for tests and third-party executors that still
+        # provide decoded strings. The built-in runner uses append_output_bytes.
+        await append_output_bytes(stream, text.encode("utf-8", errors="replace"))
 
     lock = _repository_lock(repository_id)
     lock_acquired = False
@@ -630,14 +706,23 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
                 lock_acquired = False
             message = _queue_message(reason)
             if message != last_queue_message:
-                append_run_log(run_id, message + "\n", log_file_max_bytes)
+                log_writer.append(message + "\n")
                 last_queue_message = message
             await asyncio.sleep(0.25)
-        code, output, error = await execute(command, on_output=append_output, capture_limit_bytes=16 * 1024)
+        code, output, error = await execute(
+            command,
+            on_output=append_output,
+            on_output_bytes=append_output_bytes,
+            capture_limit_bytes=32 * 1024,
+        )
         if warning_collector and warning_collector.finalize():
-            pending["warning_summary_json"] = json.dumps(
+            pending_warning_summary_json = json.dumps(
                 warning_collector.summary(), ensure_ascii=False, separators=(",", ":"),
             )
+        if backup_preview_filter is not None:
+            final_preview = backup_preview_filter.finalize()
+            if final_preview:
+                pending_stdout.append(final_preview)
         await flush_output(force=True)
         status = "success" if code == 0 else "warning" if code == 1 else "failed"
     except CommandCancelled as exc:
@@ -660,12 +745,10 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
             )
         else:
             cancellation_detail = "kontrolliert mit SIGINT beendet; Borg konnte seine Sperren freigeben."
-        append_run_log(
-            run_id,
+        log_writer.append(
             "\nABBRUCH: Borg und alle zugehörigen Wrapper-Prozesse wurden "
             + cancellation_detail
             + "\n",
-            log_file_max_bytes,
         )
     except asyncio.CancelledError:
         # Compatibility path for monkeypatched executors and cancellations that
@@ -674,6 +757,15 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
     except Exception as exc:
         code, output, error, status = 255, "", str(exc), "failed"
     finally:
+        try:
+            await flush_output(force=True)
+        except Exception:
+            # The file-backed log remains authoritative even if a final SQLite
+            # preview update fails during shutdown or cancellation.
+            pass
+        live_log_flush_task.cancel()
+        await asyncio.gather(live_log_flush_task, return_exceptions=True)
+        log_writer.close()
         if lock and lock_acquired:
             lock.release()
 
@@ -704,13 +796,16 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
                 # A successful Borg return code is authoritative. Discard any
                 # incidental helper text that happened to look like a warning.
                 run.warning_summary_json = ""
-            if output and not run.output:
-                run.output = output[-stdout_tail_bytes:]
-            filtered_error = extract_error_output(error)
-            if filtered_error and not run.error:
-                run.error = filtered_error[-stderr_tail_bytes:]
-            if not run.log_output:
-                run.log_output = (output + ("\n" if output and error else "") + error)[-db_log_tail_bytes:]
+            # Keep the complete stream only in /data/run-logs. SQLite stores a
+            # small metadata/diagnostic preview without ordinary Borg item paths.
+            # Concrete C/E warning paths remain in warning_summary_json.
+            clean_source = output if action == "backup" else (run.output or output)
+            clean_output = strip_borg_item_lines(clean_source)[-stdout_tail_bytes:]
+            filtered_error = strip_borg_item_lines(extract_error_output(error))[-stderr_tail_bytes:]
+            run.output = clean_output
+            run.error = filtered_error
+            preview_parts = [part for part in (clean_output, filtered_error) if part]
+            run.log_output = "\n".join(preview_parts)[-db_log_tail_bytes:]
             if not run.error and code:
                 run.error = f"Exit code: {code}"
             version = run.borg_version if version_tuple(run.borg_version) else parse_borg_version(run.log_output or f"{run.output}\n{run.error}")

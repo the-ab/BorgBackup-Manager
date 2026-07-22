@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.0.56
+# Installation und Betrieb – BorgBackup Manager 1.0.62
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.0.56.zip
+BorgBackup-Manager-1.0.62.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.56.zip
+unzip /pfad/BorgBackup-Manager-1.0.62.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -134,7 +134,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.56.zip
+unzip /pfad/BorgBackup-Manager-1.0.62.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build
@@ -585,7 +585,7 @@ Technische Details:
 
 Fehlermeldungen können markiert und kopiert werden.
 
-Ein Borg-Rückgabecode `1` bedeutet, dass der Vorgang sein normales Ende erreicht und das Archiv gespeichert wurde, aber Warnungen vorlagen. Der Manager zeigt die konkreten Ursachen im Laufdialog an. Wenn die vollständige Dateiliste im Job deaktiviert ist, ergänzt der Backup-Befehl intern `--list --filter CE`; dadurch werden nur geänderte Dateien (`C`) und Datei-Zugriffsfehler (`E`) protokolliert, ohne das Live-Log mit allen unveränderten Dateien zu füllen.
+Ein Borg-Rückgabecode `1` bedeutet, dass der Vorgang sein normales Ende erreicht und das Archiv gespeichert wurde, aber Warnungen vorlagen. Der Manager zeigt die konkreten Ursachen im Laufdialog an. Wenn die vollständige Dateiliste im Job deaktiviert ist, ergänzt der Backup-Befehl intern `--list --filter CE`; dadurch werden nur geänderte Dateien (`C`) und Datei-Zugriffsfehler (`E`) protokolliert, ohne das Live-Log mit allen unveränderten Dateien zu füllen. Ist die vollständige Liste aktiviert, verarbeitet der Manager die große Statusausgabe gepuffert und mit einer Schnellprüfung für normale Dateistatus, sodass die vollständige Anzeige deutlich weniger Manager-CPU benötigt.
 
 Ab Version 0.8.7 liegen vollständige neue Laufprotokolle unter:
 
@@ -593,7 +593,7 @@ Ab Version 0.8.7 liegen vollständige neue Laufprotokolle unter:
 /data/run-logs/run-ID.log
 ```
 
-SQLite speichert nur Metadaten sowie feste Vorschauen von maximal 4 KiB stdout, 32 KiB gefilterte Fehler-/Warnungsausgabe und 16 KiB Bedienprotokoll. Beim ersten Start von 0.8.7 werden größere Altinhalte in `/data/run-logs` migriert und anschließend aus der Datenbank gekürzt. Unter **System → Einstellungen → Ausführungsprotokolle** werden Anzahl, Dateigröße und Datenbankanteil angezeigt. Dort können abgelaufene oder alle abgeschlossenen Protokolle sofort gelöscht werden. Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin nach der konfigurierten Aufbewahrungsdauer. Aktive Läufe bleiben immer erhalten.
+SQLite speichert nur Metadaten sowie feste, von Borg-Dateistatus bereinigte Vorschauen von maximal 4 KiB stdout, 32 KiB gefilterte Fehler-/Warnungsausgabe und 16 KiB Bedienprotokoll. Normale Dateipfade liegen ausschließlich in `/data/run-logs`; nur konkret betroffene Warnungspfade werden begrenzt in der strukturierten Warnungszusammenfassung gespeichert. Beim Start werden größere oder ältere Rohinhalte bei Bedarf zuerst nach `/data/run-logs` migriert und anschließend aus der Datenbank entfernt. Unter **System → Einstellungen → Ausführungsprotokolle** werden Anzahl, Dateigröße und Datenbankanteil angezeigt. Dort können abgelaufene oder alle abgeschlossenen Protokolle sofort gelöscht werden. Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin nach der konfigurierten Aufbewahrungsdauer. Aktive Läufe bleiben immer erhalten.
 
 ## 17. Benachrichtigungszentrale einrichten
 

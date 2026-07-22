@@ -130,3 +130,22 @@ def test_job_list_shows_refreshable_source_statistics():
     assert "'source-stats'" in javascript
     assert "source_file_count" in javascript
     assert "Live-Scan vor Ausschlüssen" in javascript
+
+
+def test_job_list_has_direct_edit_button_before_more_actions():
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+
+    sequence = "Archive</button><button class=\"secondary\" ${bbmAction('editJob', job.id)}>Bearbeiten</button><button class=\"secondary\" data-job-toggle="
+    assert sequence in javascript
+    assert ">Job bearbeiten</button>" not in javascript
+
+
+def test_job_editor_uses_left_space_and_keeps_paths_at_top_right():
+    html = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    basics = html.split('class="job-create-basics"', 1)[1].split('class="job-create-paths"', 1)[0]
+    paths = html.split('class="job-create-paths"', 1)[1].split('<details class="job-options"', 1)[0]
+    assert "Archivnamensvorlage" in basics and "Kompression" in basics
+    assert paths.index("Quellpfade") < paths.index("Ausschlussvorlage") < paths.index("Ausschlüsse")
+    assert ".job-create-paths { align-self: start; }" in css
+    assert "@media (max-width: 820px)" in css

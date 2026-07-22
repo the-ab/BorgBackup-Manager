@@ -62,3 +62,33 @@ def test_header_status_opens_only_the_current_active_run_live_log():
     assert "if (run) showRun(run.id)" in javascript
     assert "$('#sync-state').onclick = openCurrentActiveRun" in javascript
     assert "toggleTaskStatusMenu" not in javascript
+
+
+def test_live_polling_avoids_full_log_reads_when_dialog_is_closed():
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+
+    assert "?include_details=false" in javascript
+    assert "?live=true&log_offset=" in javascript
+    assert "liveDialogOpen ? 1800 : 1500" in javascript
+    assert "run = await api('/runs/' + runId);" in javascript
+    assert "state.liveLogOffset" in javascript
+    assert "appendLog: true" in javascript
+
+
+def test_live_dialog_serializes_offset_requests_and_replaces_empty_placeholder():
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+
+    assert "liveLogRequestPending" in javascript
+    assert "liveLogSession" in javascript
+    assert "currentOffset === requestedOffset" in javascript
+    assert "Ignore a stale response" in javascript
+    assert "emptyPlaceholder" in javascript
+    assert "logContent.textContent = '';" in javascript
+
+
+def test_empty_incremental_log_delta_never_reuses_sqlite_preview():
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+
+    assert "const rawReadable = appendLog" in javascript
+    assert "String(run.log_output ?? '')" in javascript
+    assert "already displayed header would be appended again" in javascript

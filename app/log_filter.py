@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-_FILE_STATUS_RE = re.compile(r"^\s*([AMUCERdbchsfipx?+\-.])\s+\S")
+_FILE_STATUS_RE = re.compile(r"^\s*(?:(?i:Remote):\s*)?([AMUCERdbchsfipx?+\-.])\s+\S")
 _PERMISSION_ERROR_RE = re.compile(r"(?:PermissionError:\s*)?\[Errno 13\] Permission denied:\s*[\"\'][^\"\']+[\"\']", re.IGNORECASE)
 _ERROR_MARKERS = (
     "error", "failed", "failure", "exception", "traceback", "permission denied",
@@ -31,6 +31,34 @@ def _is_file_activity(line: str) -> bool:
     match = _FILE_STATUS_RE.match(line)
     return bool(match and match.group(1) not in {"C", "E"})
 
+
+
+def strip_borg_item_lines(text: str | None) -> str:
+    """Remove Borg ``--list`` status/path lines from a database preview.
+
+    The complete arrival-ordered stream is stored in the file-backed run log.
+    SQLite needs only bounded metadata and diagnostics; mirroring normal file
+    paths there duplicates data and increases database writes. Warning paths
+    remain available separately in ``warning_summary_json``.
+    """
+    if not text:
+        return ""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    kept: list[str] = []
+    for raw in normalized.splitlines():
+        line = raw.rstrip()
+        if _FILE_STATUS_RE.match(line):
+            continue
+        if not line:
+            if kept and kept[-1] != "":
+                kept.append("")
+            continue
+        kept.append(line)
+    while kept and not kept[0]:
+        kept.pop(0)
+    while kept and not kept[-1]:
+        kept.pop()
+    return "\n".join(kept)
 
 def extract_error_output(text: str | None) -> str:
     """Extract actual errors and warnings from Borg's stderr stream.

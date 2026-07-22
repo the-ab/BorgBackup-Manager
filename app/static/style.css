@@ -1790,3 +1790,85 @@ body.compact .job-action-buttons button { min-height: 27px !important; padding: 
 
 
 /* 1.0.54: keep inline warning status text separate from warning notice boxes */
+
+
+/* 1.0.60: compact editors and reliable mobile stacking */
+.job-create-layout,
+.schedule-create-layout,
+.archive-compare-grid {
+  display: grid;
+  grid-template-columns: minmax(250px, .78fr) minmax(420px, 1.45fr);
+  gap: 14px 18px;
+  align-items: start;
+}
+.job-create-basics,
+.job-create-paths,
+.schedule-create-basics,
+.schedule-create-details,
+.archive-compare-selects,
+.archive-compare-paths {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.job-create-basics .hint,
+.job-create-paths .hint { margin: 0; }
+.job-create-paths textarea { min-height: 92px; }
+.job-create-paths .exclude-template-apply { align-items: end; }
+.schedule-create-layout { grid-template-columns: minmax(250px, .82fr) minmax(430px, 1.5fr); }
+.schedule-create-details .schedule-target { margin: 0; }
+.schedule-create-details .schedule-editor { margin-top: 0 !important; }
+.archive-compare-compact {
+  display: block;
+  width: min(100%, 1080px);
+}
+.archive-compare-grid { grid-template-columns: minmax(320px, .95fr) minmax(340px, 1.2fr); }
+.archive-compare-selects .archive-check { margin-top: 2px; }
+.archive-compare-paths textarea { min-height: 76px; }
+.archive-compare-paths .form-actions { justify-content: flex-end; }
+.jobs-table .table-actions { min-width: 300px; }
+
+@media (max-width: 1050px) {
+  .job-create-layout,
+  .schedule-create-layout { grid-template-columns: minmax(220px, .8fr) minmax(360px, 1.25fr); }
+  .archive-compare-grid { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 820px) {
+  .job-create-layout,
+  .schedule-create-layout,
+  .archive-compare-grid { grid-template-columns: 1fr; }
+  .archive-compare-compact { width: 100%; }
+  .archive-compare-paths .form-actions { justify-content: flex-start; }
+  .jobs-table .table-actions { min-width: 0; }
+}
+
+@media (max-width: 620px) {
+  .job-create-paths .exclude-template-apply { grid-template-columns: 1fr; }
+  .job-create-paths .exclude-template-apply button,
+  .archive-compare-paths .form-actions,
+  .archive-compare-paths .form-actions button { width: 100%; }
+  .schedule-editor-head { align-items: stretch; flex-direction: column; }
+  .schedule-editor-head button { width: 100%; }
+}
+
+
+/* 1.0.62: sparse live output, compact job editor and readable archive diff */
+.job-create-basics > .job-form-grid.archive-settings {
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-top: 2px;
+}
+.job-create-basics > .job-form-grid.archive-settings > :first-child { grid-column: auto; }
+.job-create-paths { align-self: start; }
+.archive-diff-context { display: block; margin-top: 4px; color: var(--muted); font-size: .78rem; }
+.archive-diff-output {
+  line-height: 1.55;
+  tab-size: 4;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.aside-foot #version-link { white-space: normal; line-height: 1.25; }
+@media (max-width: 820px) {
+  .job-create-basics > .job-form-grid.archive-settings { margin-top: 0; }
+}

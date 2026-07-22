@@ -1,5 +1,140 @@
 # Release Notes
 
+## v1.0.62 – 2026-07-22
+
+### Updates from v1.0.60 are compatible again
+
+- The failed v1.0.61 image build was caused by the newly introduced root-level `RELEASE_DATE` file. The still-running v1.0.60 updater did not know this file, while it already copied the new Dockerfile, leaving the Docker build context incomplete.
+- Release-date metadata now lives in `app/release.py`. Older updater versions already copy the complete `app/` directory reliably.
+- The Dockerfile now requires only `VERSION` as a separate metadata file. No new root-level file unknown to an older updater is needed.
+- `update.sh`, release checks and regression tests were updated accordingly.
+- According to the updater output, the failed v1.0.61 attempt restored the previous project files before any database migration was involved.
+
+### Verification
+
+- Update compatibility was simulated with the v1.0.60 updater allowlist.
+- Every Dockerfile source is present in the resulting Docker build context.
+- No database-schema migration is required.
+
+## v1.0.61 – 2026-07-22
+
+### Continuous live output for sparse jobs
+
+- The file-backed live-log writer now also flushes on a timer. The backup header therefore becomes visible while a job is still running even when the complete file list is disabled and Borg emits no further lines until final statistics.
+- The normal buffer limit and maximum flush interval remain in place, preserving the CPU optimizations for high-volume file lists.
+- Empty incremental polls still leave the visible output unchanged and duplicate header blocks remain prevented.
+
+### More compact backup-job editor
+
+- Source paths, exclusion template and exclusions remain aligned at the top of the right column.
+- Archive-name template and compression have moved into the left basic-data column, using the former empty space below name, device and repository and reducing the form height.
+- Below 820 pixels the form still collapses into a complete single-column mobile layout.
+
+### Correct and readable archive comparisons
+
+- When both archives belong to the same backup job, the actual owner is resolved from the longest matching archive prefix. The first-created repository job is no longer used as the label.
+- Archive options display their assigned job, and a context line identifies the backup job and device or warns about mixed/ambiguous ownership.
+- `borg diff` now uses its human-readable default output instead of raw JSON lines. A clear header shows the older archive, newer archive, path scope and content filter.
+- The run dialog labels the action **Compare archives** and uses improved line spacing.
+
+### Version and release date
+
+- The sidebar combines version and release date as `v1.0.61 · 22.07.2026`.
+- The date is read from the new `RELEASE_DATE` file and is preserved by the Dockerfile and updater.
+
+### Verification
+
+- 448 automated tests passed, including timed live-log flushing, correct archive-owner resolution, readable diff output and the responsive backup-job form.
+- Python, JavaScript, Bash and POSIX-shell syntax checks passed.
+- No database-schema migration is required. Devices, repositories, backup jobs, schedules, archives, users and settings remain unchanged.
+
+## v1.0.60
+
+### Live log without repeated header blocks
+
+- Empty incremental live-log responses no longer fall back to the SQLite metadata preview. The already visible backup header is therefore not appended again while a job is running.
+- The placeholder is still replaced by the first real log block; polls without new bytes leave the visible output unchanged.
+- Running backup output is now filtered for SQLite across process-chunk boundaries: ordinary Borg item statuses and paths remain exclusively in the file-backed log, while small metadata remains available live.
+
+### More compact user interface
+
+- Backup jobs now have a direct **Edit** button between **Archives** and **More**.
+- The backup-job editor places name, device and repository on the left, with source paths, exclude template and exclusions on the right.
+- The central schedule editor places name, target group, cadence and parallel limit on the left, with target selection and execution times on the right.
+- **Compare archives** now uses a compact two-column layout and a smaller optional-path field.
+- All new layouts automatically collapse to one column on tablets and mobile devices, while action controls remain fully usable.
+
+### Verification
+
+- 443 automated tests passed, including empty live-log deltas, chunk-safe SQLite path filtering, the direct edit button and responsive form layouts.
+
+## v1.0.59
+
+### Live log without duplicated start blocks
+
+- Opening a running job now serializes the initial log request and background polling. They can no longer read the same file offset concurrently and append the same header block repeatedly.
+- Late responses from an older live request are discarded using the live session and requested file offset.
+- The **No output available yet …** placeholder is replaced by the first real log block instead of remaining in front of it.
+- Log-compaction resets remain supported and still replace the visible window safely.
+
+### Complete file paths removed from SQLite previews
+
+- A legacy finalization fallback still copied the last 16 KiB of raw Borg output into `Run.log_output` even though complete logs were already file-backed. Ordinary file paths could therefore reappear in `manager.db` after completion. The fallback has been removed.
+- Complete Borg status/path output is stored exclusively in `/data/run-logs/run-ID.log`. SQLite now contains only small metadata and diagnostic previews plus the structured warning summary.
+- Ordinary item paths are removed from `output`, `error` and `log_output`. Bounded paths for actual warning causes deliberately remain in `warning_summary_json`, because execution details and notifications depend on them.
+- Existing legacy SQLite previews are cleaned automatically at startup. Missing file-backed logs are created from the old payload first, after which the database can be compacted with the existing automatic `VACUUM` step.
+
+### Verification
+
+- 439 automated tests passed, including concurrent live requests, placeholder replacement, SQLite preview cleanup, legacy-log migration and structured warning paths.
+- No schema change is required. Devices, repositories, jobs, schedules, archives, users and settings remain unchanged.
+
+## v1.0.58
+
+### Second CPU-optimization stage for complete file lists
+
+- The production high-volume path now processes `borg create --list` as raw byte blocks. Normal file names are no longer fully UTF-8 decoded or split line by line in Python on the manager.
+- A fast byte-block filter skips complete blocks containing ordinary Borg item statuses in one operation. Only blocks containing `C`, `E` or textual warnings enter detailed structured warning analysis.
+- Ordinary file status lines are no longer mirrored continuously into the SQLite preview. During a run SQLite receives only small stdout metadata and changed warning summaries; the complete log remains unchanged under `/data/run-logs`.
+- The subprocess reader consumes raw blocks of up to 256 KiB. The log writer buffers up to 1 MiB or 750 ms and tracks the known file size internally instead of calling `stat()` after every flush.
+- Warning collection remains complete: changed files (`C`), file access errors (`E`), permission, I/O, missing-path and textual Borg warnings continue to be stored structurally.
+
+### Incremental live log
+
+- An open live log now requests only bytes appended since the previous poll by using a file offset.
+- The Web UI no longer transfers and renders the same 256 KiB window on every poll.
+- If the browser falls behind or the log was compacted, the server automatically returns the newest bounded tail and instructs the browser to reset the live view safely.
+- The active browser view is bounded to 768 KiB; the configured complete head/tail view is still loaded once after completion. The underlying log file is unaffected.
+- Polling runs every 1.8 seconds with the dialog open and every 1.5 seconds while it is closed.
+
+### Verification
+
+- Synthetic comparison with 500,000 ordinary item lines plus one `C` and one `E` warning: pure manager-side processing decreased from about 0.76–0.91 seconds to about 0.17–0.24 seconds in the test environment. The same test also eliminated 62 SQLite preview flushes.
+- 436 automated tests passed, including raw-byte streaming, incremental log offsets, log reset handling, warning collection and complete run finalization.
+- No database migration is required. Devices, repositories, jobs, schedules, archives, users and settings remain unchanged.
+
+## v1.0.57
+
+### CPU-optimized full file-list processing
+
+- **Show processed files in the live log** remains fully available, but large `borg create --list` streams are now processed in batches instead of performing filesystem work for every small process chunk.
+- Each running execution uses one buffered, persistent log writer. Writes, permission handling and size checks happen only at bounded intervals or after larger data blocks.
+- The filtered error view is no longer recalculated from up to 256 KiB of text for every Borg output chunk; it is refreshed only with the bounded database preview flush.
+- Ordinary Borg item statuses such as `A`, `M`, `U` and `d` bypass the complete warning regular-expression chain. Warning-relevant `C` and `E` statuses and textual Borg warnings are still detected and stored in full.
+- The subprocess reader consumes larger chunks and bounded stdout/stderr capture now preserves the exact tail.
+
+### Reduced Web UI live polling
+
+- While the run dialog is closed, the Web UI requests only status and metadata and no longer reads the file-backed live log on every poll.
+- While the live log is open, an active run transfers a bounded 256 KiB head/tail view. The configured complete view is loaded once after completion.
+- The live polling interval was increased from 850 to 1200 milliseconds without affecting warning collection or run status.
+
+### Verification
+
+- A synthetic comparison with 120,000 Borg item lines and 4.2 MiB of output reduced pure manager-side processing time in the test environment from about 14.4 to 0.46 seconds. This is a reproducible stress test, not a guaranteed production value.
+- Warning paths with status `C` and `E` remain available with both full and reduced file listing modes.
+- No database migration is required. Devices, repositories, jobs, schedules, archives, users and settings remain unchanged.
+
 ## v1.0.56
 
 ### Manual GitHub publishing

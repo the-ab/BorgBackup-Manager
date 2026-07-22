@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.56
+# BorgBackup Manager 1.0.62
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -33,7 +33,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.0.56.zip
+BorgBackup-Manager-1.0.62.zip
 ```
 
 The documentation naming convention is:
@@ -281,7 +281,7 @@ The manager distinguishes:
 
 For remote backup cancellation, a supervised control channel first signals the remote Borg process group and waits for confirmed termination before releasing the queue. Automatic `borg break-lock` is deliberately not performed.
 
-Warning causes are captured while Borg is running, before log truncation. Changed files, missing files, permission errors, I/O errors and general Borg warnings are persisted separately. If Borg returns warning status without a detail line, the UI explicitly reports that no cause was emitted.
+Warning causes are captured while Borg is running, before log truncation. Changed files, missing files, permission errors, I/O errors and general Borg warnings are persisted separately. If Borg returns warning status without a detail line, the UI explicitly reports that no cause was emitted. Full file-list output uses a raw-byte path: ordinary Borg item blocks are not fully decoded or split line by line. Complete status/path output is stored only in `/data/run-logs`; SQLite keeps cleaned metadata/diagnostic previews and bounded structured warning causes, not the ordinary file list. With the run dialog closed, status polling reads no file-backed log. An open live dialog requests only bytes appended since its previous file offset; the initial request and background poll are serialized so stale responses cannot duplicate the header. The browser view remains bounded and the configured complete head/tail view is loaded once after completion.
 
 ## Archives
 
@@ -359,7 +359,7 @@ System diagnostics cover:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.56.zip
+unzip /path/BorgBackup-Manager-1.0.62.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh

@@ -33,6 +33,13 @@ _UNMATCHED_PATTERN_RE = re.compile(
 )
 _TERMINATION_RE = re.compile(r"terminating with (?:warning|success|error) status,\s*rc\s*\d+", re.IGNORECASE)
 _COUNT_KEYS = ("changed", "permission", "missing", "io", "error", "other", "unknown")
+_NON_WARNING_ITEM_STATUSES = frozenset("AMURdbchsfipx?+.-")
+_NON_WARNING_ITEM_STATUS_BYTES = b"AMURdbchsfipx?+.-"
+_ONLY_NON_WARNING_ITEM_BLOCK_BYTES_RE = re.compile(
+    rb"(?:(?:[ \t]*(?:[Rr][Ee][Mm][Oo][Tt][Ee]:[ \t]*)?["
+    + re.escape(_NON_WARNING_ITEM_STATUS_BYTES)
+    + rb"][ \t]+[^\r\n]*\n))+\Z"
+)
 
 
 def _clean_path(value: str) -> str:
@@ -111,6 +118,34 @@ def _warning_item(line: str) -> dict[str, str] | None:
     return None
 
 
+def _can_skip_item_line(line: str) -> bool:
+    """Fast-path ordinary ``borg create --list`` activity lines.
+
+    Full file listings overwhelmingly consist of one status character, a space
+    and a path. Only ``C`` and ``E`` can represent warning causes. Avoid running
+    the complete regular-expression chain for all other item statuses.
+    """
+    candidate = line.lstrip()
+    if candidate[:7].casefold() == "remote:":
+        candidate = candidate[7:].lstrip()
+    return (
+        len(candidate) >= 2
+        and candidate[0] in _NON_WARNING_ITEM_STATUSES
+        and candidate[1].isspace()
+    )
+
+
+def _can_skip_item_line_bytes(line: bytes) -> bool:
+    candidate = line.lstrip()
+    if candidate[:7].lower() == b"remote:":
+        candidate = candidate[7:].lstrip()
+    return (
+        len(candidate) >= 2
+        and candidate[0] in _NON_WARNING_ITEM_STATUS_BYTES
+        and chr(candidate[1]).isspace()
+    )
+
+
 def _empty_counts() -> dict[str, int]:
     return {kind: 0 for kind in _COUNT_KEYS}
 
@@ -125,7 +160,7 @@ class BorgWarningCollector:
 
     def __init__(self, *, max_items: int = 100):
         self.max_items = max(1, int(max_items))
-        self._buffers: dict[str, str] = {"stdout": "", "stderr": ""}
+        self._buffers: dict[str, bytes] = {"stdout": b"", "stderr": b""}
         self._items: list[dict[str, str]] = []
         self._seen: set[tuple[str, str, str]] = set()
         self._counts = _empty_counts()
@@ -148,13 +183,34 @@ class BorgWarningCollector:
     def feed(self, text: str | None, *, stream: str = "stderr") -> bool:
         if not text:
             return False
+        return self.feed_bytes(text.encode("utf-8", errors="replace"), stream=stream)
+
+    def feed_bytes(self, data: bytes | bytearray | memoryview | None, *, stream: str = "stderr") -> bool:
+        """Consume raw subprocess bytes without decoding ordinary file lists.
+
+        A complete ``borg create --list`` block usually contains thousands of
+        normal status/path lines. A bytes regex validates such a block in C and
+        skips it as a whole. Only blocks containing C/E statuses or textual
+        diagnostics are split and decoded line by line.
+        """
+        if not data:
+            return False
         stream_name = stream if stream in self._buffers else "stderr"
-        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        normalized = bytes(data).replace(b"\r\n", b"\n").replace(b"\r", b"\n")
         combined = self._buffers[stream_name] + normalized
-        lines = combined.split("\n")
-        self._buffers[stream_name] = lines.pop()
+        newline = combined.rfind(b"\n")
+        if newline < 0:
+            self._buffers[stream_name] = combined
+            return False
+        complete = combined[: newline + 1]
+        self._buffers[stream_name] = combined[newline + 1 :]
+        if _ONLY_NON_WARNING_ITEM_BLOCK_BYTES_RE.fullmatch(complete):
+            return False
         changed = False
-        for line in lines:
+        for raw_line in complete.splitlines():
+            if _can_skip_item_line_bytes(raw_line):
+                continue
+            line = raw_line.decode("utf-8", errors="replace")
             item = _warning_item(line)
             if item is not None:
                 changed = self._record(item) or changed
@@ -164,10 +220,11 @@ class BorgWarningCollector:
         changed = False
         for stream, remainder in tuple(self._buffers.items()):
             if remainder:
-                item = _warning_item(remainder)
+                line = remainder.decode("utf-8", errors="replace")
+                item = _warning_item(line)
                 if item is not None:
                     changed = self._record(item) or changed
-            self._buffers[stream] = ""
+            self._buffers[stream] = b""
         return changed
 
     def summary(self) -> dict[str, Any] | None:
