@@ -23,6 +23,25 @@ def run_log_path(run_id: int) -> Path:
     return RUN_LOG_DIR / f"run-{int(run_id)}.log"
 
 
+def available_run_log_ids() -> set[int]:
+    """Return all run IDs with a file-backed log using one directory scan."""
+    result: set[int] = set()
+    try:
+        with os.scandir(RUN_LOG_DIR) as entries:
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                name = entry.name
+                if not name.startswith("run-") or not name.endswith(".log"):
+                    continue
+                raw_id = name[4:-4]
+                if raw_id.isdigit():
+                    result.add(int(raw_id))
+    except OSError:
+        pass
+    return result
+
+
 def _compact_run_log(path: Path, max_bytes: int) -> None:
     if max_bytes <= 0:
         return

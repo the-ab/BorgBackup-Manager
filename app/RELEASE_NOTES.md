@@ -1,5 +1,34 @@
 # Release Notes
 
+## v1.0.63 – 2026-07-22
+
+### Correct labels for archive comparisons
+
+- The visible archive-comparison run label is now derived from the actually selected archive series instead of the backup job used only for technical repository access.
+- Archives from one job show that job name. Archives from two jobs are labelled, for example, `OVPN-C-VPN0 ↔ OVPN-C-VPN1 · Compare archives`.
+- When an archive cannot be assigned unambiguously, the device identifier inferred from its archive name is used as a fallback.
+- The comparison command, archive selection and readable diff output remain unchanged.
+
+### Project-wide reference and file audit
+
+- The new local `scripts/project-audit.py` checks Python modules, CLI entrypoints, static web assets, frontend API references, Docker `COPY` sources, local Markdown links and the release layout.
+- The audit is integrated into `scripts/release-check.sh` and requires no GitHub Actions.
+- Release-note files below `app/` intentionally remain compatibility copies for very old updaters and are now required to match the canonical files byte for byte.
+- No unused runtime modules, missing static assets, invalid API references or orphaned project files were found.
+
+### Additional performance improvements without feature loss
+
+- The execution list inventories file-backed logs with one directory scan instead of one filesystem lookup per table row.
+- Backup statistics already persisted in dedicated database columns are no longer reparsed from log text when the execution list is loaded. The parser remains as a fallback for legacy or incomplete rows.
+- Persistent settings are cached by path, modification timestamp and size. WebUI changes update the cache immediately, while manual file edits are detected on the next access.
+- Versioned static web assets are cached immutably by the browser. The HTML document and API responses remain uncached.
+
+### Verification
+
+- 456 automated tests passed; the project audit and Python, JavaScript, Bash and POSIX-shell syntax checks also passed.
+- Update compatibility, Docker build sources, German and English documentation and old-updater compatibility copies were checked.
+- No database-schema migration is required.
+
 ## v1.0.62 – 2026-07-22
 
 ### Updates from v1.0.60 are compatible again

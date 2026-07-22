@@ -145,3 +145,14 @@ def test_service_runs_time_driven_live_log_flush():
     assert "async def flush_live_log_periodically" in service
     assert "log_writer.flush_if_due()" in service
     assert "live_log_flush_task.cancel()" in service
+
+
+def test_available_run_log_ids_uses_directory_inventory(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_logs, "RUN_LOG_DIR", tmp_path)
+    (tmp_path / "run-1.log").write_text("one", encoding="utf-8")
+    (tmp_path / "run-20.log").write_text("twenty", encoding="utf-8")
+    (tmp_path / "run-invalid.log").write_text("ignored", encoding="utf-8")
+    (tmp_path / "other.log").write_text("ignored", encoding="utf-8")
+    (tmp_path / "run-30.log").mkdir()
+
+    assert run_logs.available_run_log_ids() == {1, 20}

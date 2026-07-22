@@ -29,7 +29,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 
 from app.archive_cache import invalidate_archive_cache, load_archive_cache, store_archive_cache
-from app.archive_metadata import annotate_archive_devices, sort_archives_newest_first
+from app.archive_metadata import annotate_archive_devices, infer_archive_device, sort_archives_newest_first
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
 from app.borg_warnings import (
     parse_borg_warnings,
@@ -137,7 +137,7 @@ from app.repository_sizes import (
     managed_repository_filesystem_size, repository_statistics_from_borg_info,
     store_repository_statistics,
 )
-from app.run_logs import append_run_log, cleanup_orphan_run_logs, delete_run_log, read_run_log, read_run_log_delta, run_log_path, run_log_storage_bytes
+from app.run_logs import available_run_log_ids, append_run_log, cleanup_orphan_run_logs, delete_run_log, read_run_log, read_run_log_delta, run_log_path, run_log_storage_bytes
 from app.settings import load_settings, save_settings
 from app.storage_guard import effective_storage_guard, repository_storage_filesystems
 from app.time_utils import APP_TIMEZONE, APP_TIMEZONE_NAME, iso_utc, normalize_borg_timestamp
@@ -975,7 +975,15 @@ async def browser_security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
     response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
-    if request.url.path == "/" or request.url.path.startswith("/api/") or request.url.path.endswith(("/app.js", "/style.css", "/index.html")):
+    path = request.url.path
+    if path.startswith("/static/") and request.query_params.get("v") == APP_VERSION:
+        # Versioned static assets are immutable for this release. This avoids
+        # repeated transfer and validation requests without risking stale files
+        # after an update because every release changes the query version.
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, max-age=0"
+    elif path == "/" or path.startswith("/api/") or path.endswith("/index.html"):
         response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["Pragma"] = "no-cache"
     return response
@@ -2754,21 +2762,36 @@ async def diff_archives(job_id: int, data: ArchiveDiffIn) -> dict:
         ))
         first_owner = archive_owner_job(data.archive, repository_jobs)
         second_owner = archive_owner_job(data.second_archive, repository_jobs)
-        # Archive comparisons are repository-side operations. When both selected
-        # archives belong to the same job, use that actual owner for the run
-        # label instead of whichever repository job happened to be created first.
-        effective_job = (
-            first_owner
+
+        # Archive comparisons are repository-side operations. Use any resolved
+        # owner only as the technical access job, but keep a dedicated display
+        # label that describes both selected archive series. This avoids showing
+        # the first-created repository job when two different jobs are compared.
+        effective_job = first_owner or second_owner or requested_job
+
+        def owner_label(owner: Job | None, archive_name: str) -> str:
+            if owner:
+                return owner.name
+            inferred = infer_archive_device(archive_name)
+            return inferred or archive_name
+
+        first_label = owner_label(first_owner, data.archive)
+        second_label = owner_label(second_owner, data.second_archive)
+        comparison_label = (
+            first_label
             if first_owner and second_owner and first_owner.id == second_owner.id
-            else requested_job
-        )
+            else f"{first_label} ↔ {second_label}"
+        )[:100]
         db.expunge(effective_job)
     names = await repository_archive_names(effective_job)
     missing = [name for name in (data.archive, data.second_archive) if name not in names]
     if missing:
         raise HTTPException(404, f"Archive not found: {', '.join(missing)}")
     try:
-        return {"run_id": queue_job_action(effective_job.id, "diff-archives", data.model_dump())}
+        return {"run_id": queue_job_action(
+            effective_job.id, "diff-archives", data.model_dump(),
+            run_label=comparison_label,
+        )}
     except (LookupError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -3024,6 +3047,7 @@ def run_json(
     include_details: bool = True,
     log_max_bytes: int | None = None,
     log_offset: int | None = None,
+    log_file_available: bool | None = None,
 ) -> dict:
     file_log = None
     live_log_offset: int | None = None
@@ -3097,16 +3121,36 @@ def run_json(
     if not display_error and row.status in {"failed", "warning"}:
         display_error = extract_error_output(diagnostic_text)
     backup_statistics = {}
-    if row.action == "backup" and log_offset is None:
+    if (
+        row.action == "backup"
+        and log_offset is None
+        and (
+            not row.archive_name_snapshot
+            or row.backup_original_size_bytes is None
+            or row.backup_compressed_size_bytes is None
+            or row.backup_deduplicated_size_bytes is None
+            or row.backup_file_count is None
+        )
+    ):
+        # Current runs persist parsed backup statistics in dedicated columns.
+        # Only legacy/incomplete rows need the comparatively expensive fallback
+        # parser over the bounded log preview.
         backup_statistics = parse_backup_statistics(combined)
     return {
         "id": row.id, "job_id": row.job_id,
-        "job_name": row.job.name if row.job else row.job_name_snapshot,
+        "job_name": (
+            row.job_name_snapshot
+            if row.action == "diff-archives" and row.job_name_snapshot
+            else (row.job.name if row.job else row.job_name_snapshot)
+        ),
         "action": row.action, "status": row.status,
         "command_preview": row.command_preview if include_details else "",
         "output": row.output if include_details else "", "error": display_error if include_details else "",
         "log_output": combined if include_details else "",
-        "log_file_available": run_log_path(row.id).is_file(),
+        "log_file_available": (
+            run_log_path(row.id).is_file()
+            if log_file_available is None else bool(log_file_available)
+        ),
         "log_offset": live_log_offset, "log_reset": live_log_reset, "log_truncated": live_log_truncated,
         "created_at": iso_utc(row.created_at), "started_at": iso_utc(row.started_at), "finished_at": iso_utc(row.finished_at),
         "duration_seconds": duration, "diagnosis": diagnosis,
@@ -3230,7 +3274,14 @@ def list_runs(limit: int | None = None, offset: int = 0, status: str = "all"):
     query = query.order_by(Run.id.desc()).offset(max(offset, 0)).limit(effective_limit)
     with SessionLocal() as db:
         rows = db.scalars(query).all()
-        return [run_json(x, include_details=False) for x in rows]
+        available_logs = available_run_log_ids() if rows else set()
+        return [
+            run_json(
+                row, include_details=False,
+                log_file_available=row.id in available_logs,
+            )
+            for row in rows
+        ]
 
 
 @app.get("/api/runs/storage", dependencies=admin_protected)

@@ -1179,6 +1179,7 @@ def queue_job_action(
     schedule_name: str | None = None,
     schedule_id: int | None = None,
     schedule_parallel_limit: int = 0,
+    run_label: str | None = None,
 ) -> int:
     with SessionLocal() as db:
         job = db.scalar(
@@ -1278,7 +1279,7 @@ def queue_job_action(
             raise ValueError(f"Unsupported action: {action}")
         run = Run(
             job_id=job_id,
-            job_name_snapshot=job.name,
+            job_name_snapshot=(run_label or job.name)[:100],
             repository_id=job.repository_id,
             action=action,
             status="queued",

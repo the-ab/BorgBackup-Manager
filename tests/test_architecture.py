@@ -764,3 +764,28 @@ def test_repository_reset_ui_is_safe_and_disables_missing_repository_actions():
     assert '@app.post("/api/repositories/{repository_id}/reset"' in main_py
     assert "require_empty_managed_repository(repository)" in service_py
     assert 'action="repository-reset"' in service_py
+
+
+def test_local_release_check_audits_references_without_github_automation():
+    audit = (PROJECT_ROOT / "scripts/project-audit.py").read_text(encoding="utf-8")
+    release_check = (PROJECT_ROOT / "scripts/release-check.sh").read_text(encoding="utf-8")
+    assert "audit_python_modules" in audit
+    assert "audit_static_files" in audit
+    assert "audit_frontend_api_routes" in audit
+    assert "audit_docker_sources" in audit
+    assert "audit_markdown_links" in audit
+    assert "old-updater compatibility copy" in audit
+    assert "python scripts/project-audit.py" in release_check
+    assert not (PROJECT_ROOT / ".github").exists()
+
+
+def test_versioned_static_assets_are_cached_immutably():
+    main = (PROJECT_ROOT / "app/main.py").read_text(encoding="utf-8")
+    html = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    assert 'response.headers["Cache-Control"] = "public, max-age=31536000, immutable"' in main
+    assert f"/static/app.js?v={version}" in html
+    assert f"/static/style.css?v={version}" in html
+    assert f"/static/help.${{normalized}}.html?v={version}" in javascript
+    assert "{cache: 'no-store'}" not in javascript

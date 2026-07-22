@@ -6,7 +6,7 @@ cd "$project_root"
 
 required_files=(
   LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md
-  .gitignore .dockerignore VERSION app/release.py
+  .gitignore .dockerignore VERSION app/release.py scripts/project-audit.py
 )
 for file in "${required_files[@]}"; do
   test -s "$file" || { echo "Missing required release file: $file" >&2; exit 1; }
@@ -23,7 +23,8 @@ if find . -path './.git' -prune -o -type f \
   exit 1
 fi
 
-python -m compileall -q app tests
+python scripts/project-audit.py
+python -m compileall -q app tests scripts/project-audit.py
 python -m pytest -q
 
 node --check app/static/app.js

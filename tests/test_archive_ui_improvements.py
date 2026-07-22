@@ -64,6 +64,9 @@ def test_archive_diff_uses_selected_owner_job_and_readable_output():
     assert "const ownerJobId = firstJobId && secondJobId" in javascript
     assert "archive_owner_job(data.archive, repository_jobs)" in main
     assert "first_owner.id == second_owner.id" in main
+    assert "run_label=comparison_label" in main
+    assert 'else f"{first_label} ↔ {second_label}"' in main
+    assert 'row.action == "diff-archives" and row.job_name_snapshot' in main
     assert 'parts = [*_borg_base("diff")]' in runner
     assert '"--json-lines"' not in runner.split("def diff_archives_command", 1)[1].split("def browse_archive_command", 1)[0]
     assert "ARCHIVVERGLEICH" in runner

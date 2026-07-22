@@ -1853,7 +1853,7 @@ body.compact .job-action-buttons button { min-height: 27px !important; padding: 
 }
 
 
-/* 1.0.62: sparse live output, compact job editor and readable archive diff */
+/* 1.0.63: sparse live output, compact job editor and readable archive diff */
 .job-create-basics > .job-form-grid.archive-settings {
   grid-template-columns: 1fr;
   gap: 10px;

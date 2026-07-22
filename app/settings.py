@@ -9,6 +9,8 @@ from app.schemas import SettingsIn
 
 
 _lock = Lock()
+_cached_key: tuple[str, bool, int, int] | None = None
+_cached_settings: SettingsIn | None = None
 
 
 def _environment_limit(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -39,7 +41,15 @@ def default_settings() -> SettingsIn:
     )
 
 
-def load_settings() -> SettingsIn:
+def _settings_file_key() -> tuple[str, bool, int, int]:
+    try:
+        stat = SETTINGS_PATH.stat()
+        return str(SETTINGS_PATH), True, int(stat.st_mtime_ns), int(stat.st_size)
+    except OSError:
+        return str(SETTINGS_PATH), False, 0, 0
+
+
+def _load_settings_uncached() -> SettingsIn:
     defaults = default_settings().model_dump()
     try:
         raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8")) if SETTINGS_PATH.is_file() else {}
@@ -53,7 +63,25 @@ def load_settings() -> SettingsIn:
         return default_settings()
 
 
+def load_settings() -> SettingsIn:
+    """Load persistent settings while avoiding repeated JSON/Pydantic work.
+
+    Queue planning and live execution consult settings frequently. The file is
+    reparsed only when its path, timestamp or size changes. ``save_settings``
+    refreshes the cache immediately, while manual external edits are detected
+    by the metadata key on the next call.
+    """
+    global _cached_key, _cached_settings
+    key = _settings_file_key()
+    with _lock:
+        if _cached_key != key or _cached_settings is None:
+            _cached_settings = _load_settings_uncached()
+            _cached_key = _settings_file_key()
+        return _cached_settings.model_copy(deep=True)
+
+
 def save_settings(settings: SettingsIn) -> SettingsIn:
+    global _cached_key, _cached_settings
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _lock:
         temporary = SETTINGS_PATH.with_suffix(".tmp")
@@ -63,4 +91,6 @@ def save_settings(settings: SettingsIn) -> SettingsIn:
         )
         os.chmod(temporary, 0o600)
         temporary.replace(SETTINGS_PATH)
+        _cached_settings = settings.model_copy(deep=True)
+        _cached_key = _settings_file_key()
     return settings

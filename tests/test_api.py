@@ -2972,3 +2972,73 @@ def test_execute_run_keeps_raw_file_list_out_of_sqlite_previews(monkeypatch):
         assert "var/lib/app/live.db" not in completed.error
         assert "var/lib/app/live.db" not in completed.log_output
         assert "var/lib/app/live.db" in completed.warning_summary_json
+
+
+def test_archive_diff_labels_mixed_jobs_instead_of_first_repository_job(monkeypatch):
+    suffix = str(time.time_ns())
+    with SessionLocal() as db:
+        host = Host(
+            name=f"diff-host-{suffix}", address="127.0.0.1", port=22,
+            username="root", host_key=HOST_KEY, enabled=True,
+        )
+        repository = Repository(
+            name=f"diff-repo-{suffix}", location=f"/tmp/diff-repo-{suffix}",
+            initialized=True, extra_env_json="{}",
+        )
+        db.add_all([host, repository])
+        db.flush()
+        first_job = Job(
+            name=f"OVPN-C-VPN0-{suffix}", host_id=host.id, repository_id=repository.id,
+            source_paths_json='["/"]', exclude_patterns_json="[]",
+            archive_prefix=f"series-a-{suffix}-", archive_prefix_history_json="[]",
+            prune_options_json="{}", create_options_json="{}", enabled=True,
+        )
+        second_job = Job(
+            name=f"OVPN-C-VPN1-{suffix}", host_id=host.id, repository_id=repository.id,
+            source_paths_json='["/"]', exclude_patterns_json="[]",
+            archive_prefix=f"series-b-{suffix}-", archive_prefix_history_json="[]",
+            prune_options_json="{}", create_options_json="{}", enabled=True,
+        )
+        unrelated_job = Job(
+            name=f"NAS-PBS-{suffix}", host_id=host.id, repository_id=repository.id,
+            source_paths_json='["/"]', exclude_patterns_json="[]",
+            archive_prefix=f"unrelated-{suffix}-", archive_prefix_history_json="[]",
+            prune_options_json="{}", create_options_json="{}", enabled=True,
+        )
+        db.add_all([first_job, second_job, unrelated_job])
+        db.commit()
+        first_id, first_name = first_job.id, first_job.name
+        second_name = second_job.name
+        unrelated_id = unrelated_job.id
+
+    first_archive = f"series-a-{suffix}-2026-07-22T15:42:50"
+    second_archive = f"series-b-{suffix}-2026-07-22T15:43:30"
+    captured: dict[str, object] = {}
+
+    async def fake_names(_job):
+        return {first_archive, second_archive}
+
+    def fake_queue(job_id, action, restore, **kwargs):
+        captured.update(job_id=job_id, action=action, restore=restore, **kwargs)
+        return 987654
+
+    monkeypatch.setattr(main_module, "repository_archive_names", fake_names)
+    monkeypatch.setattr(main_module, "queue_job_action", fake_queue)
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/jobs/{unrelated_id}/archive-diff",
+            headers=AUTH,
+            json={
+                "archive": first_archive,
+                "second_archive": second_archive,
+                "paths": [],
+                "content_only": False,
+            },
+        )
+
+    assert response.status_code == 202, response.text
+    assert response.json() == {"run_id": 987654}
+    assert captured["job_id"] == first_id
+    assert captured["action"] == "diff-archives"
+    assert captured["run_label"] == f"{first_name} ↔ {second_name}"

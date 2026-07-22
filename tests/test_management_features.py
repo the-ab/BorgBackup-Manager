@@ -348,3 +348,100 @@ def test_uploaded_encrypted_backup_is_validated_and_stored_without_overwrite(mon
     with pytest.raises(FileExistsError):
         backups.store_uploaded_backup(duplicate, name)
     assert duplicate.is_file()
+
+
+def test_run_json_skips_legacy_backup_parser_when_statistics_are_persisted(monkeypatch):
+    from datetime import datetime, timezone
+    import app.main as main_module
+    from app.models import Run
+
+    row = Run(
+        id=999001,
+        job_id=None,
+        job_name_snapshot="performance-test",
+        action="backup",
+        status="success",
+        output="",
+        error="",
+        log_output="",
+        archive_name_snapshot="bbm-1-2026-07-22T10:00:00",
+        backup_original_size_bytes=100,
+        backup_compressed_size_bytes=80,
+        backup_deduplicated_size_bytes=20,
+        backup_file_count=5,
+        created_at=datetime.now(timezone.utc),
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+    )
+
+    def should_not_run(_text):
+        raise AssertionError("legacy backup parser should not run for complete rows")
+
+    monkeypatch.setattr(main_module, "parse_backup_statistics", should_not_run)
+    payload = main_module.run_json(row, include_details=False, log_file_available=False)
+    assert payload["archive_name"] == row.archive_name_snapshot
+    assert payload["backup_file_count"] == 5
+    assert payload["log_file_available"] is False
+
+
+def test_settings_loader_reuses_validated_cache_and_detects_file_changes(monkeypatch, tmp_path: Path):
+    path = tmp_path / "settings-cache.json"
+    path.write_text('{"density":"compact"}', encoding="utf-8")
+    monkeypatch.setattr(settings, "SETTINGS_PATH", path)
+    monkeypatch.setattr(settings, "_cached_key", None)
+    monkeypatch.setattr(settings, "_cached_settings", None)
+    original = settings._load_settings_uncached
+    calls = {"count": 0}
+
+    def counted_loader():
+        calls["count"] += 1
+        return original()
+
+    monkeypatch.setattr(settings, "_load_settings_uncached", counted_loader)
+    first = settings.load_settings()
+    second = settings.load_settings()
+    assert first.density == second.density == "compact"
+    assert first is not second
+    assert calls["count"] == 1
+
+    path.write_text('{"density":"comfortable","runs_list_limit":51}', encoding="utf-8")
+    changed = settings.load_settings()
+    assert changed.density == "comfortable"
+    assert changed.runs_list_limit == 51
+    assert calls["count"] == 2
+
+
+def test_run_json_prefers_archive_comparison_snapshot_over_access_job():
+    from datetime import datetime, timezone
+    import app.main as main_module
+    from app.models import Job, Run
+
+    access_job = Job(
+        id=77,
+        name="NAS-PBS",
+        host_id=1,
+        repository_id=1,
+        source_paths_json='["/"]',
+        exclude_patterns_json="[]",
+        archive_prefix="nas-pbs-",
+        archive_prefix_history_json="[]",
+        prune_options_json="{}",
+        create_options_json="{}",
+    )
+    row = Run(
+        id=999002,
+        job_id=77,
+        job_name_snapshot="OVPN-C-VPN0 ↔ OVPN-C-VPN1",
+        action="diff-archives",
+        status="success",
+        output="",
+        error="",
+        log_output="",
+        created_at=datetime.now(timezone.utc),
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+    )
+    row.job = access_job
+
+    payload = main_module.run_json(row, include_details=False, log_file_available=False)
+    assert payload["job_name"] == "OVPN-C-VPN0 ↔ OVPN-C-VPN1"

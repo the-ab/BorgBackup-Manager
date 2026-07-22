@@ -1,5 +1,34 @@
 # Release Notes
 
+## v1.0.63 – 22.07.2026
+
+### Richtige Beschriftung bei Archivvergleichen
+
+- Die sichtbare Bezeichnung einer Archivvergleich-Ausführung wird nun aus den tatsächlich ausgewählten Archivserien gebildet und nicht mehr aus dem technisch für den Repositoryzugriff verwendeten Backup-Job.
+- Bei Archiven desselben Jobs wird dessen Name angezeigt. Bei Archiven aus zwei Jobs erscheint beispielsweise `OVPN-C-VPN0 ↔ OVPN-C-VPN1 · Archive vergleichen`.
+- Für nicht eindeutig zugeordnete Archive wird ersatzweise die aus dem Archivnamen erkannte Gerätebezeichnung verwendet.
+- Der Vergleichsbefehl, die Archivauswahl und die bereits lesbare Diff-Ausgabe bleiben unverändert.
+
+### Projektweite Referenz- und Dateiprüfung
+
+- Das neue lokale Prüfscript `scripts/project-audit.py` kontrolliert Python-Module, CLI-Einstiegspunkte, statische Webressourcen, Frontend-API-Verweise, Docker-`COPY`-Quellen, lokale Markdown-Links und die Release-Struktur.
+- Die Prüfung ist in `scripts/release-check.sh` integriert und benötigt keine GitHub Actions.
+- Die doppelten Release-Notes-Dateien unter `app/` bleiben bewusst als Kompatibilitätskopien für sehr alte Updater erhalten und werden nun auf bitgenaue Übereinstimmung geprüft.
+- Es wurden keine ungenutzten Laufzeitmodule, fehlenden statischen Dateien, ungültigen API-Verweise oder verwaisten Projektdateien gefunden.
+
+### Weitere Performanceoptimierungen ohne Funktionsverlust
+
+- Die Ausführungsliste ermittelt vorhandene dateibasierte Protokolle mit einem gemeinsamen Verzeichnisscan statt mit einer einzelnen Dateisystemprüfung pro Tabellenzeile.
+- Bereits in eigenen Datenbankfeldern gespeicherte Backup-Statistiken werden beim Laden der Ausführungsliste nicht erneut aus dem Protokolltext geparst. Der Parser bleibt als Fallback für ältere oder unvollständige Datensätze erhalten.
+- Persistente Einstellungen werden nach Dateipfad, Änderungszeit und Größe zwischengespeichert. Änderungen aus der WebUI werden sofort übernommen; manuelle Dateiänderungen werden beim nächsten Zugriff erkannt.
+- Versionsgebundene statische Webressourcen werden browserseitig unveränderlich zwischengespeichert. Das HTML-Dokument und API-Antworten bleiben weiterhin ungecacht.
+
+### Prüfung
+
+- 456 automatisierte Tests bestanden; zusätzlich Projekt-Audit sowie Python-, JavaScript-, Bash- und POSIX-Shell-Syntaxprüfungen erfolgreich.
+- Update-Kompatibilität, Docker-Build-Quellen, deutsche und englische Dokumentation sowie alte Updater-Kompatibilitätskopien geprüft.
+- Keine Datenbankschema-Migration erforderlich.
+
 ## v1.0.62 – 22.07.2026
 
 ### Update von v1.0.60 wieder kompatibel
