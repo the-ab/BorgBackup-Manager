@@ -34,6 +34,8 @@ def default_settings() -> SettingsIn:
         appearance=os.getenv("BBM_APPEARANCE", "auto"),
         max_parallel_runs=_environment_limit("BBM_MAX_PARALLEL_RUNS", 0, 0, 64),
         source_stats_parallel_limit=_environment_limit("BBM_SOURCE_STATS_PARALLEL_LIMIT", 1, 1, 64),
+        update_check_enabled=os.getenv("BBM_UPDATE_CHECK_ENABLED", "1").lower() not in {"0", "false", "no"},
+        update_check_interval_hours=_environment_limit("BBM_UPDATE_CHECK_INTERVAL_HOURS", 24, 1, 720),
         repository_size_after_run=os.getenv("BBM_REPOSITORY_SIZE_AFTER_RUN", "1").lower()
         not in {"0", "false", "no"},
         storage_guard_enabled=os.getenv("BBM_STORAGE_GUARD_ENABLED", "1").lower()

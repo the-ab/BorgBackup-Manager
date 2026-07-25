@@ -1,5 +1,20 @@
 # Release Notes
 
+## v1.0.73 – 2026-07-25
+
+### GitHub release checking
+
+- The sidebar now shows update state directly below **Service available** and immediately above version/release date: **Version current**, **Update available**, **Update check failed**, or **Update check disabled**.
+- When **Update available** is shown, clicking it opens the concrete `the-ab/BorgBackup-Manager` GitHub release in a new browser window. No update is installed automatically.
+- **System → Settings → Update check** can disable automatic checks or set an interval from 1 to 720 hours; the default is 24 hours. A manual **Check now** action is included.
+- The check fetches only GitHub release metadata, stores the last successful state in `/data/update-status.json`, and adds no Python dependency. `BBM_UPDATE_CHECK_ENABLED` and `BBM_UPDATE_CHECK_INTERVAL_HOURS` are available as optional environment defaults.
+
+### Mobile live-log fixes
+
+- The full live dialog now has its own vertical scroll area so progress, network, diagnostics, tabs and log output remain reachable on small screens.
+- Background page scrolling is locked while the live dialog is open.
+- **Last A/M/C/E status** and its status/path are forced onto separate lines, and long paths can wrap.
+
 ## v1.0.72 – 2026-07-25
 
 ### Extended live network view

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
@@ -144,6 +145,7 @@ from app.repository_sizes import (
 )
 from app.run_logs import available_run_log_ids, append_run_log, cleanup_orphan_run_logs, delete_run_log, read_run_log, read_run_log_delta, run_log_path, run_log_storage_bytes
 from app.settings import load_settings, save_settings
+from app.update_check import check_latest_release, load_update_status
 from app.storage_guard import (
     effective_storage_guard, mounted_filesystems_below, repository_mount_path,
     repository_storage_filesystems,
@@ -200,6 +202,7 @@ STATIC = Path(__file__).parent / "static"
 VERSION_FILE = Path(__file__).parent.parent / "VERSION"
 APP_VERSION = VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.is_file() else "0.0.0"
 scheduler = AsyncIOScheduler(timezone=APP_TIMEZONE)
+UPDATE_CHECK_JOB_ID = "github-release-check"
 _archive_cache_locks: dict[tuple[int, int, bool], asyncio.Lock] = {}
 
 
@@ -909,6 +912,60 @@ def migrate_run_payloads_to_files() -> int:
     return migrated
 
 
+
+async def scheduled_update_check() -> None:
+    settings = load_settings()
+    if not settings.update_check_enabled:
+        return
+    await asyncio.to_thread(check_latest_release, APP_VERSION)
+
+
+def _update_check_next_run(interval_hours: int, *, immediate: bool = False) -> datetime:
+    """Keep the release-check cadence stable when application schedules are rebuilt."""
+    now = datetime.now(timezone.utc)
+    if immediate:
+        return now
+    status = load_update_status(APP_VERSION)
+    raw = status.get("last_attempt_at") or status.get("checked_at")
+    if not raw:
+        return now
+    try:
+        previous = datetime.fromisoformat(str(raw))
+        if previous.tzinfo is None:
+            previous = previous.replace(tzinfo=timezone.utc)
+        else:
+            previous = previous.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return now
+    due = previous + timedelta(hours=max(1, int(interval_hours)))
+    return due if due > now else now
+
+
+def sync_update_check_job(*, immediate: bool = False) -> None:
+    if scheduler.get_job(UPDATE_CHECK_JOB_ID) is not None:
+        scheduler.remove_job(UPDATE_CHECK_JOB_ID)
+    settings = load_settings()
+    if not settings.update_check_enabled:
+        return
+    scheduler.add_job(
+        scheduled_update_check,
+        IntervalTrigger(hours=settings.update_check_interval_hours, timezone=APP_TIMEZONE),
+        id=UPDATE_CHECK_JOB_ID,
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+        next_run_time=_update_check_next_run(settings.update_check_interval_hours, immediate=immediate),
+    )
+
+
+def update_status_payload() -> dict:
+    settings = load_settings()
+    status = load_update_status(APP_VERSION)
+    status["enabled"] = settings.update_check_enabled
+    status["interval_hours"] = settings.update_check_interval_hours
+    return status
+
+
 def sync_schedules() -> None:
     scheduler.remove_all_jobs()
     scheduler.add_job(
@@ -932,6 +989,7 @@ def sync_schedules() -> None:
                     id=f"schedule-{schedule.id}-{index}",
                     max_instances=1, coalesce=True, misfire_grace_time=3600, replace_existing=True,
                 )
+    sync_update_check_job(immediate=False)
 
 
 def recover_interrupted_runs() -> None:
@@ -1424,6 +1482,7 @@ def system_info() -> dict:
     return {
         "app_version": APP_VERSION,
         "release_date": APP_RELEASE_DATE,
+        "update_status": update_status_payload(),
         "controller_public_key": public_key,
         "repository_endpoint": f"{REPOSITORY_PUBLIC_HOST}:{REPOSITORY_SSH_PORT}",
         "backup_directory": str(BACKUP_DIR),
@@ -1456,9 +1515,31 @@ def get_settings() -> SettingsIn:
 
 @app.put("/api/settings", response_model=SettingsIn, dependencies=admin_protected)
 def update_settings(data: SettingsIn) -> SettingsIn:
+    previous = load_settings()
     saved = save_settings(data)
     cleanup_run_history()
+    if (
+        previous.update_check_enabled != saved.update_check_enabled
+        or previous.update_check_interval_hours != saved.update_check_interval_hours
+    ):
+        sync_update_check_job(immediate=saved.update_check_enabled)
     return saved
+
+
+@app.get("/api/update-status", dependencies=protected)
+def get_update_status() -> dict:
+    return update_status_payload()
+
+
+@app.post("/api/update-status/check", dependencies=admin_protected)
+async def force_update_check() -> dict:
+    settings = load_settings()
+    if not settings.update_check_enabled:
+        raise HTTPException(409, "Updateprüfung ist deaktiviert")
+    status = await asyncio.to_thread(check_latest_release, APP_VERSION)
+    status["enabled"] = True
+    status["interval_hours"] = settings.update_check_interval_hours
+    return status
 
 
 @app.get("/api/notifications/settings", response_model=NotificationSettingsOut, dependencies=admin_protected)

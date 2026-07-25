@@ -728,7 +728,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.72`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.73`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -1414,12 +1414,73 @@ function fillSelects(skipView = null) {
   }
 }
 
+function renderUpdateStatus(status = state.system?.update_status) {
+  const link = $('#update-status-link');
+  if (!link) return;
+  link.classList.remove('update-available', 'update-current', 'update-error', 'update-disabled', 'update-pending');
+  link.removeAttribute('href');
+  link.removeAttribute('target');
+  link.removeAttribute('rel');
+  link.setAttribute('aria-disabled', 'true');
+  const english = currentLanguage() === 'en';
+  if (!status?.enabled) {
+    link.textContent = english ? 'Update check disabled' : 'Updateprüfung deaktiviert';
+    link.classList.add('update-disabled');
+    link.title = '';
+    return;
+  }
+  if (status.update_available && status.release_url) {
+    link.textContent = english ? 'Update available' : 'Update verfügbar';
+    link.classList.add('update-available');
+    link.href = status.release_url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.setAttribute('aria-disabled', 'false');
+    link.title = `${english ? 'Open GitHub release' : 'GitHub-Release öffnen'}${status.latest_version ? ` · v${status.latest_version}` : ''}`;
+    return;
+  }
+  if (status.checked_at && !status.error) {
+    link.textContent = english ? 'Version current' : 'Version aktuell';
+    link.classList.add('update-current');
+    link.title = `${english ? 'Last checked' : 'Zuletzt geprüft'}: ${formatDate(status.checked_at)}`;
+    return;
+  }
+  if (status.error) {
+    link.textContent = english ? 'Update check failed' : 'Updateprüfung fehlgeschlagen';
+    link.classList.add('update-error');
+    link.title = status.error;
+    return;
+  }
+  link.textContent = english ? 'Checking for updates …' : 'Updateprüfung …';
+  link.classList.add('update-pending');
+  link.title = '';
+}
+
+function renderUpdateCheckInfo() {
+  const info = $('#update-check-info');
+  if (!info || !state.settings) return;
+  const status = state.system?.update_status || {};
+  const english = currentLanguage() === 'en';
+  if (!state.settings.update_check_enabled) {
+    info.textContent = english
+      ? 'Update checking is disabled. No GitHub request is made for version checks.'
+      : 'Updateprüfung ist deaktiviert. Für die Versionsprüfung wird keine Verbindung zu GitHub aufgebaut.';
+    return;
+  }
+  const interval = Number(state.settings.update_check_interval_hours || 24);
+  let text = english ? `Automatic check every ${interval} hour(s).` : `Automatische Prüfung alle ${interval} Stunde(n).`;
+  if (status.checked_at) text += ` ${english ? 'Last successful check' : 'Letzte erfolgreiche Prüfung'}: ${formatDate(status.checked_at)}.`;
+  if (status.error) text += ` ${english ? 'Last attempt failed' : 'Letzter Versuch fehlgeschlagen'}: ${status.error}`;
+  info.textContent = text;
+}
+
 function renderSystem() {
   const controllerKey = state.system.controller_public_key || 'Controller-Schlüssel fehlt – Installer erneut ausführen.';
   $('#controller-key').textContent = controllerKey;
   const settingsKey = $('#settings-controller-key');
   if (settingsKey) settingsKey.textContent = controllerKey;
   const releaseDate = formatReleaseDate(state.system.release_date);
+  renderUpdateStatus(state.system.update_status);
   $('#version-link').textContent = 'v' + (state.system.app_version || '?') + (releaseDate ? ` · ${releaseDate}` : '');
   $('#backup-path').textContent = state.system.backup_directory || '';
 }
@@ -1539,7 +1600,10 @@ function collectMountParallelLimits() {
 function renderSettings() {
   if (!state.settings) return;
   const form = $('#settings-form');
-  for (const name of ['density', 'dashboard_recent_runs_limit', 'runs_list_limit', 'auto_refresh_seconds', 'list_max_height', 'run_retention_days', 'run_log_max_mib', 'run_log_view_kib', 'storage_guard_threshold_percent', 'max_parallel_runs', 'source_stats_parallel_limit']) form.elements[name].value = state.settings[name];
+  for (const name of ['density', 'dashboard_recent_runs_limit', 'runs_list_limit', 'auto_refresh_seconds', 'list_max_height', 'run_retention_days', 'run_log_max_mib', 'run_log_view_kib', 'storage_guard_threshold_percent', 'max_parallel_runs', 'source_stats_parallel_limit', 'update_check_interval_hours']) form.elements[name].value = state.settings[name];
+  form.elements.update_check_enabled.checked = Boolean(state.settings.update_check_enabled);
+  form.elements.update_check_interval_hours.disabled = !state.settings.update_check_enabled;
+  $('#check-updates-now').disabled = !state.settings.update_check_enabled;
   form.elements.repository_size_after_run.checked = state.settings.repository_size_after_run;
   form.elements.compact_after_prune.checked = state.settings.compact_after_prune;
   form.elements.storage_guard_enabled.checked = state.settings.storage_guard_enabled;
@@ -1551,6 +1615,7 @@ function renderSettings() {
   renderMountParallelLimits();
   renderExcludeTemplateEditor();
   renderExcludeTemplateSelect();
+  renderUpdateCheckInfo();
   applyPreferences();
 }
 
@@ -2068,7 +2133,7 @@ function renderBackupProgress(run, active) {
     `<span class="backup-item-status status-${status.toLowerCase()}" title="${esc(label)}"><b>${status}</b><strong>${count.toLocaleString(currentLocale())}</strong><small>${esc(label)}</small></span>`
   ).join('');
   const lastStatus = activity.last_status && activity.last_path
-    ? `<div class="backup-progress-path"><span>${english ? 'Last A/M/C/E status' : 'Letzter A/M/C/E-Status'}</span><code data-i18n-skip title="${esc(activity.last_path)}"><b>${esc(activity.last_status)}</b> ${esc(activity.last_path)}</code></div>`
+    ? `<div class="backup-progress-path backup-progress-last-status"><span>${english ? 'Last A/M/C/E status' : 'Letzter A/M/C/E-Status'}</span><code data-i18n-skip title="${esc(activity.last_path)}"><b>${esc(activity.last_status)}</b> ${esc(activity.last_path)}</code></div>`
     : '';
   box.innerHTML = `
     <div class="backup-progress-head"><strong>${english ? 'Live progress' : 'Live-Fortschritt'}</strong><span>${esc(percentLabel)}</span></div>
@@ -2208,6 +2273,7 @@ function showTextDialog(title, text) {
   $('#log-command').textContent = ''; $('#log-stdout').textContent = ''; $('#log-stderr').textContent = '';
   setLogTab('output');
   $('#log-dialog').showModal();
+  document.body.classList.add('run-dialog-open');
 }
 
 
@@ -2226,6 +2292,7 @@ async function showRun(id) {
     renderRunDialog(run);
     if (run.log_offset != null) state.liveLogOffset = Number(run.log_offset);
     $('#log-dialog').showModal();
+    document.body.classList.add('run-dialog-open');
     if (activeRunStatus(run.status)) watchRunCompletion(runId, {areas: ['dashboard', 'runs']});
   } catch (error) { toast(error.message, true); }
   finally {
@@ -3269,7 +3336,8 @@ $('#runs-filter').onchange = (event) => goToRuns(event.target.value);
 $('#runs-search').oninput = (event) => { state.runSearch = event.target.value; renderRuns(); };
 $('#sync-state').onclick = openCurrentActiveRun;
 $('#refresh').onclick = async (event) => { const release = markButtonBusy(event.currentTarget, 'Aktualisiere …'); try { await loadAll(false); } finally { release(); } };
-$('#close-dialog').onclick = () => { state.liveRunId = null; state.liveLogOffset = 0; state.liveLogSession += 1; state.liveLogRequestPending = false; $('#log-dialog').close(); };
+$('#close-dialog').onclick = () => { state.liveRunId = null; state.liveLogOffset = 0; state.liveLogSession += 1; state.liveLogRequestPending = false; $('#log-dialog').close(); document.body.classList.remove('run-dialog-open'); };
+$('#log-dialog').addEventListener('close', () => document.body.classList.remove('run-dialog-open'));
 $('#stop-live-run').onclick = (event) => { const runId = Number(event.currentTarget.dataset.runId || state.liveRunId || 0); if (runId) cancelExecution(runId, event.currentTarget); };
 $('#scan-host-key').onclick = async (event) => {
   const form = $('#host-form'); const address = form.elements.address.value.trim(); const port = +form.elements.port.value;
@@ -3728,6 +3796,21 @@ $('#clear-notification-deliveries').onclick = async (event) => {
   catch (error) { toast(error.message, true); } finally { release(); }
 };
 
+$('#settings-form').elements.update_check_enabled.onchange = (event) => {
+  $('#settings-form').elements.update_check_interval_hours.disabled = !event.target.checked;
+  $('#check-updates-now').disabled = !event.target.checked || !state.settings?.update_check_enabled;
+};
+$('#check-updates-now').onclick = async (event) => {
+  const release = markButtonBusy(event.currentTarget, currentLanguage() === 'en' ? 'Checking …' : 'Prüfe …');
+  try {
+    const status = await api('/update-status/check', {method: 'POST'});
+    state.system.update_status = status;
+    renderSystem();
+    renderUpdateCheckInfo();
+    toast(status.update_available ? (currentLanguage() === 'en' ? 'Update available' : 'Update verfügbar') : (currentLanguage() === 'en' ? 'Version current' : 'Version aktuell'));
+  } catch (error) { toast(error.message, true); }
+  finally { release(); }
+};
 $('#settings-form').elements.density.onchange = (event) => {
   document.body.classList.toggle('compact', event.target.value === 'compact');
 };
@@ -3737,8 +3820,8 @@ $('#settings-form').elements.list_max_height.oninput = (event) => {
 };
 $('#settings-form').onsubmit = async (event) => {
   event.preventDefault(); const release = markButtonBusy(event.submitter, 'Wird gespeichert …'); setSyncState('Einstellungen werden gespeichert …', 'pending', true); const form = new FormData(event.target);
-  const payload = {appearance: state.settings.appearance || 'auto', density: form.get('density'), dashboard_recent_runs_limit: +form.get('dashboard_recent_runs_limit'), runs_list_limit: +form.get('runs_list_limit'), auto_refresh_seconds: +form.get('auto_refresh_seconds'), list_max_height: +form.get('list_max_height'), run_retention_days: +form.get('run_retention_days'), run_log_max_mib: +form.get('run_log_max_mib'), run_log_view_kib: +form.get('run_log_view_kib'), max_parallel_runs: +form.get('max_parallel_runs'), source_stats_parallel_limit: +form.get('source_stats_parallel_limit'), mount_parallel_limits: collectMountParallelLimits(), repository_size_after_run: form.get('repository_size_after_run') === 'on', compact_after_prune: form.get('compact_after_prune') === 'on', storage_guard_enabled: form.get('storage_guard_enabled') === 'on', storage_guard_threshold_percent: +form.get('storage_guard_threshold_percent'), exclude_templates: collectExcludeTemplates()};
-  try { state.settings = await api('/settings', {method: 'PUT', body: JSON.stringify(payload)}); renderSettings(); scheduleRefresh(); setSyncState('Einstellungen übernommen', 'success'); toast('Einstellungen gespeichert'); }
+  const payload = {appearance: state.settings.appearance || 'auto', density: form.get('density'), dashboard_recent_runs_limit: +form.get('dashboard_recent_runs_limit'), runs_list_limit: +form.get('runs_list_limit'), auto_refresh_seconds: +form.get('auto_refresh_seconds'), list_max_height: +form.get('list_max_height'), run_retention_days: +form.get('run_retention_days'), run_log_max_mib: +form.get('run_log_max_mib'), run_log_view_kib: +form.get('run_log_view_kib'), max_parallel_runs: +form.get('max_parallel_runs'), source_stats_parallel_limit: +form.get('source_stats_parallel_limit'), update_check_enabled: form.get('update_check_enabled') === 'on', update_check_interval_hours: +form.get('update_check_interval_hours'), mount_parallel_limits: collectMountParallelLimits(), repository_size_after_run: form.get('repository_size_after_run') === 'on', compact_after_prune: form.get('compact_after_prune') === 'on', storage_guard_enabled: form.get('storage_guard_enabled') === 'on', storage_guard_threshold_percent: +form.get('storage_guard_threshold_percent'), exclude_templates: collectExcludeTemplates()};
+  try { state.settings = await api('/settings', {method: 'PUT', body: JSON.stringify(payload)}); if (state.system) state.system.update_status = await api('/update-status'); renderSettings(); renderSystem(); scheduleRefresh(); setSyncState('Einstellungen übernommen', 'success'); toast('Einstellungen gespeichert'); }
   catch (error) { setSyncState('Einstellungen konnten nicht gespeichert werden', 'error'); toast(error.message, true); }
   finally { release(); }
 };

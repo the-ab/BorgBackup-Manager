@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.72
+# BorgBackup Manager 1.0.73
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -33,7 +33,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.0.72.zip
+BorgBackup-Manager-1.0.73.zip
 ```
 
 The documentation naming convention is:
@@ -353,7 +353,7 @@ Each user can store language, light/dark/system appearance, density and list-hei
 
 ## System settings and diagnostics
 
-System settings include timezone-related display behavior, repository size refresh, global parallelism, storage guard, UI defaults and controller-key management.
+System settings include timezone-related display behavior, repository size refresh, global parallelism, storage guard, UI defaults, controller-key management and an optional GitHub release check. The release check is enabled by default every 24 hours, can be disabled, and can be configured with `BBM_UPDATE_CHECK_ENABLED` / `BBM_UPDATE_CHECK_INTERVAL_HOURS` or the WebUI.
 
 System diagnostics cover:
 
@@ -370,7 +370,7 @@ System diagnostics cover:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.72.zip
+unzip /path/BorgBackup-Manager-1.0.73.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh

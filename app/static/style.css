@@ -2012,3 +2012,61 @@ body.compact .job-action-buttons button { min-height: 27px !important; padding: 
 @media (max-width: 480px) {
   .client-network-chip { grid-column: 1 / -1; }
 }
+
+/* 1.0.73: GitHub release status and fully scrollable mobile live dialog */
+.aside-foot .service-status-row {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 7px;
+}
+.aside-foot .update-status-link,
+.aside-foot #version-link {
+  flex: 1 1 100%;
+  width: 100%;
+  text-align: left;
+  line-height: 1.25;
+}
+.aside-foot .update-status-link { text-decoration: none; font-weight: 750; }
+.aside-foot .update-status-link.update-available { color: #f4c768; text-decoration: underline; cursor: pointer; }
+.aside-foot .update-status-link.update-current { color: #75d7a5; }
+.aside-foot .update-status-link.update-error { color: #ff9c9c; }
+.aside-foot .update-status-link.update-disabled,
+.aside-foot .update-status-link.update-pending { color: var(--sidebar-muted); }
+.aside-foot .update-status-link[aria-disabled="true"] { cursor: default; pointer-events: none; }
+.update-check-settings .check { align-self: end; min-height: 42px; }
+
+body.run-dialog-open { overflow: hidden; }
+.run-dialog-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.run-dialog-body > .run-summary,
+.run-dialog-body > .backup-progress,
+.run-dialog-body > .diagnosis-box,
+.run-dialog-body > .log-tabs { flex: 0 0 auto; }
+.run-dialog-body > .diagnosis-box {
+  padding: 10px 12px;
+  max-height: min(22vh, 190px);
+  overflow: auto;
+}
+.backup-progress-last-status > span,
+.backup-progress-last-status > code { display: block; }
+.backup-progress-last-status code {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 620px) {
+  .run-dialog-body { overflow-y: auto; }
+  .run-dialog-body > .diagnosis-box { max-height: none; }
+  .run-dialog .log-view.active { flex: 0 0 auto; min-height: 280px; }
+  .run-dialog #log-view-output.active .log-console { min-height: 280px; max-height: 62dvh; }
+  .run-dialog #log-view-technical.active { min-height: 280px; max-height: none; }
+}

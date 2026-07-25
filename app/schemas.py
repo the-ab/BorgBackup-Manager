@@ -409,6 +409,8 @@ class SettingsIn(BaseModel):
     appearance: str = Field(default="auto", pattern=r"^(light|dark|auto)$")
     max_parallel_runs: int = Field(default=0, ge=0, le=64)
     source_stats_parallel_limit: int = Field(default=1, ge=1, le=64)
+    update_check_enabled: bool = True
+    update_check_interval_hours: int = Field(default=24, ge=1, le=720)
     mount_parallel_limits: dict[str, int] = Field(default_factory=dict)
     repository_size_after_run: bool = True
     compact_after_prune: bool = True

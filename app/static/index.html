@@ -6,26 +6,26 @@
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
-<link href="/static/favicon.svg?v=1.0.72" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.0.72"></script>
-<link href="/static/style.css?v=1.0.72" rel="stylesheet"/>
+<link href="/static/favicon.svg?v=1.0.73" rel="icon" type="image/svg+xml"/>
+<script src="/static/theme-init.js?v=1.0.73"></script>
+<link href="/static/style.css?v=1.0.73" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
 <form class="login-card" id="login-form">
-<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.0.72"/>
+<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.0.73"/>
 <p class="eyebrow">BorgBackup Manager</p>
 <h1>Zentrale für deine Backups.</h1>
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.0.72</b></p>
+<p class="login-version">Version <b id="login-version">v1.0.73</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
 <div class="app-shell hidden" id="app">
 <aside>
-<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.0.72"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
+<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.0.73"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
 <nav id="main-navigation">
 <span class="nav-label">Betrieb</span>
 <button class="active" data-view="dashboard">Übersicht</button>
@@ -43,7 +43,7 @@
 <button data-view="help">Anleitung</button>
 <button data-view="releases">Release Notes</button>
 </nav>
-<div class="aside-foot"><span class="status-dot"></span> Dienst erreichbar <button class="link" data-target-view="releases" id="version-link">v…</button><span class="current-user" id="current-user"></span><button class="link" id="user-preferences">Darstellung &amp; Sprache</button><button class="link" id="change-password">Passwort ändern</button><button class="link" id="logout">Abmelden</button></div>
+<div class="aside-foot"><div class="service-status-row"><span class="status-dot"></span><span>Dienst erreichbar</span></div><a aria-disabled="true" class="link update-status-link" id="update-status-link">Updateprüfung …</a><button class="link" data-target-view="releases" id="version-link">v…</button><span class="current-user" id="current-user"></span><button class="link" id="user-preferences">Darstellung &amp; Sprache</button><button class="link" id="change-password">Passwort ändern</button><button class="link" id="logout">Abmelden</button></div>
 </aside>
 <main>
 <header class="main-header"><div class="main-header-row"><div><p class="eyebrow">Kontrollzentrum</p><h1 id="page-title">Übersicht</h1></div><div class="header-actions"><div class="task-status" id="task-status"><button aria-live="polite" class="sync-state idle" id="sync-state" type="button"><span aria-hidden="true" class="sync-indicator"></span><span>Aktuell</span></button></div><button aria-label="Farbschema wechseln" class="secondary" id="theme-toggle" type="button">Dunkel</button><button class="secondary" id="refresh">Aktualisieren</button></div></div>
@@ -363,6 +363,11 @@
 <div class="row"><label>Letzte Läufe im Dashboard<input max="200" min="1" name="dashboard_recent_runs_limit" type="number"/></label><label>Läufe in Protokollliste<input max="500" min="10" name="runs_list_limit" type="number"/></label></div>
 <div class="row"><label>Zusätzliche Hintergrundaktualisierung (Sekunden)<input max="300" min="5" name="auto_refresh_seconds" type="number"/></label><label>Maximale Höhe der Archivübersicht und weiterer Scrolllisten (Pixel)<input max="1200" min="240" name="list_max_height" type="number"/></label></div>
 <p class="hint">Die Listenhöhe gilt unter anderem für Archivübersicht, Repository-Suche, Manager-Backups und weitere bewusst begrenzte Listen. Tabellen mit eigener Seitenansicht bleiben vollständig sichtbar.</p>
+<section class="settings-section update-check-settings">
+<div class="panel-head responsive-head"><div><h2>Updateprüfung</h2><span>Prüft GitHub Releases auf eine neuere BorgBackup-Manager-Version.</span></div><button class="secondary" id="check-updates-now" type="button">Jetzt prüfen</button></div>
+<div class="row"><label class="check"><input name="update_check_enabled" type="checkbox"/> Automatisch nach neuen Releases suchen</label><label>Prüfintervall (Stunden)<input max="720" min="1" name="update_check_interval_hours" type="number"/></label></div>
+<p class="hint" id="update-check-info">Standard: alle 24 Stunden. Bei deaktivierter Prüfung werden keine Verbindungen zu GitHub für die Versionsprüfung aufgebaut.</p>
+</section>
 <section class="settings-section security-settings-section" id="settings-controller-key-section">
 <div class="panel-head"><div><h2>Controller-Schlüssel</h2><span>Öffentlichen Schlüssel kopieren oder den zentralen Controller-Zugang nach ausdrücklicher Sicherheitsbestätigung erneuern.</span></div></div>
 <div class="key-copy-row"><code class="key-box" id="settings-controller-key">Wird geladen …</code><button class="secondary compact-copy-button" id="settings-copy-controller-key" type="button">Kopieren</button></div>
@@ -457,6 +462,7 @@
 </dialog>
 <dialog class="run-dialog" id="log-dialog">
 <div class="panel-head run-dialog-head"><div><p class="eyebrow">Ausführung</p><h2>Ausführungsdetails</h2><span id="log-live-state"></span></div><div class="run-dialog-head-actions"><div class="client-network-chip hidden" id="client-network-live" title="Aktuelle Netzwerkinterfaces des Backup-Clients"></div><div class="bbm-network-chip hidden" id="bbm-network-live" title="Gesamtverkehr des BorgBackup-Manager-Containers"></div><button class="danger hidden" id="stop-live-run" type="button">Job stoppen</button><button class="secondary" id="close-dialog">Schließen</button></div></div>
+<div class="run-dialog-body">
 <div class="run-summary" id="log-summary"></div>
 <div class="backup-progress hidden" id="log-backup-progress" aria-live="polite"></div>
 <div class="diagnosis-box hidden" id="log-version-warning"></div>
@@ -465,9 +471,10 @@
 <div class="log-tabs"><button class="active" data-log-tab="output" type="button">Lesbare Ausgabe</button><button data-log-tab="technical" type="button">Technische Details</button></div>
 <section class="log-view active" id="log-view-output"><pre class="log-console" id="log-content"></pre></section>
 <section class="log-view" id="log-view-technical"><details><summary>Ausgeführter Befehl</summary><pre class="log-console technical" id="log-command"></pre></details><details><summary>Standardausgabe</summary><pre class="log-console technical" id="log-stdout"></pre></details><details><summary>Fehlerausgabe (gefiltert)</summary><pre class="log-console technical" id="log-stderr"></pre></details></section>
+</div>
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.0.72"></script><script src="/static/app.js?v=1.0.72"></script>
+<script src="/static/i18n.js?v=1.0.73"></script><script src="/static/app.js?v=1.0.73"></script>
 </body>
 </html>

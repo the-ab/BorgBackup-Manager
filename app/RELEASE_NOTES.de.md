@@ -1,5 +1,20 @@
 # Release Notes
 
+## v1.0.73 – 25.07.2026
+
+### GitHub-Release-Prüfung
+
+- In der Seitenleiste wird direkt unter **Dienst erreichbar** und unmittelbar über Versionsnummer/Release-Datum der Update-Status angezeigt: **Version aktuell**, **Update verfügbar**, **Updateprüfung fehlgeschlagen** oder **Updateprüfung deaktiviert**.
+- Bei **Update verfügbar** öffnet ein Klick das konkrete Release von `the-ab/BorgBackup-Manager` in einem neuen Browserfenster. Es findet keine automatische Installation statt.
+- Unter **System → Einstellungen → Updateprüfung** lässt sich die automatische Prüfung deaktivieren und das Intervall von 1 bis 720 Stunden einstellen; Standard sind 24 Stunden. Ein manueller **Jetzt prüfen**-Button ist vorhanden.
+- Die Prüfung verwendet ausschließlich die GitHub-Release-Metadaten, speichert den letzten erfolgreichen Status unter `/data/update-status.json` und läuft ohne zusätzliche Python-Abhängigkeit. Optional stehen `BBM_UPDATE_CHECK_ENABLED` und `BBM_UPDATE_CHECK_INTERVAL_HOURS` als ENV-Standards zur Verfügung.
+
+### Live-Log auf Mobilgeräten korrigiert
+
+- Der komplette Live-Dialog besitzt jetzt einen eigenen vertikalen Scrollbereich. Fortschritt, Netzwerk, Diagnose, Tabs und Protokoll bleiben auch auf kleinen Displays vollständig erreichbar.
+- Während der Live-Dialog geöffnet ist, wird der Seitenhintergrund nicht mehr mitgescrollt.
+- **Letzter A/M/C/E-Status** und der dazugehörige Status/Pfad werden garantiert in getrennten Zeilen dargestellt; lange Pfade dürfen umbrechen.
+
 ## v1.0.72 – 25.07.2026
 
 ### Live-Netzwerkdarstellung erweitert
