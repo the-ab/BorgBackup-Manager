@@ -36,7 +36,7 @@ def test_active_device_access_still_requires_key_and_authorized_line():
     assert ready["repository_access_complete"] is True
 
 
-def test_repository_browser_lists_root_and_marks_only_direct_repository_selectable(tmp_path, monkeypatch):
+def test_repository_browser_lists_root_and_marks_nested_repositories_selectable(tmp_path, monkeypatch):
     root = tmp_path / "repositories"
     root.mkdir()
     repository = root / "primary"
@@ -56,7 +56,32 @@ def test_repository_browser_lists_root_and_marks_only_direct_repository_selectab
     nested_listing = main_module.browse_repository_directories("group")
     nested_item = next(item for item in nested_listing["entries"] if item["name"] == "nested")
     assert nested_item["is_repository"] is True
-    assert nested_item["selectable"] is False
+    assert nested_item["selectable"] is True
+
+    inside_repository = main_module.browse_repository_directories("group/nested")
+    assert inside_repository["current_is_repository"] is True
+    assert inside_repository["current_selectable"] is True
+    assert inside_repository["path"] == "group/nested"
+
+
+
+def test_repository_discovery_finds_nested_repositories_without_following_symlinks(tmp_path, monkeypatch):
+    root = tmp_path / "repositories"
+    root.mkdir()
+    nested = root / "offline-nas" / "borg" / "server-a"
+    nested.mkdir(parents=True)
+    (nested / "config").write_text("[repository]\nid = " + "a" * 64 + "\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "config").write_text("[repository]\nid = " + "b" * 64 + "\n", encoding="utf-8")
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(main_module, "REPOSITORY_ROOT", root)
+    from app.database import Base, engine
+    Base.metadata.create_all(engine)
+
+    candidates = main_module.managed_repository_candidates()
+    assert [item["directory_name"] for item in candidates] == ["offline-nas/borg/server-a"]
+    assert candidates[0]["repository_id"] == "a" * 64
 
 
 def test_repository_browser_rejects_traversal_and_symlinks(tmp_path, monkeypatch):
@@ -101,7 +126,10 @@ def test_ui_contains_diagnostic_log_tabs_and_repository_browser():
     entrypoint = (root / "docker/entrypoint.sh").read_text(encoding="utf-8")
     assert 'id="browse-repositories"' in html
     assert 'id="repository-folder-browser"' in html
+    assert 'id="repository-browser-select-current"' in html
+    assert 'id="refresh-repositories"' in html
     assert "/repositories/browse?path=" in javascript
+    assert "repositoryAvailabilityChanged" in javascript
     assert 'data-diagnostic-log="sshd"' in javascript
     assert 'data-diagnostic-log="borg"' in javascript
     assert 'data-diagnostic-log="debug"' in javascript

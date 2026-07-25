@@ -1,0 +1,366 @@
+from __future__ import annotations
+
+import re
+import time
+from dataclasses import asdict, dataclass
+from threading import Lock
+
+_PROGRESS_RE = re.compile(
+    rb"^\s*"
+    rb"(?P<original>[0-9]+(?:[.,][0-9]+)?)\s+(?P<original_unit>[kKMGTPE]?i?B)\s+O\s+"
+    rb"(?P<compressed>[0-9]+(?:[.,][0-9]+)?)\s+(?P<compressed_unit>[kKMGTPE]?i?B)\s+C\s+"
+    rb"(?P<deduplicated>[0-9]+(?:[.,][0-9]+)?)\s+(?P<deduplicated_unit>[kKMGTPE]?i?B)\s+D\s+"
+    rb"(?P<files>[0-9]+)\s+N(?:\s+(?P<path>.*?))?\s*$"
+)
+
+_DECIMAL_UNITS = {
+    "B": 1,
+    "KB": 1000,
+    "MB": 1000**2,
+    "GB": 1000**3,
+    "TB": 1000**4,
+    "PB": 1000**5,
+    "EB": 1000**6,
+}
+_BINARY_UNITS = {
+    "KIB": 1024,
+    "MIB": 1024**2,
+    "GIB": 1024**3,
+    "TIB": 1024**4,
+    "PIB": 1024**5,
+    "EIB": 1024**6,
+}
+
+
+@dataclass(frozen=True)
+class BorgCreateProgress:
+    original_bytes: int
+    compressed_bytes: int
+    deduplicated_bytes: int
+    files: int
+    path: str
+
+
+def _size_bytes(value: bytes, unit: bytes) -> int:
+    number = float(value.decode("ascii").replace(",", "."))
+    normalized = unit.decode("ascii").upper()
+    multiplier = _BINARY_UNITS.get(normalized, _DECIMAL_UNITS.get(normalized))
+    if multiplier is None:
+        raise ValueError(f"unsupported Borg progress unit: {normalized}")
+    return max(0, int(number * multiplier))
+
+
+def parse_borg_create_progress(record: bytes | str) -> BorgCreateProgress | None:
+    payload = record.encode("utf-8", errors="replace") if isinstance(record, str) else bytes(record)
+    match = _PROGRESS_RE.match(payload)
+    if not match:
+        return None
+    try:
+        return BorgCreateProgress(
+            original_bytes=_size_bytes(match.group("original"), match.group("original_unit")),
+            compressed_bytes=_size_bytes(match.group("compressed"), match.group("compressed_unit")),
+            deduplicated_bytes=_size_bytes(match.group("deduplicated"), match.group("deduplicated_unit")),
+            files=int(match.group("files")),
+            path=(match.group("path") or b"").decode("utf-8", errors="replace").strip(),
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+class BorgProgressStreamFilter:
+    """Strip Borg's carriage-return progress frames with minimal CPU overhead.
+
+    Full ``--list`` output can contain millions of newline-delimited paths. The
+    fast path therefore does absolutely no line splitting unless a carriage
+    return is present; Borg uses that carriage return for its in-place progress
+    display. Normal high-volume file-list chunks pass through byte-for-byte.
+    """
+
+    def __init__(self) -> None:
+        self.latest: BorgCreateProgress | None = None
+
+    def feed(self, data: bytes) -> tuple[bytes, BorgCreateProgress | None]:
+        if not data or b"\r" not in data:
+            return data, None
+        output = bytearray()
+        cursor = 0
+        search_from = 0
+        newest: BorgCreateProgress | None = None
+        while True:
+            carriage = data.find(b"\r", search_from)
+            if carriage < 0:
+                break
+            previous_lf = data.rfind(b"\n", cursor, carriage)
+            previous_cr = data.rfind(b"\r", cursor, carriage)
+            record_start = max(previous_lf, previous_cr) + 1
+            progress = parse_borg_create_progress(data[record_start:carriage])
+            if progress is not None:
+                output.extend(data[cursor:record_start])
+                cursor = carriage + 1
+                self.latest = newest = progress
+            search_from = carriage + 1
+        if cursor == 0:
+            return data, None
+        output.extend(data[cursor:])
+        return bytes(output), newest
+
+    def finalize(self) -> tuple[bytes, BorgCreateProgress | None]:
+        # Borg emits progress frames terminated by CR. A frame split exactly at
+        # a subprocess chunk boundary may be missed once, but the next periodic
+        # frame replaces it. Never buffer ordinary file-list bytes here.
+        return b"", None
+
+
+_progress_lock = Lock()
+_live_progress: dict[int, BorgCreateProgress] = {}
+
+
+def set_run_progress(run_id: int, progress: BorgCreateProgress) -> None:
+    with _progress_lock:
+        _live_progress[int(run_id)] = progress
+
+
+def get_run_progress(run_id: int) -> dict | None:
+    with _progress_lock:
+        progress = _live_progress.get(int(run_id))
+        return asdict(progress) if progress is not None else None
+
+
+def clear_run_progress(run_id: int) -> None:
+    with _progress_lock:
+        _live_progress.pop(int(run_id), None)
+
+
+_ITEM_ACTIVITY_RE = re.compile(
+    rb"(?m)^[ \t]*(?:[Rr][Ee][Mm][Oo][Tt][Ee]:[ \t]*)?([AMCE])[ \t]+([^\r\n]+)\r?$"
+)
+_ADDED_MODIFIED_LINE_RE = re.compile(
+    rb"(?m)^[ \t]*(?:[Rr][Ee][Mm][Oo][Tt][Ee]:[ \t]*)?[AM][ \t]+[^\r\n]*(?:\r?\n|$)"
+)
+_NETWORK_PREFIX = b"\x1eBBMNET\t"
+_NETWORK_RECORD_RE = re.compile(
+    rb"^\x1eBBMNET\t(?P<interface>[^\t\r\n]+)\t(?P<ip>[^\t\r\n]+)\t"
+    rb"(?P<rx>[0-9]+)\t(?P<tx>[0-9]+)$"
+)
+
+
+@dataclass(frozen=True)
+class BorgItemActivity:
+    added: int = 0
+    modified: int = 0
+    changed: int = 0
+    error: int = 0
+    last_status: str = ""
+    last_path: str = ""
+
+
+class BorgItemActivityStreamFilter:
+    """Count A/M/C/E item flags with a bounded, bytes-first parser.
+
+    When the full file list is disabled Borg is invoked with ``--filter AMCE``.
+    A/M lines are useful for the live counters but do not need to be persisted
+    in the run log; C/E remain in the stream because the warning collector and
+    the human-readable log need them. With the full file list enabled the input
+    is returned byte-for-byte and only a C-regex scan is added.
+    """
+
+    def __init__(self, *, strip_added_modified: bool = False) -> None:
+        self.strip_added_modified = bool(strip_added_modified)
+        self._carry = b""
+        self._counts = {"A": 0, "M": 0, "C": 0, "E": 0}
+        self._last_status = ""
+        self._last_path = ""
+
+    def _consume_complete(self, complete: bytes) -> BorgItemActivity | None:
+        if not complete:
+            return None
+        found = False
+        last_status = b""
+        last_path = b""
+        for match in _ITEM_ACTIVITY_RE.finditer(complete):
+            found = True
+            raw_status = match.group(1)
+            status = chr(raw_status[0])
+            self._counts[status] += 1
+            last_status = raw_status
+            last_path = match.group(2)
+        if not found:
+            return None
+        self._last_status = chr(last_status[0])
+        # Only the newest path is needed by the UI. Avoid decoding every A/M
+        # line during large first backups.
+        self._last_path = last_path.decode("utf-8", errors="replace").strip()
+        return BorgItemActivity(
+            added=self._counts["A"],
+            modified=self._counts["M"],
+            changed=self._counts["C"],
+            error=self._counts["E"],
+            last_status=self._last_status,
+            last_path=self._last_path,
+        )
+
+    def feed(self, data: bytes) -> tuple[bytes, BorgItemActivity | None]:
+        if not data:
+            return data, None
+        payload = self._carry + data
+        newline = payload.rfind(b"\n")
+        if newline < 0:
+            self._carry = payload
+            # In pass-through mode the original bytes were already forwarded;
+            # the carry exists only for status parsing across chunk boundaries.
+            return (b"" if self.strip_added_modified else data), None
+        complete = payload[: newline + 1]
+        self._carry = payload[newline + 1 :]
+        activity = self._consume_complete(complete)
+        if not self.strip_added_modified:
+            return data, activity
+        return _ADDED_MODIFIED_LINE_RE.sub(b"", complete), activity
+
+    def finalize(self) -> tuple[bytes, BorgItemActivity | None]:
+        if not self._carry:
+            return b"", None
+        final = self._carry
+        self._carry = b""
+        activity = self._consume_complete(final)
+        if self.strip_added_modified and _ADDED_MODIFIED_LINE_RE.fullmatch(final):
+            return b"", activity
+        return (final if self.strip_added_modified else b""), activity
+
+
+@dataclass(frozen=True)
+class NetworkActivity:
+    interface: str
+    ip_address: str
+    download_bits_per_second: float | None
+    upload_bits_per_second: float | None
+
+
+class BorgNetworkStreamFilter:
+    """Remove BBM network counter frames and turn them into live rates.
+
+    The remote monitor writes one small record per second. The uncommon record
+    separator byte gives ordinary Borg output a zero-work fast path and avoids
+    line splitting even during very large ``--list`` streams.
+    """
+
+    def __init__(self) -> None:
+        self._carry = b""
+        self._previous: tuple[str, str, int, int, float] | None = None
+
+    def _parse(self, record: bytes) -> NetworkActivity | None:
+        match = _NETWORK_RECORD_RE.match(record)
+        if not match:
+            return None
+        try:
+            interface = match.group("interface").decode("utf-8", errors="replace").strip()
+            ip_address = match.group("ip").decode("utf-8", errors="replace").strip()
+            rx = int(match.group("rx"))
+            tx = int(match.group("tx"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        now = time.monotonic()
+        download = upload = None
+        previous = self._previous
+        if previous is not None:
+            prev_interface, prev_ip, prev_rx, prev_tx, prev_time = previous
+            delta = now - prev_time
+            if (
+                interface == prev_interface
+                and ip_address == prev_ip
+                and delta > 0
+                and rx >= prev_rx
+                and tx >= prev_tx
+            ):
+                download = ((rx - prev_rx) * 8.0) / delta
+                upload = ((tx - prev_tx) * 8.0) / delta
+        self._previous = (interface, ip_address, rx, tx, now)
+        return NetworkActivity(
+            interface=interface,
+            ip_address=ip_address,
+            download_bits_per_second=download,
+            upload_bits_per_second=upload,
+        )
+
+    def feed(self, data: bytes) -> tuple[bytes, NetworkActivity | None]:
+        if not data:
+            return data, None
+        if not self._carry and b"\x1e" not in data:
+            return data, None
+        payload = self._carry + data
+        self._carry = b""
+        output = bytearray()
+        cursor = 0
+        latest: NetworkActivity | None = None
+        while True:
+            marker = payload.find(_NETWORK_PREFIX, cursor)
+            if marker < 0:
+                # A pipe/read boundary may split the uncommon telemetry prefix.
+                # Keep only a suffix that can still become a complete prefix;
+                # ordinary Borg output continues on the zero-copy fast path.
+                suffix_start = payload.rfind(b"\x1e", cursor)
+                if suffix_start >= 0 and _NETWORK_PREFIX.startswith(payload[suffix_start:]):
+                    output.extend(payload[cursor:suffix_start])
+                    self._carry = payload[suffix_start:]
+                else:
+                    output.extend(payload[cursor:])
+                break
+            output.extend(payload[cursor:marker])
+            newline = payload.find(b"\n", marker)
+            if newline < 0:
+                self._carry = payload[marker:]
+                break
+            record = payload[marker:newline]
+            parsed = self._parse(record)
+            if parsed is None:
+                output.extend(payload[marker:newline + 1])
+            else:
+                latest = parsed
+            cursor = newline + 1
+        return bytes(output), latest
+
+    def finalize(self) -> tuple[bytes, NetworkActivity | None]:
+        if not self._carry:
+            return b"", None
+        final = self._carry
+        self._carry = b""
+        parsed = self._parse(final.rstrip(b"\r\n"))
+        return (b"" if parsed is not None else final), parsed
+
+
+_live_activity_lock = Lock()
+_live_item_activity: dict[int, BorgItemActivity] = {}
+_live_network_activity: dict[int, tuple[NetworkActivity, float]] = {}
+
+
+def set_run_item_activity(run_id: int, activity: BorgItemActivity) -> None:
+    with _live_activity_lock:
+        _live_item_activity[int(run_id)] = activity
+
+
+def get_run_item_activity(run_id: int) -> dict | None:
+    with _live_activity_lock:
+        activity = _live_item_activity.get(int(run_id))
+        return asdict(activity) if activity is not None else None
+
+
+def set_run_network_activity(run_id: int, activity: NetworkActivity) -> None:
+    with _live_activity_lock:
+        _live_network_activity[int(run_id)] = (activity, time.monotonic())
+
+
+def get_run_network_activity(run_id: int, *, max_age_seconds: float = 5.0) -> dict | None:
+    with _live_activity_lock:
+        stored = _live_network_activity.get(int(run_id))
+        if stored is None:
+            return None
+        activity, sampled_at = stored
+        if time.monotonic() - sampled_at > max(1.0, float(max_age_seconds)):
+            _live_network_activity.pop(int(run_id), None)
+            return None
+        return asdict(activity)
+
+
+def clear_run_live_activity(run_id: int) -> None:
+    with _live_activity_lock:
+        _live_item_activity.pop(int(run_id), None)
+        _live_network_activity.pop(int(run_id), None)

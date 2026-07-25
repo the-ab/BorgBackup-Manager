@@ -141,6 +141,32 @@ def test_managed_repository_location_is_refreshed_after_endpoint_change(monkeypa
         assert refreshed.location == "ssh://borg@new.example:2200/./moved-12345678"
 
 
+def test_nested_managed_repository_location_preserves_relative_path(monkeypatch):
+    import app.main as main_module
+    from app.database import SessionLocal
+    from app.models import Repository
+
+    with SessionLocal() as db:
+        row = Repository(
+            name="nested-managed-repository",
+            location="ssh://borg@old.example:2222/./server-a",
+            storage_path="/repositories/offline-nas/borg/server-a",
+            initialized=True,
+            extra_env_json="{}",
+        )
+        db.add(row)
+        db.commit()
+        row_id = row.id
+
+    monkeypatch.setattr(main_module, "REPOSITORY_PUBLIC_HOST", "new.example")
+    monkeypatch.setattr(main_module, "REPOSITORY_SSH_PORT", 2200)
+    main_module.sync_managed_repository_locations()
+
+    with SessionLocal() as db:
+        refreshed = db.get(Repository, row_id)
+        assert refreshed.location == "ssh://borg@new.example:2200/./offline-nas/borg/server-a"
+
+
 def test_run_history_cleanup_removes_only_old_finished_runs(monkeypatch):
     from datetime import datetime, timedelta, timezone
     from uuid import uuid4

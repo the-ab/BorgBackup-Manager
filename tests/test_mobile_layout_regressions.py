@@ -57,3 +57,16 @@ def test_compact_job_schedule_and_archive_forms_stack_on_mobile():
   .schedule-create-layout,
   .archive-compare-grid { grid-template-columns: 1fr; }""" in css
     assert ".schedule-editor-head { align-items: stretch; flex-direction: column; }" in css
+
+
+def test_live_backup_status_and_network_tiles_are_responsive():
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+
+    assert "backup_item_activity" in javascript
+    assert "backup_network" in javascript
+    assert "formatBitRate" in javascript
+    assert 'class="run-network-summary"' in javascript
+    assert 'class="backup-item-status status-' in javascript
+    assert ".backup-item-statuses { display: grid; grid-template-columns: repeat(4" in css
+    assert ".backup-item-statuses { grid-template-columns: repeat(2" in css

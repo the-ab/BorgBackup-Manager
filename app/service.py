@@ -15,6 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
+from app.borg_progress import (
+    BorgItemActivityStreamFilter, BorgNetworkStreamFilter, BorgProgressStreamFilter,
+    clear_run_live_activity, clear_run_progress, set_run_item_activity,
+    set_run_network_activity, set_run_progress,
+)
 from app.backup_stats import parse_backup_statistics, parse_source_scan_statistics
 from app.borg_warnings import BorgWarningCollector, unresolved_warning_summary
 from app.config import (
@@ -25,7 +30,7 @@ from app.config import (
     REPOSITORY_SSH_PORT,
 )
 from app.database import SessionLocal
-from app.models import ArchiveMount, Host, HostRepositoryAccess, Job, Repository, Run
+from app.models import ArchiveMount, BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, Repository, Run
 from app.repository_sizes import (
     managed_repository_filesystem_size, repository_statistics_from_borg_info,
     store_repository_statistics,
@@ -47,6 +52,7 @@ from app.runner import (
     diff_archives_command,
     execute,
     host_repository_bootstrap_command,
+    host_ssh_action_command,
     prune_command,
     repository_command,
     repository_init_command,
@@ -63,7 +69,8 @@ from app.vault import get_system_secret, set_repository_secret, set_system_secre
 from app.log_filter import extract_error_output, strip_borg_item_lines
 from app.notifications import notify_run_completion
 from app.settings import load_settings
-from app.storage_guard import repository_storage_status
+from app.schedules import schedule_target_job_ids
+from app.storage_guard import mounted_filesystems_below, repository_mount_path, repository_storage_status
 
 
 
@@ -120,8 +127,75 @@ _initializing_repositories: set[int] = set()
 _active_run_lock = Lock()
 _active_run_tasks: dict[int, asyncio.Task] = {}
 _executing_run_ids: set[int] = set()
-_repository_locks: dict[tuple[int, str], asyncio.Lock] = {}
+_repository_locks: dict[tuple[int, str], tuple[int, asyncio.Semaphore]] = {}
+_mount_locks: dict[tuple[int, str], tuple[int, asyncio.Semaphore]] = {}
 _run_claim_lock = Lock()
+_repository_chain_lock = Lock()
+_repository_chain_reservations: dict[str, list[dict[str, object]]] = {}
+_run_chain_tokens: dict[int, str] = {}
+_maintenance_chain_tasks: set[asyncio.Task] = set()
+_mount_topology_lock = Lock()
+_mount_topology_cache: tuple[float, list[Path]] = (0.0, [])
+
+
+
+
+def _register_repository_chain(repository: Repository, run_id: int, token: str) -> None:
+    key = _repository_execution_key(repository, repository.id)
+    with _repository_chain_lock:
+        queue = _repository_chain_reservations.setdefault(key, [])
+        queue.append({"token": token, "root_run_id": int(run_id), "started": False})
+        queue.sort(key=lambda item: int(item["root_run_id"]))
+        _run_chain_tokens[int(run_id)] = token
+
+
+def _register_chain_run(run_id: int, token: str | None) -> None:
+    if not token:
+        return
+    with _repository_chain_lock:
+        _run_chain_tokens[int(run_id)] = token
+
+
+def _mark_repository_chain_started(run_id: int) -> None:
+    with _repository_chain_lock:
+        token = _run_chain_tokens.get(int(run_id))
+        if not token:
+            return
+        for queue in _repository_chain_reservations.values():
+            for item in queue:
+                if item.get("token") == token and int(item.get("root_run_id", 0)) == int(run_id):
+                    item["started"] = True
+                    return
+
+
+def _release_repository_chain(token: str) -> None:
+    with _repository_chain_lock:
+        empty: list[str] = []
+        for key, queue in _repository_chain_reservations.items():
+            queue[:] = [item for item in queue if item.get("token") != token]
+            if not queue:
+                empty.append(key)
+        for key in empty:
+            _repository_chain_reservations.pop(key, None)
+        for run_id, run_token in list(_run_chain_tokens.items()):
+            if run_token == token:
+                _run_chain_tokens.pop(run_id, None)
+
+
+def _repository_chain_snapshot() -> tuple[dict[str, dict[str, object]], dict[int, str]]:
+    with _repository_chain_lock:
+        active = {
+            key: dict(queue[0])
+            for key, queue in _repository_chain_reservations.items()
+            if queue
+        }
+        tokens = dict(_run_chain_tokens)
+    return active, tokens
+
+
+def _track_maintenance_task(task: asyncio.Task) -> None:
+    _maintenance_chain_tasks.add(task)
+    task.add_done_callback(_maintenance_chain_tasks.discard)
 
 
 def _append_unique_line(path: Path, line: str) -> None:
@@ -313,44 +387,139 @@ def _repository_execution_key_by_id(repository_id: int) -> str:
         return _repository_execution_key(repository, repository_id)
 
 
-def _repository_lock(repository_id: int | None) -> asyncio.Lock | None:
+def _execution_mounts(*, max_age_seconds: float = 1.0) -> list[Path]:
+    global _mount_topology_cache
+    now = time.monotonic()
+    with _mount_topology_lock:
+        sampled_at, mounts = _mount_topology_cache
+        if mounts and now - sampled_at <= max(0.1, max_age_seconds):
+            return list(mounts)
+        try:
+            mounts = mounted_filesystems_below(REPOSITORY_ROOT)
+        except OSError:
+            mounts = []
+        _mount_topology_cache = (now, list(mounts))
+        return list(mounts)
+
+
+def _repository_parallel_limit(repository: Repository | None) -> int:
+    try:
+        return max(1, min(64, int(repository.parallel_limit or 1))) if repository is not None else 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def _repository_mount_key(repository: Repository | None, *, mounts=None) -> str | None:
+    if repository is None or not repository.storage_path:
+        return None
+    mount = repository_mount_path(repository.storage_path, REPOSITORY_ROOT, mounts=mounts)
+    return str(mount) if mount is not None else None
+
+
+def _mount_parallel_limit(mount_key: str | None, settings=None) -> int:
+    if not mount_key:
+        return 0
+    active_settings = settings or load_settings()
+    try:
+        return max(0, min(64, int((active_settings.mount_parallel_limits or {}).get(mount_key, 0))))
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
+def _source_stats_parallel_limit(settings=None) -> int:
+    """Return the global cap for simultaneous manual source-statistics scans."""
+    active_settings = settings or load_settings()
+    try:
+        return max(1, min(64, int(getattr(active_settings, "source_stats_parallel_limit", 1) or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _capacity_semaphore(cache, key: tuple[int, str], limit: int) -> asyncio.Semaphore:
+    entry = cache.get(key)
+    if entry is not None:
+        old_limit, semaphore = entry
+        waiters = getattr(semaphore, "_waiters", None)
+        idle = getattr(semaphore, "_value", 0) == old_limit and not waiters
+        if old_limit == limit or not idle:
+            return semaphore
+    semaphore = asyncio.Semaphore(limit)
+    cache[key] = (limit, semaphore)
+    return semaphore
+
+
+def _repository_lock(repository_id: int | None) -> asyncio.Semaphore | None:
     if repository_id is None:
         return None
     loop = asyncio.get_running_loop()
-    key = (id(loop), _repository_execution_key_by_id(repository_id))
-    lock = _repository_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _repository_locks[key] = lock
-    return lock
+    with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        if repository is None:
+            return None
+        key = (id(loop), _repository_execution_key(repository, repository_id))
+        limit = _repository_parallel_limit(repository)
+    return _capacity_semaphore(_repository_locks, key, limit)
 
+
+def _mount_lock(repository_id: int | None) -> asyncio.Semaphore | None:
+    if repository_id is None:
+        return None
+    loop = asyncio.get_running_loop()
+    with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        if repository is None:
+            return None
+        mount_key = _repository_mount_key(repository, mounts=_execution_mounts())
+    limit = _mount_parallel_limit(mount_key)
+    if not mount_key or limit <= 0:
+        return None
+    return _capacity_semaphore(_mount_locks, (id(loop), mount_key), limit)
+
+
+
+
+async def _acquire_repository_exclusive(repository_id: int) -> tuple[asyncio.Semaphore, int]:
+    """Acquire every configured repository permit for destructive maintenance."""
+    semaphore = _repository_lock(repository_id)
+    if semaphore is None:
+        raise LookupError("Repository not found")
+    with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        permits = _repository_parallel_limit(repository)
+    acquired = 0
+    try:
+        for _ in range(permits):
+            await semaphore.acquire()
+            acquired += 1
+        return semaphore, acquired
+    except BaseException:
+        for _ in range(acquired):
+            semaphore.release()
+        raise
+
+
+def _release_repository_exclusive(semaphore: asyncio.Semaphore, permits: int) -> None:
+    for _ in range(max(0, permits)):
+        semaphore.release()
 
 def _repository_run_blocker(run_id: int, repository_id: int) -> int | None:
-    """Return the active run that must finish before *run_id* may start.
-
-    The database-backed FIFO gate complements the in-process asyncio lock. It
-    keeps ordering correct across different event loops and also serializes
-    legacy duplicate repository records that address the same physical target.
-    """
+    """Return an earlier same-repository run when its configured capacity is full."""
     execution_key = _repository_execution_key_by_id(repository_id)
     with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        limit = _repository_parallel_limit(repository)
         rows = db.scalars(
             select(Run)
             .options(joinedload(Run.repository))
             .where(Run.status.in_(["queued", "running"]), Run.id != run_id)
             .order_by(Run.id)
         ).all()
-        running: list[int] = []
-        earlier_queued: list[int] = []
-        for row in rows:
-            if _repository_execution_key(row.repository, row.repository_id) != execution_key:
-                continue
-            if row.status == "running":
-                running.append(row.id)
-            elif row.id < run_id:
-                earlier_queued.append(row.id)
-        blockers = running or earlier_queued
-        return min(blockers) if blockers else None
+        blockers = [
+            row.id for row in rows
+            if _repository_execution_key(row.repository, row.repository_id) == execution_key
+            and (row.status == "running" or row.id < run_id)
+        ]
+        return min(blockers) if len(blockers) >= limit else None
 
 
 
@@ -368,10 +537,10 @@ def _execution_plan(
 ) -> tuple[set[int], dict[int, dict[str, int | str]]]:
     """Return queued runs allowed to start now and a reason for blocked runs.
 
-    The plan fills currently free global slots in run-ID order while skipping
-    queued entries that are themselves blocked by a repository or schedule
-    limit. This avoids unnecessary head-of-line blocking when an older run is
-    waiting for a busy repository but another repository still has capacity.
+    Capacity is evaluated in run-ID order across four independent layers:
+    global, schedule, physical Borg repository and the underlying managed mount.
+    This prevents several repositories on one NFS/disk mount from bypassing a
+    storage-level concurrency limit while preserving per-repository controls.
     """
     rows = db.scalars(
         select(Run)
@@ -379,11 +548,6 @@ def _execution_plan(
         .where(Run.status.in_(["queued", "running"]))
         .order_by(Run.id)
     ).all()
-    # Only live manager tasks may consume queue capacity. A stale queued/running
-    # database row can otherwise block every future run after an interrupted
-    # task, worker restart, or failed test/process hand-off. Startup recovery
-    # still marks interrupted rows terminal; this filter is an additional
-    # runtime safeguard for rows that become orphaned between recovery cycles.
     with _active_run_lock:
         live_task_ids: set[int] = set()
         stale_task_ids: list[int] = []
@@ -400,9 +564,38 @@ def _execution_plan(
     rows = [row for row in rows if row.id in live_run_ids]
     running = [row for row in rows if row.status == "running"]
     queued = [row for row in rows if row.status == "queued"]
-    global_limit = load_settings().max_parallel_runs
+    settings = load_settings()
+    global_limit = settings.max_parallel_runs
+    mounts = _execution_mounts()
+    chain_reservations, run_chain_tokens = _repository_chain_snapshot()
+
+    repository_limits: dict[str, int] = {}
+    mount_limits: dict[str, int] = {}
+    row_repository_keys: dict[int, str | None] = {}
+    row_mount_keys: dict[int, str | None] = {}
+    for row in rows:
+        repository_key = (
+            _repository_execution_key(row.repository, row.repository_id)
+            if row.repository_id is not None and row.action != "source-stats" else None
+        )
+        row_repository_keys[row.id] = repository_key
+        if repository_key:
+            limit = _repository_parallel_limit(row.repository)
+            previous = repository_limits.get(repository_key)
+            repository_limits[repository_key] = min(previous, limit) if previous else limit
+        mount_key = (
+            _repository_mount_key(row.repository, mounts=mounts)
+            if row.action != "source-stats" else None
+        )
+        row_mount_keys[row.id] = mount_key
+        if mount_key:
+            limit = _mount_parallel_limit(mount_key, settings)
+            if limit > 0:
+                mount_limits[mount_key] = limit
 
     repository_occupants: dict[str, list[int]] = {}
+    repository_exclusive: dict[str, bool] = {}
+    mount_occupants: dict[str, list[int]] = {}
     schedule_occupants: dict[str, list[int]] = {}
     schedule_limits: dict[str, int] = {}
     for row in rows:
@@ -412,10 +605,14 @@ def _execution_plan(
             previous = schedule_limits.get(key)
             schedule_limits[key] = min(previous, limit) if previous else limit
     for row in running:
-        if row.repository_id is not None:
-            repository_occupants.setdefault(
-                _repository_execution_key(row.repository, row.repository_id), []
-            ).append(row.id)
+        repository_key = row_repository_keys.get(row.id)
+        if repository_key:
+            repository_occupants.setdefault(repository_key, []).append(row.id)
+            if row.action != "backup":
+                repository_exclusive[repository_key] = True
+        mount_key = row_mount_keys.get(row.id)
+        if mount_key and mount_key in mount_limits:
+            mount_occupants.setdefault(mount_key, []).append(row.id)
         schedule_key = _run_schedule_key(row)
         if schedule_key:
             schedule_occupants.setdefault(schedule_key, []).append(row.id)
@@ -423,15 +620,46 @@ def _execution_plan(
     selected: set[int] = set()
     blockers: dict[int, dict[str, int | str]] = {}
     global_occupants = [row.id for row in running]
+    source_stats_limit = _source_stats_parallel_limit(settings)
+    source_stats_occupants = [row.id for row in running if row.action == "source-stats"]
     for row in queued:
-        repository_key = (
-            _repository_execution_key(row.repository, row.repository_id)
-            if row.repository_id is not None else None
-        )
+        repository_key = row_repository_keys.get(row.id)
+        reservation = chain_reservations.get(repository_key) if repository_key else None
+        if reservation:
+            owner_token = str(reservation.get("token") or "")
+            root_run_id = int(reservation.get("root_run_id") or 0)
+            started = bool(reservation.get("started"))
+            row_token = run_chain_tokens.get(row.id)
+            if row_token != owner_token and (started or row.id > root_run_id):
+                blockers[row.id] = {
+                    "kind": "maintenance-chain",
+                    "blocker_id": root_run_id,
+                    "repository": row.repository.name if row.repository else "Repository",
+                }
+                continue
         repository_blockers = repository_occupants.get(repository_key, []) if repository_key else []
-        if repository_blockers:
+        repository_limit = repository_limits.get(repository_key, 1) if repository_key else 0
+        repository_is_exclusive = row.action != "backup"
+        repository_busy_exclusive = repository_exclusive.get(repository_key, False) if repository_key else False
+        if repository_key and (
+            repository_busy_exclusive
+            or (repository_is_exclusive and repository_blockers)
+            or (not repository_is_exclusive and len(repository_blockers) >= repository_limit)
+        ):
             blockers[row.id] = {
                 "kind": "repository", "blocker_id": min(repository_blockers),
+                "limit": (1 if repository_is_exclusive or repository_busy_exclusive else repository_limit),
+                "repository": row.repository.name if row.repository else "Repository",
+            }
+            continue
+
+        mount_key = row_mount_keys.get(row.id)
+        mount_limit = mount_limits.get(mount_key, 0) if mount_key else 0
+        mount_blockers = mount_occupants.get(mount_key, []) if mount_key else []
+        if mount_limit > 0 and len(mount_blockers) >= mount_limit:
+            blockers[row.id] = {
+                "kind": "mount", "blocker_id": min(mount_blockers),
+                "limit": mount_limit, "mount": mount_key or "/repositories",
             }
             continue
 
@@ -445,6 +673,14 @@ def _execution_plan(
             }
             continue
 
+        if row.action == "source-stats" and len(source_stats_occupants) >= source_stats_limit:
+            blockers[row.id] = {
+                "kind": "source-stats",
+                "blocker_id": min(source_stats_occupants) if source_stats_occupants else 0,
+                "limit": source_stats_limit,
+            }
+            continue
+
         if global_limit > 0 and len(global_occupants) >= global_limit:
             blockers[row.id] = {
                 "kind": "global", "blocker_id": min(global_occupants) if global_occupants else 0,
@@ -454,8 +690,14 @@ def _execution_plan(
 
         selected.add(row.id)
         global_occupants.append(row.id)
+        if row.action == "source-stats":
+            source_stats_occupants.append(row.id)
         if repository_key:
             repository_occupants.setdefault(repository_key, []).append(row.id)
+            if repository_is_exclusive:
+                repository_exclusive[repository_key] = True
+        if mount_key and mount_limit > 0:
+            mount_occupants.setdefault(mount_key, []).append(row.id)
         if schedule_key:
             schedule_occupants.setdefault(schedule_key, []).append(row.id)
 
@@ -475,6 +717,7 @@ def _claim_execution_turn(run_id: int) -> tuple[bool, dict[str, int | str] | Non
             current.status = "running"
             current.started_at = datetime.now(timezone.utc)
             db.commit()
+            _mark_repository_chain_started(run_id)
             return True, None
 
 
@@ -485,11 +728,29 @@ def _queue_message(reason: dict[str, int | str] | None) -> str:
     suffix = f" #{blocker}" if blocker else ""
     wait_target = f"Ausführung #{blocker}" if blocker else "freie Kapazität"
     if reason.get("kind") == "repository":
-        return f"WARTESCHLANGE: Warte auf Repository-Ausführung{suffix}."
+        return (
+            f"WARTESCHLANGE: Repository „{reason.get('repository', 'Repository')}“ erlaubt maximal "
+            f"{reason.get('limit', 1)} parallele Ausführung(en); warte auf {wait_target}."
+        )
+    if reason.get("kind") == "mount":
+        return (
+            f"WARTESCHLANGE: Mount „{reason.get('mount', '/repositories')}“ erlaubt maximal "
+            f"{reason.get('limit', 1)} parallele Ausführung(en); warte auf {wait_target}."
+        )
     if reason.get("kind") == "schedule":
         return (
             f"WARTESCHLANGE: Zeitplan „{reason.get('schedule', 'Zeitplan')}“ erlaubt maximal "
             f"{reason.get('limit', 1)} parallele Ausführung(en); warte auf {wait_target}."
+        )
+    if reason.get("kind") == "source-stats":
+        return (
+            f"WARTESCHLANGE: Quellenstatistik erlaubt maximal "
+            f"{reason.get('limit', 1)} parallele Aktualisierung(en); warte auf {wait_target}."
+        )
+    if reason.get("kind") == "maintenance-chain":
+        return (
+            f"WARTESCHLANGE: Repository „{reason.get('repository', 'Repository')}“ ist bis zum Ende "
+            f"der manuellen Backup-/Prune-/Compact-Kette reserviert; warte auf {wait_target}."
         )
     if reason.get("kind") == "global":
         return (
@@ -522,12 +783,21 @@ async def _wait_for_repository_turn(run_id: int, repository_id: int | None) -> b
 
 
 async def execute_interactive(repository_id: int | None, command: Command) -> tuple[int, str, str]:
-    """Execute an interactive command while serializing access per repository."""
-    lock = _repository_lock(repository_id)
-    if lock:
-        async with lock:
-            return await execute(command)
-    return await execute(command)
+    """Execute an interactive command under mount and repository capacity limits."""
+    mount_lock = _mount_lock(repository_id)
+    repository_lock = _repository_lock(repository_id)
+    mount_acquired = repository_acquired = False
+    try:
+        if mount_lock:
+            await mount_lock.acquire(); mount_acquired = True
+        if repository_lock:
+            await repository_lock.acquire(); repository_acquired = True
+        return await execute(command)
+    finally:
+        if repository_lock and repository_acquired:
+            repository_lock.release()
+        if mount_lock and mount_acquired:
+            mount_lock.release()
 
 
 async def clear_repository_cache(repository_id: int) -> dict[str, int | bool | str]:
@@ -537,16 +807,20 @@ async def clear_repository_cache(repository_id: int) -> dict[str, int | bool | s
     Calling ``borg delete --cache-only`` would first need to acquire the very
     cache lock that this maintenance action is intended to recover from.
     """
-    lock = _repository_lock(repository_id)
-    if lock is None:
-        raise LookupError("Repository not found")
-    async with lock:
+    semaphore, permits = await _acquire_repository_exclusive(repository_id)
+    try:
         with SessionLocal() as db:
             repository = db.get(Repository, repository_id)
             if not repository:
                 raise LookupError("Repository not found")
+            if db.scalar(select(Run.id).where(
+                Run.repository_id == repository_id, Run.status.in_(["queued", "running"])
+            ).limit(1)):
+                raise ValueError("Repository hat eine wartende oder laufende Ausführung")
             db.expunge(repository)
         return await asyncio.to_thread(clear_repository_manager_cache, repository)
+    finally:
+        _release_repository_exclusive(semaphore, permits)
 
 
 async def refresh_repository_statistics(repository_id: int) -> dict[str, int | None]:
@@ -558,7 +832,7 @@ async def refresh_repository_statistics(repository_id: int) -> dict[str, int | N
         if not repository.initialized:
             raise ValueError("Repository is not initialized")
         if repository.storage_path and not managed_repository_present(repository):
-            raise ValueError("Verwaltetes Repository fehlt; zuerst zurücksetzen und erneut initialisieren")
+            raise ValueError("Verwaltetes Repository ist derzeit nicht verfügbar; Mount prüfen und Status erneut aktualisieren")
         managed = bool(repository.storage_path)
         command = repository_size_command(repository)
 
@@ -585,6 +859,12 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
             return
         repository_id = run.repository_id
         action = run.action
+        full_file_list = True
+        if action == "backup" and run.job is not None:
+            try:
+                full_file_list = bool(json.loads(run.job.create_options_json or "{}").get("list_files", True))
+            except (TypeError, ValueError):
+                full_file_list = True
         run.command_preview = command.preview
         db.commit()
 
@@ -602,6 +882,12 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
     version_probe_bytes = bytearray()
     backup_preview_filter = _BackupSqlitePreviewFilter() if action == "backup" else None
     warning_collector = BorgWarningCollector(max_items=100) if action == "backup" else None
+    progress_filter = BorgProgressStreamFilter() if action == "backup" else None
+    item_activity_filter = (
+        BorgItemActivityStreamFilter(strip_added_modified=not full_file_list)
+        if action == "backup" else None
+    )
+    network_filter = BorgNetworkStreamFilter() if action == "backup" else None
     last_flush = 0.0
     flush_lock = asyncio.Lock()
     log_writer = RunLogWriter(run_id, log_file_max_bytes)
@@ -650,14 +936,31 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
             pending_borg_version = None
             last_flush = now
 
-    async def append_output_bytes(stream: str, data: bytes) -> None:
+    async def append_output_bytes(stream: str, data: bytes) -> bytes:
         nonlocal pending_warning_summary_json, pending_borg_version
+        # Borg's --progress stream is useful for the WebUI but would create
+        # thousands of carriage-return frames in the permanent run log. Extract
+        # it only from stderr and keep the remaining byte stream unchanged.
+        persisted = data
+        if progress_filter is not None and stream == "stderr":
+            persisted, progress = progress_filter.feed(data)
+            if progress is not None:
+                set_run_progress(run_id, progress)
+            if network_filter is not None:
+                persisted, network_activity = network_filter.feed(persisted)
+                if network_activity is not None:
+                    set_run_network_activity(run_id, network_activity)
+            if item_activity_filter is not None:
+                persisted, item_activity = item_activity_filter.feed(persisted)
+                if item_activity is not None:
+                    set_run_item_activity(run_id, item_activity)
+
         # The normal production path stays binary: millions of file names are
         # written without UTF-8 decoding, line splitting or SQLite mirroring.
-        log_writer.append_bytes(data)
+        log_writer.append_bytes(persisted)
         warning_changed = False
-        if warning_collector:
-            warning_changed = warning_collector.feed_bytes(data, stream=stream)
+        if warning_collector and persisted:
+            warning_changed = warning_collector.feed_bytes(persisted, stream=stream)
             if warning_changed:
                 pending_warning_summary_json = json.dumps(
                     warning_collector.summary(), ensure_ascii=False, separators=(",", ":"),
@@ -667,27 +970,31 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
             # SQLite receives only non-item metadata; all A/M/U/C/E/... path
             # lines are filtered with chunk-boundary protection.
             if stream == "stdout" and backup_preview_filter is not None:
-                preview_text = backup_preview_filter.feed(data)
+                preview_text = backup_preview_filter.feed(persisted)
                 if preview_text:
                     pending_stdout.append(preview_text)
             if pending_borg_version is None and len(version_probe_bytes) < 8192:
                 remaining = 8192 - len(version_probe_bytes)
-                version_probe_bytes.extend(data[:remaining])
+                version_probe_bytes.extend(persisted[:remaining])
                 detected = parse_borg_version(version_probe_bytes.decode("utf-8", errors="replace"))
                 if detected:
                     pending_borg_version = detected
         elif stream == "stdout":
-            pending_stdout.append(data.decode("utf-8", errors="replace"))
+            pending_stdout.append(persisted.decode("utf-8", errors="replace"))
         if warning_changed or pending_stdout or pending_borg_version is not None:
             await flush_output()
+        # ``execute`` also uses this filtered stream for its bounded capture, so
+        # progress frames cannot evict a real warning from the final stderr tail.
+        return persisted
 
     async def append_output(stream: str, text: str) -> None:
         # Compatibility callback for tests and third-party executors that still
         # provide decoded strings. The built-in runner uses append_output_bytes.
         await append_output_bytes(stream, text.encode("utf-8", errors="replace"))
 
-    lock = _repository_lock(repository_id)
-    lock_acquired = False
+    mount_lock = None
+    repository_lock = None
+    mount_acquired = repository_acquired = False
     last_queue_message = ""
     try:
         while True:
@@ -695,15 +1002,32 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
                 current = db.get(Run, run_id)
                 if not current or current.status != "queued":
                     return
-            if lock:
-                await lock.acquire()
-                lock_acquired = True
+            # Re-resolve both capacities on every queue attempt so a remounted
+            # NFS target or a changed limit is picked up before the run starts.
+            if action == "source-stats":
+                # Source statistics only read the configured source device. They
+                # consume global/source-scan capacity but must not reserve a
+                # Borg repository or its storage mount.
+                mount_lock = None
+                repository_lock = None
+            else:
+                mount_lock = _mount_lock(repository_id)
+                repository_lock = _repository_lock(repository_id)
+            if mount_lock:
+                await mount_lock.acquire()
+                mount_acquired = True
+            if repository_lock:
+                await repository_lock.acquire()
+                repository_acquired = True
             claimed, reason = _claim_execution_turn(run_id)
             if claimed:
                 break
-            if lock and lock_acquired:
-                lock.release()
-                lock_acquired = False
+            if repository_lock and repository_acquired:
+                repository_lock.release()
+                repository_acquired = False
+            if mount_lock and mount_acquired:
+                mount_lock.release()
+                mount_acquired = False
             message = _queue_message(reason)
             if message != last_queue_message:
                 log_writer.append(message + "\n")
@@ -715,6 +1039,33 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
             on_output_bytes=append_output_bytes,
             capture_limit_bytes=32 * 1024,
         )
+        if progress_filter is not None:
+            trailing, progress = progress_filter.finalize()
+            if progress is not None:
+                set_run_progress(run_id, progress)
+            if trailing and network_filter is not None:
+                trailing, network_activity = network_filter.feed(trailing)
+                if network_activity is not None:
+                    set_run_network_activity(run_id, network_activity)
+            if network_filter is not None:
+                network_trailing, network_activity = network_filter.finalize()
+                trailing += network_trailing
+                if network_activity is not None:
+                    set_run_network_activity(run_id, network_activity)
+            if trailing and item_activity_filter is not None:
+                trailing, item_activity = item_activity_filter.feed(trailing)
+                if item_activity is not None:
+                    set_run_item_activity(run_id, item_activity)
+            if item_activity_filter is not None:
+                item_trailing, item_activity = item_activity_filter.finalize()
+                trailing += item_trailing
+                if item_activity is not None:
+                    set_run_item_activity(run_id, item_activity)
+            if trailing:
+                log_writer.append_bytes(trailing)
+                error += trailing.decode("utf-8", errors="replace")
+                if warning_collector:
+                    warning_collector.feed_bytes(trailing, stream="stderr")
         if warning_collector and warning_collector.finalize():
             pending_warning_summary_json = json.dumps(
                 warning_collector.summary(), ensure_ascii=False, separators=(",", ":"),
@@ -766,8 +1117,10 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
         live_log_flush_task.cancel()
         await asyncio.gather(live_log_flush_task, return_exceptions=True)
         log_writer.close()
-        if lock and lock_acquired:
-            lock.release()
+        if repository_lock and repository_acquired:
+            repository_lock.release()
+        if mount_lock and mount_acquired:
+            mount_lock.release()
 
     # Invalidate before publishing the terminal run status. The browser follows
     # that status and may request the archive list immediately afterwards.
@@ -859,11 +1212,15 @@ async def execute_run(run_id: int, command: Command, *, refresh_size_after: bool
     distinguish real work from orphaned queued/running rows. Cleanup happens
     for every exit path, including cancellation before command execution.
     """
+    clear_run_progress(run_id)
+    clear_run_live_activity(run_id)
     with _active_run_lock:
         _executing_run_ids.add(run_id)
     try:
         await _execute_run_inner(run_id, command, refresh_size_after=refresh_size_after)
     finally:
+        clear_run_progress(run_id)
+        clear_run_live_activity(run_id)
         with _active_run_lock:
             _executing_run_ids.discard(run_id)
             if _active_run_tasks.get(run_id) is asyncio.current_task():
@@ -880,11 +1237,8 @@ async def reset_managed_repository_state(repository_id: int) -> dict[str, int | 
     lock serializes the reset with manager-side Borg operations and all checks
     are repeated while that lock is held.
     """
-    lock = _repository_lock(repository_id)
-    if lock is None:
-        raise LookupError("Repository not found")
-
-    async with lock:
+    semaphore, permits = await _acquire_repository_exclusive(repository_id)
+    try:
         with SessionLocal() as db:
             repository = db.get(Repository, repository_id)
             if not repository:
@@ -943,6 +1297,8 @@ async def reset_managed_repository_state(repository_id: int) -> dict[str, int | 
             Path(repository_keyfile_path(repository)).unlink(missing_ok=True)
         invalidate_archive_cache(repository_id)
         return {"status": "reset", "repository_id": repository_id, "run_id": run_id}
+    finally:
+        _release_repository_exclusive(semaphore, permits)
 
 
 async def execute_repository_init(run_id: int, repository_id: int, command: Command) -> None:
@@ -974,6 +1330,7 @@ async def execute_repository_init(run_id: int, repository_id: int, command: Comm
     finally:
         with _repository_init_lock:
             _initializing_repositories.discard(repository_id)
+
 
 
 def queue_repository_init(repository_id: int) -> int:
@@ -1102,6 +1459,40 @@ async def execute_repository_validation(run_id: int, repository_id: int, command
         db.commit()
 
 
+def queue_host_ssh_action(action_id: int) -> int:
+    """Queue one saved SSH action and persist its output as a normal run."""
+    with SessionLocal() as db:
+        action = db.scalar(
+            select(HostSshAction).options(joinedload(HostSshAction.host)).where(HostSshAction.id == action_id)
+        )
+        if not action:
+            raise LookupError("SSH action not found")
+        if not action.enabled:
+            raise ValueError("SSH-Aktion ist deaktiviert")
+        if not action.host or not action.host.enabled:
+            raise ValueError("Gerät ist deaktiviert")
+        if not action.host.host_key:
+            raise ValueError("SSH-Fingerprint des Geräts ist nicht bestätigt")
+        command = host_ssh_action_command(action.host, action.command, action.timeout_seconds)
+        run = Run(
+            job_id=None,
+            job_name_snapshot=f"{action.host.name} · {action.name}"[:100],
+            repository_id=None,
+            action="ssh-command",
+            status="queued",
+            command_preview=command.preview,
+            trigger_type="manual",
+        )
+        db.add(run)
+        db.commit()
+        run_id = int(run.id)
+
+    task = asyncio.create_task(execute_run(run_id, command, refresh_size_after=False))
+    with _active_run_lock:
+        _active_run_tasks[run_id] = task
+    return run_id
+
+
 def queue_repository_action(
     repository_id: int,
     action: str,
@@ -1119,7 +1510,7 @@ def queue_repository_action(
         if action != "test" and not repository.initialized:
             raise ValueError("Repository is not initialized")
         if repository.storage_path and not managed_repository_present(repository):
-            raise ValueError("Verwaltetes Repository fehlt; zuerst zurücksetzen und erneut initialisieren")
+            raise ValueError("Verwaltetes Repository ist derzeit nicht verfügbar; Mount prüfen und Status erneut aktualisieren")
         if db.scalar(
             select(Run.id).where(
                 Run.repository_id == repository_id,
@@ -1180,6 +1571,8 @@ def queue_job_action(
     schedule_id: int | None = None,
     schedule_parallel_limit: int = 0,
     run_label: str | None = None,
+    chain_token: str | None = None,
+    reserve_repository_chain: bool = False,
 ) -> int:
     with SessionLocal() as db:
         job = db.scalar(
@@ -1216,7 +1609,7 @@ def queue_job_action(
             if action not in {"version", "source-stats"} and (
                 not job.repository.initialized or not managed_repository_present(job.repository)
             ):
-                raise ValueError("Verwaltetes Repository fehlt oder ist nicht initialisiert; zuerst zurücksetzen und erneut initialisieren")
+                raise ValueError("Verwaltetes Repository ist nicht verfügbar oder nicht initialisiert; Mount prüfen und Status erneut aktualisieren")
             if action in {"backup", "restore", "probe", "confirm-location"} and not repository_access_ready(job.host_id, job.repository_id):
                 raise ValueError("Repository access for this backup job is not configured; set it up in the Backup Jobs view")
             if action == "backup":
@@ -1292,6 +1685,13 @@ def queue_job_action(
         db.add(run)
         db.commit()
         run_id = run.id
+        chain_repository = job.repository
+    if reserve_repository_chain:
+        if not chain_token:
+            raise ValueError("Internal maintenance chain token is missing")
+        _register_repository_chain(chain_repository, run_id, chain_token)
+    else:
+        _register_chain_run(run_id, chain_token)
     task = asyncio.create_task(execute_run(run_id, command, refresh_size_after=refresh_size_after))
     with _active_run_lock:
         _active_run_tasks[run_id] = task
@@ -1322,7 +1722,7 @@ def retry_run(run_id: int) -> int:
         if not run.job_id or run.action not in allowed:
             raise ValueError("This execution cannot be repeated automatically")
         job_id, action = run.job_id, run.action
-    return queue_job_action(job_id, action)
+    return queue_manual_backup(job_id) if action == "backup" else queue_job_action(job_id, action)
 
 
 async def _wait_for_run(run_id: int) -> str:
@@ -1365,6 +1765,228 @@ def _record_schedule_error(
         return int(run.id)
 
 
+def _has_retention(job: Job | None) -> bool:
+    if job is None:
+        return False
+    try:
+        retention = json.loads(job.prune_options_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return any(
+        isinstance(value, int) and not isinstance(value, bool) and value > 0
+        for value in retention.values()
+    )
+
+
+async def _refresh_changed_repositories(repository_ids: set[int]) -> None:
+    if not repository_ids or not load_settings().repository_size_after_run:
+        return
+    for repository_id in sorted(repository_ids):
+        try:
+            await refresh_repository_statistics(repository_id)
+        except (OSError, LookupError, ValueError):
+            pass
+
+
+async def _finish_manual_backup_chain(
+    job_id: int,
+    backup_run_id: int,
+    repository_id: int,
+    token: str,
+    *,
+    compact_after: bool,
+) -> None:
+    """Run manual retention maintenance while reserving the repository.
+
+    The reservation starts with the backup run and remains active through prune
+    and optional compact. Runs queued before the chain may finish first; once
+    the root backup starts, no unrelated run can enter the repository until the
+    chain releases it.
+    """
+    changed = False
+    try:
+        backup_status = await _wait_for_run(backup_run_id)
+        if backup_status not in {"success", "warning"}:
+            return
+        changed = True
+        prune_run = queue_job_action(
+            job_id,
+            "prune",
+            refresh_size_after=False,
+            chain_token=token,
+        )
+        prune_status = await _wait_for_run(prune_run)
+        if prune_status == "success" and compact_after:
+            compact_run = queue_job_action(
+                job_id,
+                "compact",
+                refresh_size_after=False,
+                chain_token=token,
+            )
+            await _wait_for_run(compact_run)
+    except Exception as exc:
+        # The backup run already exists and remains authoritative. Preserve an
+        # actionable note if a follow-up action could not even be queued.
+        append_run_log(
+            backup_run_id,
+            f"\nNACHBEREITUNG FEHLER: {exc}\n",
+            load_settings().run_log_max_mib * 1024 * 1024,
+        )
+    finally:
+        _release_repository_chain(token)
+        if changed:
+            await _refresh_changed_repositories({repository_id})
+
+
+def queue_manual_backup(job_id: int) -> int:
+    """Queue a manual backup and optional job-specific maintenance chain."""
+    with SessionLocal() as db:
+        job = db.scalar(
+            select(Job).options(joinedload(Job.repository)).where(Job.id == job_id)
+        )
+        if not job:
+            raise LookupError("Job not found")
+        prune_after = bool(job.manual_prune_after_backup)
+        compact_after = bool(job.manual_compact_after_prune) and prune_after
+        repository_id = int(job.repository_id)
+        if prune_after and not _has_retention(job):
+            raise ValueError("Manuelles Prune ist aktiviert, aber es ist keine Aufbewahrungsregel konfiguriert")
+
+    if not prune_after:
+        return queue_job_action(job_id, "backup")
+
+    token = f"manual-{job_id}-{time.monotonic_ns()}-{os.urandom(4).hex()}"
+    backup_run = queue_job_action(
+        job_id,
+        "backup",
+        refresh_size_after=False,
+        chain_token=token,
+        reserve_repository_chain=True,
+    )
+    task = asyncio.create_task(
+        _finish_manual_backup_chain(
+            job_id,
+            backup_run,
+            repository_id,
+            token,
+            compact_after=compact_after,
+        )
+    )
+    _track_maintenance_task(task)
+    return backup_run
+
+
+async def _scheduled_backup_group(
+    job_ids: list[int],
+    schedule_name: str | None,
+    *,
+    schedule_id: int | None = None,
+    schedule_parallel_limit: int = 0,
+) -> None:
+    """Execute one complete schedule in backup -> prune -> compact phases.
+
+    All backups are queued first. Only after every backup is terminal are prune
+    runs queued. Compact is then executed at most once per repository and only
+    after all prune runs for that repository finished successfully.
+    """
+    queue_kwargs: dict[str, object] = {
+        "refresh_size_after": False,
+        "trigger_type": "schedule",
+        "schedule_name": schedule_name,
+    }
+    if schedule_id is not None:
+        queue_kwargs["schedule_id"] = schedule_id
+    if schedule_parallel_limit:
+        queue_kwargs["schedule_parallel_limit"] = schedule_parallel_limit
+
+    backup_runs: dict[int, int] = {}
+    repository_by_job: dict[int, int] = {}
+    for job_id in job_ids:
+        try:
+            with SessionLocal() as db:
+                job = db.get(Job, job_id)
+                if job:
+                    repository_by_job[job_id] = int(job.repository_id)
+            backup_runs[job_id] = queue_job_action(job_id, "backup", **queue_kwargs)
+        except Exception as exc:
+            failed_run_id = _record_schedule_error(
+                job_id,
+                str(exc),
+                schedule_name,
+                schedule_id=schedule_id,
+                schedule_parallel_limit=schedule_parallel_limit,
+            )
+            await asyncio.to_thread(notify_run_completion, failed_run_id)
+
+    backup_statuses: dict[int, str] = {}
+    if backup_runs:
+        results = await asyncio.gather(*(_wait_for_run(run_id) for run_id in backup_runs.values()))
+        backup_statuses = dict(zip(backup_runs.keys(), results))
+
+    changed_repositories = {
+        repository_by_job[job_id]
+        for job_id, status in backup_statuses.items()
+        if status in {"success", "warning"} and job_id in repository_by_job
+    }
+
+    prune_runs: dict[int, int] = {}
+    prune_repository: dict[int, int] = {}
+    for job_id, status in backup_statuses.items():
+        if status not in {"success", "warning"}:
+            continue
+        with SessionLocal() as db:
+            job = db.get(Job, job_id)
+            if not _has_retention(job):
+                continue
+            repository_id = int(job.repository_id)
+        try:
+            prune_runs[job_id] = queue_job_action(job_id, "prune", **queue_kwargs)
+            prune_repository[job_id] = repository_id
+        except Exception as exc:
+            failed_run_id = _record_schedule_error(
+                job_id,
+                f"Prune konnte nicht gestartet werden: {exc}",
+                schedule_name,
+                schedule_id=schedule_id,
+                schedule_parallel_limit=schedule_parallel_limit,
+            )
+            await asyncio.to_thread(notify_run_completion, failed_run_id)
+
+    prune_statuses: dict[int, str] = {}
+    if prune_runs:
+        results = await asyncio.gather(*(_wait_for_run(run_id) for run_id in prune_runs.values()))
+        prune_statuses = dict(zip(prune_runs.keys(), results))
+
+    if load_settings().compact_after_prune:
+        jobs_by_repository: dict[int, list[int]] = {}
+        for job_id, repository_id in prune_repository.items():
+            jobs_by_repository.setdefault(repository_id, []).append(job_id)
+        compact_runs: list[int] = []
+        for repository_id, repository_job_ids in sorted(jobs_by_repository.items()):
+            if not repository_job_ids or any(prune_statuses.get(job_id) != "success" for job_id in repository_job_ids):
+                continue
+            representative_job_id = min(repository_job_ids)
+            try:
+                compact_runs.append(queue_job_action(
+                    representative_job_id,
+                    "compact",
+                    **queue_kwargs,
+                ))
+            except Exception as exc:
+                failed_run_id = _record_schedule_error(
+                    representative_job_id,
+                    f"Compact konnte nicht gestartet werden: {exc}",
+                    schedule_name,
+                    schedule_id=schedule_id,
+                    schedule_parallel_limit=schedule_parallel_limit,
+                )
+                await asyncio.to_thread(notify_run_completion, failed_run_id)
+        if compact_runs:
+            await asyncio.gather(*(_wait_for_run(run_id) for run_id in compact_runs))
+
+    await _refresh_changed_repositories(changed_repositories)
+
+
 async def scheduled_backup(
     job_id: int,
     schedule_name: str | None = None,
@@ -1372,49 +1994,35 @@ async def scheduled_backup(
     schedule_id: int | None = None,
     schedule_parallel_limit: int = 0,
 ) -> None:
-    repository_id: int | None = None
-    repository_changed = False
-    try:
-        with SessionLocal() as db:
-            job = db.get(Job, job_id)
-            repository_id = job.repository_id if job else None
+    """Backward-compatible single-job schedule entry point."""
+    await _scheduled_backup_group(
+        [job_id],
+        schedule_name,
+        schedule_id=schedule_id,
+        schedule_parallel_limit=schedule_parallel_limit,
+    )
 
-        schedule_queue_kwargs = {}
-        if schedule_id is not None:
-            schedule_queue_kwargs["schedule_id"] = schedule_id
-        if schedule_parallel_limit:
-            schedule_queue_kwargs["schedule_parallel_limit"] = schedule_parallel_limit
-        backup_run = queue_job_action(
-            job_id, "backup", refresh_size_after=False, trigger_type="schedule",
-            schedule_name=schedule_name, **schedule_queue_kwargs,
-        )
-        if await _wait_for_run(backup_run) != "success":
+
+async def scheduled_schedule(
+    schedule_id: int,
+    schedule_name: str | None = None,
+    *,
+    schedule_parallel_limit: int = 0,
+) -> None:
+    """Execute all current targets of one central schedule as a coordinated batch."""
+    with SessionLocal() as db:
+        schedule = db.get(BackupSchedule, schedule_id)
+        if not schedule or not schedule.enabled:
             return
-        repository_changed = True
+        job_ids = schedule_target_job_ids(db, schedule)
+        effective_name = schedule.name or schedule_name
+        effective_limit = int(schedule.parallel_limit or schedule_parallel_limit or 0)
+    if not job_ids:
+        return
+    await _scheduled_backup_group(
+        job_ids,
+        effective_name,
+        schedule_id=schedule_id,
+        schedule_parallel_limit=effective_limit,
+    )
 
-        with SessionLocal() as db:
-            job = db.get(Job, job_id)
-            retention = json.loads(job.prune_options_json or "{}") if job else {}
-        if any(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in retention.values()):
-            prune_run = queue_job_action(
-                job_id, "prune", refresh_size_after=False, trigger_type="schedule",
-                schedule_name=schedule_name, **schedule_queue_kwargs,
-            )
-            if await _wait_for_run(prune_run) == "success" and load_settings().compact_after_prune:
-                compact_run = queue_job_action(
-                    job_id, "compact", refresh_size_after=False, trigger_type="schedule",
-                    schedule_name=schedule_name, **schedule_queue_kwargs,
-                )
-                await _wait_for_run(compact_run)
-    except Exception as exc:
-        failed_run_id = _record_schedule_error(
-            job_id, str(exc), schedule_name,
-            schedule_id=schedule_id, schedule_parallel_limit=schedule_parallel_limit,
-        )
-        await asyncio.to_thread(notify_run_completion, failed_run_id)
-    finally:
-        if repository_changed and repository_id and load_settings().repository_size_after_run:
-            try:
-                await refresh_repository_statistics(repository_id)
-            except (OSError, LookupError, ValueError):
-                pass

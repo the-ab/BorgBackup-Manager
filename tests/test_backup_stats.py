@@ -44,8 +44,19 @@ ERGEBNIS: Quellenstatistik mit Warnungen aktualisiert.
         "file_count": 17,
         "scan_method": "python-lstat",
         "warning_count": 1,
+        "skipped_mount_count": 0,
+        "skipped_mounts": [],
+        "included_mount_count": 0,
     }
 
 
 def test_invalid_source_scan_marker_is_ignored():
     assert parse_source_scan_statistics("BBM_SOURCE_STATS_JSON={invalid}") == {}
+
+
+def test_source_scan_statistics_include_mount_information():
+    raw = 'BBM_SOURCE_STATS_JSON={"size_bytes":4096,"file_count":2,"warning_count":0,"skipped_mount_count":2,"skipped_mounts":["/srv/a","/srv/b"],"included_mount_count":0,"method":"python-lstat"}'
+    stats = parse_source_scan_statistics(raw)
+    assert stats["original_size_bytes"] == 4096
+    assert stats["skipped_mount_count"] == 2
+    assert stats["skipped_mounts"] == ["/srv/a", "/srv/b"]

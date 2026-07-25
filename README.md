@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.63
+# BorgBackup Manager 1.0.71
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -33,7 +33,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.0.63.zip
+BorgBackup-Manager-1.0.71.zip
 ```
 
 The documentation naming convention is:
@@ -178,6 +178,12 @@ Device actions include:
 
 Disabling a device automatically disables all active backup jobs assigned to it. Re-enabling the device does not automatically enable those jobs, preventing unexpected scheduled backups after maintenance.
 
+### Saved SSH actions
+
+Administrators can define reusable, non-interactive shell commands under **Devices -> Saved SSH actions** and execute them on a selected device. Typical uses include mounting or unmounting a preconfigured NFS filesystem, controlled `systemctl` operations, or diagnostics. There is deliberately no ad-hoc web shell: only previously persisted action IDs can be executed. Every run requires confirmation and uses the same controller key, verified device host key, `BatchMode=yes`, and `StrictHostKeyChecking=yes` as other client operations.
+
+Each action has a name, device, command, enabled state, and a timeout from 5 to 3600 seconds. Execution is recorded as a regular run with live output, exit status, cancellation, and history, and counts against the global concurrency limit. Commands are stored in `manager.db` and are **not encrypted**; never place passwords, API tokens, or other secrets in them. Commands must be non-interactive. For `sudo`, configure an appropriate sudoers rule and use `sudo -n`.
+
 ## Repositories
 
 ### Managed repositories
@@ -225,12 +231,12 @@ Jobs can be enabled or disabled from **Backup Jobs -> More -> Manage**. A disabl
 The job overview displays source size, entry count, timestamp and value origin.
 
 - After a successful or warning-completed backup, exact values are taken from Borg's final statistics without an additional scan.
-- The manual **Refresh** action runs a read-only live scan on the source device. It does not create an archive or require repository access. This value is labelled **Live scan before exclusions**.
+- The manual **Refresh** action runs a read-only live scan on the source device. It does not create an archive or require repository access. This value is labelled **Live scan before exclusions**. Mounted subdirectories are included when **Stay on each source filesystem** is disabled. When it is enabled, detected sub-mounts are skipped exactly like the Borg backup and are listed explicitly in the scan log.
 - Changing source paths, exclusions, device or relevant filesystem/create options invalidates stale statistics automatically.
 
 ### Exclusions
 
-Central exclusion templates can be reused by multiple jobs. Jobs may additionally define their own patterns. Patterns are passed to Borg as argument values rather than evaluated by a shell.
+Central exclusion templates can be reused by multiple jobs. The settings page loads only one selected template into the editor at a time, so the section stays compact even with many templates. Jobs may additionally define their own patterns. Patterns are passed to Borg as argument values rather than evaluated by a shell. New jobs default to the CPU-efficient mode with the full processed-file list disabled; live progress, A/M/C/E counters and warning detection remain available.
 
 ### Archive names
 
@@ -257,19 +263,24 @@ Schedules are managed centrally and can target selected jobs, selected devices, 
 
 A backup job may belong to only one active schedule. Multiple execution times for the same job are configured inside that schedule.
 
+A schedule is executed in phases: all target backups are queued first, then all configured prune runs, and finally at most **one compact per affected repository** after that repository's prune phase has completed successfully. This avoids redundant compact runs when several scheduled jobs share one repository.
+
+Manual backups can optionally enable **Prune after manual backup** and **Compact after successful manual prune** in the job retention settings. When enabled, the repository is reserved for the complete backup → prune → optional compact chain so later runs for that repository wait until post-processing is finished.
+
 ### Parallelism
 
-Three limits work together:
+Four limits work together:
 
-1. one Borg write/administration action per physical repository,
-2. an optional global maximum across all repositories,
-3. an optional maximum per schedule.
+1. a configurable backup-run limit per repository (default `1`), while maintenance/check actions remain exclusive,
+2. an optional limit per detected managed filesystem/NFS mount below `/repositories`,
+3. an optional global maximum across all repositories,
+4. an optional maximum per schedule.
 
-A schedule limit of `1` serializes its jobs even when they use different repositories, preventing excessive CPU, disk or network load.
+A mount limit applies jointly to every managed repository stored on that mount, so several repository directories cannot bypass a physical-disk or NFS concurrency cap. A schedule limit of `1` still serializes its jobs even when they use different repositories.
 
 ## Execution queue and logs
 
-Every operation is stored as an execution with status, timestamps, readable output and technical details. Repository actions are serialized by physical repository identity and by a persistent FIFO admission check.
+Every operation is stored as an execution with status, timestamps, readable output and technical details. FIFO admission reports whether a run is waiting for repository, mount, schedule or global capacity.
 
 The manager distinguishes:
 
@@ -281,7 +292,7 @@ The manager distinguishes:
 
 For remote backup cancellation, a supervised control channel first signals the remote Borg process group and waits for confirmed termination before releasing the queue. Automatic `borg break-lock` is deliberately not performed.
 
-Warning causes are captured while Borg is running, before log truncation. Changed files, missing files, permission errors, I/O errors and general Borg warnings are persisted separately. If Borg returns warning status without a detail line, the UI explicitly reports that no cause was emitted. Full file-list output uses a raw-byte path: ordinary Borg item blocks are not fully decoded or split line by line. Complete status/path output is stored only in `/data/run-logs`; SQLite keeps cleaned metadata/diagnostic previews and bounded structured warning causes, not the ordinary file list. With the run dialog closed, status polling reads no file-backed log. An open live dialog requests only bytes appended since its previous file offset; the initial request and background poll are serialized so stale responses cannot duplicate the header. The browser view remains bounded and the configured complete head/tail view is loaded once after completion.
+Warning causes are captured while Borg is running, before log truncation. Changed files, missing files, permission errors, I/O errors and general Borg warnings are persisted separately. If Borg returns warning status without a detail line, the UI explicitly reports that no cause was emitted. Full file-list output uses a raw-byte path: ordinary Borg item blocks are not fully decoded or split line by line. Complete status/path output is stored only in `/data/run-logs`; SQLite keeps cleaned metadata/diagnostic previews and bounded structured warning causes, not the ordinary file list. When the complete file list is disabled Borg uses `--list --filter AMCE`: A/M entries are consumed only for lightweight live counters and are not persisted in the run log, while C/E remain available for warning diagnosis. Unchanged U entries are still not requested. Independently of the full file-list option, backup runs also use Borg `--progress`. The live dialog therefore shows the processed file count, original/compressed/deduplicated data volumes and the currently processed path, plus A (added), M (modified), C (changed while being read) and E (file error) counters and the latest A/M/C/E path. When previous source statistics exist, the UI adds an explicitly approximate percentage and ETA; first runs use an indeterminate progress bar. Progress, item-status and network state are process-local and are never written to `manager.db`. The live run summary also shows the client network interface selected by routing for the repository, its source IP, and current upload/download rate. The rate is total traffic on that interface, not Borg-exclusive traffic. The header of an open live dialog additionally shows **BBM** upload/download traffic aggregated across the manager container's non-loopback interfaces. This lightweight value is sampled only during live polling and helps identify unexpected manager-side network traffic. Administrators can also stop a queued or running job directly in the live dialog via **Stop job** without returning to the run list. With the run dialog closed, status polling reads no file-backed log. An open live dialog requests only bytes appended since its previous file offset; the initial request and background poll are serialized so stale responses cannot duplicate the header. The browser view remains bounded and the configured complete head/tail view is loaded once after completion.
 
 ## Archives
 
@@ -359,7 +370,7 @@ System diagnostics cover:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.63.zip
+unzip /path/BorgBackup-Manager-1.0.71.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -423,6 +434,12 @@ Password resets revoke existing sessions and create a temporary password.
 ## Importing an existing managed repository
 
 Besides **Search automatically**, the repository page provides **Select folder**. The browser is restricted to `/repositories`, does not follow symbolic links and marks direct child folders containing a Borg `config` as selectable. Selecting a folder fills the existing import form; the repository is checked before it is registered and is never initialized or overwritten.
+
+## Existing managed repositories and offline mounts
+
+**Search automatically** scans safely below `/repositories` up to six directory levels and does not follow symbolic links. **Select folder** can import a detected Borg repository from a nested path; when the browser is already inside a directory containing Borg `config`, **Select this repository** selects the current directory.
+
+The `/repositories` Docker bind mount uses Linux `rslave` propagation. This allows NFS or other host submounts that are mounted after the container started to become visible inside the running manager. When a registered repository is temporarily unmounted it is shown as **unavailable**. After remounting, use **Refresh status** or wait for the normal UI refresh; a container restart is no longer required when host mount propagation is supported. **Reset** remains intended only for a repository that was actually deleted, never for a temporarily offline mount.
 
 ## Diagnostics
 

@@ -255,3 +255,102 @@ async def test_scheduled_backup_refreshes_repository_size_once_after_schedule(mo
         (job_id, "compact", False, "schedule", "Nachtlauf"),
     ]
     assert refreshed == [repository_id]
+
+
+@pytest.mark.asyncio
+async def test_schedule_batches_all_backups_then_prunes_and_compacts_once_per_repository(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app import service
+    from app.database import Base, SessionLocal, engine
+    from app.models import Host, Job, Repository
+
+    Base.metadata.create_all(engine)
+    suffix = uuid4().hex[:8]
+    with SessionLocal() as db:
+        repository = Repository(name=f"batch-repo-{suffix}", location=f"/tmp/{suffix}", initialized=True)
+        first_host = Host(name=f"batch-host-a-{suffix}", address="127.0.0.1", username="root", host_key="key")
+        second_host = Host(name=f"batch-host-b-{suffix}", address="127.0.0.2", username="root", host_key="key")
+        db.add_all([repository, first_host, second_host]); db.flush()
+        first = Job(name=f"batch-job-a-{suffix}", host_id=first_host.id, repository_id=repository.id,
+                    source_paths_json='["/srv/a"]', prune_options_json=json.dumps({"daily": 7}))
+        second = Job(name=f"batch-job-b-{suffix}", host_id=second_host.id, repository_id=repository.id,
+                     source_paths_json='["/srv/b"]', prune_options_json=json.dumps({"daily": 7}))
+        db.add_all([first, second]); db.commit()
+        job_ids = [first.id, second.id]
+        repository_id = repository.id
+
+    queued: list[tuple[int, str]] = []
+    next_run_id = iter(range(500, 510))
+    refreshed: list[int] = []
+
+    def queue(job_id_arg, action, restore=None, **_kwargs):
+        queued.append((job_id_arg, action))
+        return next(next_run_id)
+
+    async def wait(_run_id):
+        return "success"
+
+    async def refresh(repository_id_arg):
+        refreshed.append(repository_id_arg)
+        return {}
+
+    monkeypatch.setattr(service, "queue_job_action", queue)
+    monkeypatch.setattr(service, "_wait_for_run", wait)
+    monkeypatch.setattr(service, "refresh_repository_statistics", refresh)
+    monkeypatch.setattr(service, "load_settings", lambda: SimpleNamespace(
+        repository_size_after_run=True, compact_after_prune=True,
+    ))
+
+    await service._scheduled_backup_group(job_ids, "Nachtlauf", schedule_id=77, schedule_parallel_limit=2)
+
+    assert queued[:2] == [(job_ids[0], "backup"), (job_ids[1], "backup")]
+    assert queued[2:4] == [(job_ids[0], "prune"), (job_ids[1], "prune")]
+    assert queued[4:] == [(job_ids[0], "compact")]
+    assert refreshed == [repository_id]
+
+
+@pytest.mark.asyncio
+async def test_manual_backup_chain_runs_prune_then_compact_and_releases_reservation(monkeypatch):
+    from types import SimpleNamespace
+    from app import service
+
+    queued: list[tuple[int, str, str | None]] = []
+    run_ids = iter([701, 702])
+    released: list[str] = []
+    refreshed: list[int] = []
+
+    def queue(job_id, action, restore=None, **kwargs):
+        queued.append((job_id, action, kwargs.get("chain_token")))
+        return next(run_ids)
+
+    statuses = {700: "success", 701: "success", 702: "success"}
+
+    async def wait(run_id):
+        return statuses[run_id]
+
+    async def refresh(repository_id):
+        refreshed.append(repository_id)
+        return {}
+
+    monkeypatch.setattr(service, "queue_job_action", queue)
+    monkeypatch.setattr(service, "_wait_for_run", wait)
+    monkeypatch.setattr(service, "_release_repository_chain", released.append)
+    monkeypatch.setattr(service, "refresh_repository_statistics", refresh)
+    monkeypatch.setattr(service, "load_settings", lambda: SimpleNamespace(
+        repository_size_after_run=True,
+        run_log_max_mib=50,
+    ))
+
+    await service._finish_manual_backup_chain(
+        9, 700, 11, "manual-token", compact_after=True,
+    )
+
+    assert queued == [
+        (9, "prune", "manual-token"),
+        (9, "compact", "manual-token"),
+    ]
+    assert released == ["manual-token"]
+    assert refreshed == [11]

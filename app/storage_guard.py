@@ -92,6 +92,22 @@ def _matching_mount(path: Path, mounts: Iterable[Path]) -> Path | None:
     return max(candidates, key=lambda item: len(item.parts), default=None)
 
 
+def repository_mount_path(
+    storage_path: str | Path | None, root: str | Path,
+    mountinfo_path: str | Path = "/proc/self/mountinfo",
+    *, mounts: Iterable[Path] | None = None,
+) -> Path | None:
+    """Return the most specific visible mount that contains a repository path."""
+    if not storage_path:
+        return None
+    try:
+        resolved = Path(storage_path).resolve(strict=False)
+    except (OSError, RuntimeError):
+        resolved = Path(storage_path)
+    available = list(mounts) if mounts is not None else mounted_filesystems_below(root, mountinfo_path)
+    return _matching_mount(resolved, available)
+
+
 def repository_storage_filesystems(
     repositories: Iterable[Any], root: str | Path, settings: Any,
     mountinfo_path: str | Path = "/proc/self/mountinfo",

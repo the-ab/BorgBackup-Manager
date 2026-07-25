@@ -15,6 +15,7 @@ import tarfile
 import unicodedata
 import zipfile
 from contextlib import asynccontextmanager
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from app.archive_cache import invalidate_archive_cache, load_archive_cache, store_archive_cache
 from app.archive_metadata import annotate_archive_devices, infer_archive_device, sort_archives_newest_first
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
+from app.borg_progress import get_run_item_activity, get_run_network_activity, get_run_progress
 from app.borg_warnings import (
     parse_borg_warnings,
     unresolved_warning_summary,
@@ -70,6 +72,7 @@ from app.external_repository import (
     public_key_from_private, repository_location_uses_ssh, scan_repository_host_key,
 )
 from app.repository_diagnostics import compact_repository_diagnostic
+from app.system_network import sample_manager_network
 from app.system_diagnostics import repository_access_diagnostic
 from app.debug_logging import configure_debug_logging, install_asyncio_exception_handler
 from app.notifications import (
@@ -80,7 +83,7 @@ from app.notifications import (
 from app.repository_state import managed_repository_present
 from app.release import APP_RELEASE_DATE
 from app.log_filter import extract_error_output, strip_borg_item_lines
-from app.models import ArchiveMount, BackupSchedule, Host, HostRepositoryAccess, Job, JobIdReservation, Repository, Run
+from app.models import ArchiveMount, BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, JobIdReservation, Repository, Run
 from app.runner import (
     archive_export_command,
     archive_info_command,
@@ -113,6 +116,8 @@ from app.schemas import (
     HostOut,
     EnabledStateIn,
     HostScanIn,
+    HostSshActionIn,
+    HostSshActionOut,
     JobIn,
     JobOut,
     BackupScheduleIn,
@@ -139,7 +144,10 @@ from app.repository_sizes import (
 )
 from app.run_logs import available_run_log_ids, append_run_log, cleanup_orphan_run_logs, delete_run_log, read_run_log, read_run_log_delta, run_log_path, run_log_storage_bytes
 from app.settings import load_settings, save_settings
-from app.storage_guard import effective_storage_guard, repository_storage_filesystems
+from app.storage_guard import (
+    effective_storage_guard, mounted_filesystems_below, repository_mount_path,
+    repository_storage_filesystems,
+)
 from app.time_utils import APP_TIMEZONE, APP_TIMEZONE_NAME, iso_utc, normalize_borg_timestamp
 from app.schedules import (
     migrate_legacy_job_schedules, schedule_assignments, schedule_expressions,
@@ -174,12 +182,15 @@ from app.service import (
     controller_public_key,
     rotate_controller_key,
     queue_job_action,
+    queue_manual_backup,
+    queue_host_ssh_action,
     queue_repository_action,
     queue_repository_init,
     reset_managed_repository_state,
     retry_run,
     revoke_host_repository_access,
     scheduled_backup,
+    scheduled_schedule,
     sync_repository_access_assignments,
     trust_host_key,
 )
@@ -243,10 +254,11 @@ def host_out(row: Host) -> HostOut:
     return HostOut.model_validate(row)
 
 
-def repo_out(row: Repository) -> RepositoryOut:
+def repo_out(row: Repository, *, mounts: list[Path] | None = None) -> RepositoryOut:
     repository_present = managed_repository_present(row)
     settings = load_settings()
     effective_enabled, effective_threshold, guard_source = effective_storage_guard(row, settings)
+    mount = repository_mount_path(row.storage_path, REPOSITORY_ROOT, mounts=mounts) if row.storage_path else None
     return RepositoryOut(
         id=row.id, name=row.name, location=row.location,
         passphrase_env=None, extra_env=json.loads(row.extra_env_json or "{}"),
@@ -269,6 +281,8 @@ def repo_out(row: Repository) -> RepositoryOut:
         size_checked_at=row.size_checked_at,
         storage_guard_enabled=row.storage_guard_enabled,
         storage_guard_threshold_percent=row.storage_guard_threshold_percent,
+        parallel_limit=max(1, int(row.parallel_limit or 1)),
+        mount_path=str(mount) if mount is not None else None,
         storage_guard_effective_enabled=effective_enabled,
         storage_guard_effective_threshold_percent=effective_threshold,
         storage_guard_source=guard_source,
@@ -388,11 +402,17 @@ def managed_repository_location(slug: str) -> str:
 
 def sync_managed_repository_locations() -> None:
     """Refresh managed repository URLs after endpoint or server changes."""
+    root = REPOSITORY_ROOT.resolve()
     with SessionLocal() as db:
         changed = False
         for repository in db.scalars(select(Repository).where(Repository.storage_path.is_not(None))):
-            slug = Path(repository.storage_path).name
-            expected = managed_repository_location(slug)
+            try:
+                relative = Path(repository.storage_path).resolve(strict=False).relative_to(root).as_posix()
+            except (OSError, ValueError):
+                continue
+            if not relative or relative == ".":
+                continue
+            expected = managed_repository_location(relative)
             if repository.location != expected:
                 repository.location = expected
                 changed = True
@@ -413,7 +433,10 @@ def job_out(
         archive_prefixes=job_archive_prefixes(row),
         compression=row.compression,
         prune_options=json.loads(row.prune_options_json or "{}"),
-        create_options=json.loads(row.create_options_json or "{}"), enabled=row.enabled,
+        create_options=json.loads(row.create_options_json or "{}"),
+        manual_prune_after_backup=bool(row.manual_prune_after_backup),
+        manual_compact_after_prune=bool(row.manual_compact_after_prune),
+        enabled=row.enabled,
         schedule_mode="scheduled" if names else "manual", schedule_names=names,
         repository_access_ready=repository_access_ready,
         source_size_bytes=row.source_size_bytes,
@@ -435,8 +458,13 @@ def schedule_out(row: BackupSchedule, db) -> BackupScheduleOut:
     )
 
 
-def managed_repository_candidates() -> list[dict]:
-    """Find Borg repositories directly below the managed storage root."""
+def managed_repository_candidates(*, max_depth: int = 6, max_directories: int = 5000) -> list[dict]:
+    """Find unregistered Borg repositories safely below the managed root.
+
+    Search is bounded and never follows symlinks.  Once a Borg ``config`` is
+    found the repository directory is recorded and not traversed further,
+    avoiding scans through Borg's internal data tree.
+    """
     REPOSITORY_ROOT.mkdir(parents=True, exist_ok=True)
     root = REPOSITORY_ROOT.resolve()
     with SessionLocal() as db:
@@ -445,27 +473,57 @@ def managed_repository_candidates() -> list[dict]:
             for value in db.scalars(select(Repository.storage_path).where(Repository.storage_path.is_not(None)))
             if value
         }
+
     candidates: list[dict] = []
-    for child in sorted(root.iterdir(), key=lambda item: item.name.casefold()):
-        if child.is_symlink() or not child.is_dir() or not (child / "config").is_file():
-            continue
-        resolved = child.resolve()
-        if resolved in registered:
-            continue
-        repository_id = None
+    queue = deque([(root, 0)])
+    scanned = 0
+    while queue and scanned < max_directories and len(candidates) < 500:
+        current, depth = queue.popleft()
         try:
-            for line in (child / "config").read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.strip().startswith("id") and "=" in line:
-                    repository_id = line.split("=", 1)[1].strip() or None
-                    break
+            children = sorted(current.iterdir(), key=lambda item: item.name.casefold())
         except OSError:
-            pass
-        candidates.append({
-            "directory_name": child.name,
-            "path": str(resolved),
-            "suggested_name": child.name.replace("-", " ").strip().title() or child.name,
-            "repository_id": repository_id,
-        })
+            continue
+        for child in children:
+            if scanned >= max_directories:
+                break
+            try:
+                if child.is_symlink() or not child.is_dir():
+                    continue
+            except OSError:
+                continue
+            scanned += 1
+            if child.name in {".cache", ".config"}:
+                continue
+            config = child / "config"
+            try:
+                is_repository = config.is_file()
+            except OSError:
+                is_repository = False
+            if is_repository:
+                try:
+                    resolved = child.resolve(strict=True)
+                except OSError:
+                    continue
+                if resolved in registered:
+                    continue
+                repository_id = None
+                try:
+                    for line in config.read_text(encoding="utf-8", errors="replace").splitlines():
+                        if line.strip().startswith("id") and "=" in line:
+                            repository_id = line.split("=", 1)[1].strip() or None
+                            break
+                except OSError:
+                    pass
+                relative = resolved.relative_to(root).as_posix()
+                candidates.append({
+                    "directory_name": relative,
+                    "path": str(resolved),
+                    "suggested_name": child.name.replace("-", " ").replace("_", " ").strip().title() or child.name,
+                    "repository_id": repository_id,
+                })
+                continue
+            if depth + 1 < max_depth:
+                queue.append((child, depth + 1))
     return candidates
 
 
@@ -668,6 +726,8 @@ def apply_job(row: Job, data: JobIn) -> None:
     row.compression = data.compression
     row.prune_options_json = json.dumps(data.prune_options)
     row.create_options_json = create_options_json
+    row.manual_prune_after_backup = data.manual_prune_after_backup
+    row.manual_compact_after_prune = data.manual_compact_after_prune if data.manual_prune_after_backup else False
     row.enabled = data.enabled
     if statistics_inputs_changed:
         row.source_size_bytes = None
@@ -862,15 +922,16 @@ def sync_schedules() -> None:
                 job_ids = schedule_target_job_ids(db, schedule)
             except ValueError:
                 continue
-            for job_id in job_ids:
-                for index, expression in enumerate(expressions, start=1):
-                    trigger = CronTrigger.from_crontab(expression, timezone=APP_TIMEZONE)
-                    scheduler.add_job(
-                        scheduled_backup, trigger, args=[job_id, schedule.name],
-                        kwargs={"schedule_id": schedule.id, "schedule_parallel_limit": schedule.parallel_limit or 0},
-                        id=f"schedule-{schedule.id}-job-{job_id}-{index}",
-                        max_instances=1, coalesce=True, misfire_grace_time=3600, replace_existing=True,
-                    )
+            if not job_ids:
+                continue
+            for index, expression in enumerate(expressions, start=1):
+                trigger = CronTrigger.from_crontab(expression, timezone=APP_TIMEZONE)
+                scheduler.add_job(
+                    scheduled_schedule, trigger, args=[schedule.id, schedule.name],
+                    kwargs={"schedule_parallel_limit": schedule.parallel_limit or 0},
+                    id=f"schedule-{schedule.id}-{index}",
+                    max_instances=1, coalesce=True, misfire_grace_time=3600, replace_existing=True,
+                )
 
 
 def recover_interrupted_runs() -> None:
@@ -1661,11 +1722,73 @@ def delete_host(row_id: int):
         if db.scalar(select(func.count()).select_from(Job).where(Job.host_id == row_id)):
             raise HTTPException(409, "Host is still used by jobs")
         db.execute(delete(HostRepositoryAccess).where(HostRepositoryAccess.host_id == row_id))
+        db.execute(delete(HostSshAction).where(HostSshAction.host_id == row_id))
         _drop_host_schedule_references(db, row_id)
         db.delete(row)
         db.commit()
     sync_repository_access_assignments(); sync_schedules()
     return Response(status_code=204)
+
+
+@app.get("/api/host-ssh-actions", response_model=list[HostSshActionOut], dependencies=admin_protected)
+def list_host_ssh_actions():
+    with SessionLocal() as db:
+        return list(db.scalars(select(HostSshAction).order_by(HostSshAction.host_id, HostSshAction.name)))
+
+
+@app.post("/api/host-ssh-actions", response_model=HostSshActionOut, status_code=201, dependencies=admin_protected)
+def create_host_ssh_action(data: HostSshActionIn):
+    with SessionLocal() as db:
+        host = db.get(Host, data.host_id)
+        if not host:
+            raise HTTPException(404, "Host not found")
+        row = HostSshAction(**data.model_dump())
+        db.add(row)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            raise HTTPException(409, "Für dieses Gerät existiert bereits eine SSH-Aktion mit diesem Namen") from exc
+        db.refresh(row)
+        return row
+
+
+@app.put("/api/host-ssh-actions/{action_id}", response_model=HostSshActionOut, dependencies=admin_protected)
+def update_host_ssh_action(action_id: int, data: HostSshActionIn):
+    with SessionLocal() as db:
+        row = db.get(HostSshAction, action_id)
+        if not row:
+            raise HTTPException(404, "SSH action not found")
+        if not db.get(Host, data.host_id):
+            raise HTTPException(404, "Host not found")
+        for key, value in data.model_dump().items():
+            setattr(row, key, value)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            raise HTTPException(409, "Für dieses Gerät existiert bereits eine SSH-Aktion mit diesem Namen") from exc
+        db.refresh(row)
+        return row
+
+
+@app.delete("/api/host-ssh-actions/{action_id}", status_code=204, dependencies=admin_protected)
+def delete_host_ssh_action(action_id: int):
+    with SessionLocal() as db:
+        row = db.get(HostSshAction, action_id)
+        if not row:
+            raise HTTPException(404, "SSH action not found")
+        db.delete(row)
+        db.commit()
+    return Response(status_code=204)
+
+
+@app.post("/api/host-ssh-actions/{action_id}/run", status_code=202, dependencies=admin_protected)
+async def run_host_ssh_action(action_id: int):
+    try:
+        return {"run_id": queue_host_ssh_action(action_id)}
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/hosts/{host_id}/check-version", dependencies=admin_protected)
@@ -1736,8 +1859,9 @@ async def bootstrap_job_repository(job_id: int) -> dict:
 
 @app.get("/api/repositories", response_model=list[RepositoryOut], dependencies=protected)
 def list_repositories():
+    mounts = mounted_filesystems_below(REPOSITORY_ROOT)
     with SessionLocal() as db:
-        return [repo_out(x) for x in db.scalars(select(Repository).order_by(Repository.name))]
+        return [repo_out(x, mounts=mounts) for x in db.scalars(select(Repository).order_by(Repository.name))]
 
 
 def _safe_repository_browser_path(relative_path: str) -> tuple[Path, Path]:
@@ -1787,7 +1911,7 @@ def browse_repository_directories(path: str = "") -> dict:
             entries.append({
                 "name": child.name, "path": relative, "type": kind,
                 "is_directory": is_directory, "is_repository": is_repository,
-                "selectable": is_repository and child.parent == root,
+                "selectable": is_repository,
                 "size": stat_result.st_size if not is_directory else None,
                 "modified_at": datetime.fromtimestamp(stat_result.st_mtime, timezone.utc).isoformat(),
             })
@@ -1795,8 +1919,14 @@ def browse_repository_directories(path: str = "") -> dict:
             continue
     relative_current = "" if current == root else current.relative_to(root).as_posix()
     parent = None if current == root else ("" if current.parent == root else current.parent.relative_to(root).as_posix())
+    try:
+        current_is_repository = current != root and (current / "config").is_file()
+    except OSError:
+        current_is_repository = False
     return {
         "root": str(root), "path": relative_current, "parent": parent,
+        "current_is_repository": current_is_repository,
+        "current_selectable": current_is_repository,
         "entries": entries, "truncated": truncated,
     }
 
@@ -1811,10 +1941,10 @@ def discover_repositories() -> list[dict]:
 
 @app.post("/api/repositories/import", response_model=RepositoryOut, status_code=201, dependencies=admin_protected)
 async def import_repository(data: RepositoryImportIn):
-    root = REPOSITORY_ROOT.resolve()
-    storage_path = (root / data.directory_name).resolve()
-    if root not in storage_path.parents or not storage_path.is_dir() or not (storage_path / "config").is_file():
+    root, storage_path = _safe_repository_browser_path(data.directory_name)
+    if storage_path == root or not (storage_path / "config").is_file():
         raise HTTPException(400, "Selected directory is not a Borg repository below the managed storage root")
+    relative_path = storage_path.relative_to(root).as_posix()
     secret = data.passphrase.get_secret_value() if data.passphrase else None
     keyfile = data.keyfile.get_secret_value() if data.keyfile else None
     with SessionLocal() as db:
@@ -1822,12 +1952,13 @@ async def import_repository(data: RepositoryImportIn):
             raise HTTPException(409, "Repository directory is already registered")
         row = Repository(
             name=data.name,
-            location=managed_repository_location(storage_path.name),
+            location=managed_repository_location(relative_path),
             encryption_mode=data.encryption_mode,
             storage_path=str(storage_path),
             initialized=False,
             storage_guard_enabled=data.storage_guard_enabled,
             storage_guard_threshold_percent=data.storage_guard_threshold_percent,
+            parallel_limit=data.parallel_limit,
             extra_env_json="{}",
         )
         db.add(row)
@@ -1973,6 +2104,7 @@ async def create_repository(data: RepositoryIn):
             validation_details=None,
             storage_guard_enabled=data.storage_guard_enabled if data.managed else None,
             storage_guard_threshold_percent=data.storage_guard_threshold_percent if data.managed else None,
+            parallel_limit=data.parallel_limit,
             extra_env_json="{}",
         )
         db.add(row)
@@ -2028,6 +2160,7 @@ async def update_repository(row_id: int, data: RepositoryUpdate):
         row.encryption_mode = data.encryption_mode
         row.storage_guard_enabled = data.storage_guard_enabled if data.managed else None
         row.storage_guard_threshold_percent = data.storage_guard_threshold_percent if data.managed else None
+        row.parallel_limit = data.parallel_limit
         if not data.managed:
             row.location = data.location or row.location
             row.access_host_id = None
@@ -2404,7 +2537,8 @@ async def run_action(job_id: int, action: str):
     # queue_job_action schedules the command on the current asyncio loop.  Keep
     # this endpoint asynchronous so FastAPI does not execute it in a worker
     # thread where asyncio.create_task() has no running loop.
-    try: return {"run_id": queue_job_action(job_id, action)}
+    try:
+        return {"run_id": queue_manual_backup(job_id) if action == "backup" else queue_job_action(job_id, action)}
     except LookupError as exc: raise HTTPException(404, str(exc)) from exc
     except ValueError as exc: raise HTTPException(400, str(exc)) from exc
 
@@ -3120,6 +3254,38 @@ def run_json(
     display_error = extract_error_output(row.error or "")
     if not display_error and row.status in {"failed", "warning"}:
         display_error = extract_error_output(diagnostic_text)
+    backup_progress = None
+    backup_item_activity = None
+    backup_network = None
+    if row.action == "backup" and active:
+        backup_item_activity = get_run_item_activity(row.id)
+        backup_network = get_run_network_activity(row.id)
+        progress = get_run_progress(row.id)
+        if progress:
+            estimated_files = row.job.source_file_count if row.job else None
+            estimated_bytes = row.job.source_size_bytes if row.job else None
+            progress_ratio = None
+            if estimated_bytes and estimated_bytes > 0 and progress["original_bytes"] >= 0:
+                progress_ratio = progress["original_bytes"] / estimated_bytes
+            elif estimated_files and estimated_files > 0 and progress["files"] >= 0:
+                progress_ratio = progress["files"] / estimated_files
+            percent = None
+            eta_seconds = None
+            if progress_ratio is not None and progress_ratio > 0:
+                percent = min(99.9, max(0.0, progress_ratio * 100.0))
+                if duration is not None and duration >= 10 and 0.01 <= progress_ratio < 1.0:
+                    eta_seconds = min(30 * 24 * 3600, max(0, int(duration * (1.0 - progress_ratio) / progress_ratio)))
+            backup_progress = {
+                **progress,
+                "estimated_total_files": estimated_files,
+                "estimated_total_bytes": estimated_bytes,
+                "estimated_percent": percent,
+                "estimated_eta_seconds": eta_seconds,
+                "estimate_basis": (row.job.source_stats_origin if row.job else None),
+            }
+
+    bbm_network = sample_manager_network() if active and log_offset is not None else None
+
     backup_statistics = {}
     if (
         row.action == "backup"
@@ -3162,6 +3328,10 @@ def run_json(
         "backup_compressed_size_bytes": row.backup_compressed_size_bytes if row.backup_compressed_size_bytes is not None else backup_statistics.get("compressed_size_bytes"),
         "backup_deduplicated_size_bytes": row.backup_deduplicated_size_bytes if row.backup_deduplicated_size_bytes is not None else backup_statistics.get("deduplicated_size_bytes"),
         "backup_file_count": row.backup_file_count if row.backup_file_count is not None else backup_statistics.get("file_count"),
+        "backup_progress": backup_progress,
+        "backup_item_activity": backup_item_activity,
+        "backup_network": backup_network,
+        "bbm_network": bbm_network,
         "borg_compatibility": ({
             "version": compatibility.version, "supported": compatibility.supported,
             "level": compatibility.level, "title": compatibility.title, "message": compatibility.message,

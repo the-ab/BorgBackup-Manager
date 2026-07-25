@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.0.63
+# Installation und Betrieb – BorgBackup Manager 1.0.71
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.0.63.zip
+BorgBackup-Manager-1.0.71.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.63.zip
+unzip /pfad/BorgBackup-Manager-1.0.71.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -134,7 +134,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.63.zip
+unzip /pfad/BorgBackup-Manager-1.0.71.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build
@@ -211,6 +211,17 @@ In der Liste **Verbundene Geräte** kann ein Gerät direkt über **Deaktivieren*
 Die Erneuerung des zentralen Controller-Schlüssels befindet sich aus Sicherheitsgründen ausschließlich unter **System → Einstellungen → Controller-Schlüssel**. Im Geräteformular steht nur die ungefährliche Kopierfunktion zur Verfügung.
 
 Der Controller-Schlüssel in `authorized_keys` erlaubt die Anmeldung des Managers. Der separat bestätigte Ed25519-Hostschlüssel weist die Identität des Clients nach. Beide Prüfungen sind erforderlich; der Hostschlüssel wird bei der Verbindung über eine temporäre `known_hosts`-Datei mit aktivem `StrictHostKeyChecking=yes` verwendet.
+
+### Gespeicherte SSH-Aktionen
+
+Unter **Geräte → Gespeicherte SSH-Aktionen** können Administratoren pro Gerät wiederkehrende Wartungsbefehle hinterlegen. Beispielsweise kann ein Host-Mount über einen bereits eingerichteten fstab-Eintrag ein- oder ausgehängt werden:
+
+```bash
+sudo -n mount /mnt/offline-backup
+sudo -n umount /mnt/offline-backup
+```
+
+Die WebUI besitzt keine freie SSH-Konsole. Nur gespeicherte Aktionen können gestartet werden und jeder Start wird vorher bestätigt. Name, Befehl, Zielgerät, Aktivstatus und Zeitlimit werden in `manager.db` gespeichert. **Keine Zugangsdaten oder Tokens in Befehle eintragen**, da dieser Befehlsinhalt nicht verschlüsselt wird. Interaktive Passwortabfragen funktionieren nicht; benötigte Root-Rechte sind über eine eng begrenzte sudoers-Regel und `sudo -n` bereitzustellen. Ausgabe und Fehler erscheinen als reguläres Ausführungsprotokoll und der Lauf kann über das Live-Log gestoppt werden.
 
 Warnstufen:
 
@@ -348,11 +359,13 @@ Linux-Systempfade
 
 Funktionen:
 
+- vorhandene Vorlage über eine Auswahlbox laden
 - Vorlagenname ändern
-- Muster ergänzen
-- Muster entfernen
-- mehrere Vorlagen anlegen
-- Vorlage löschen
+- Muster ergänzen oder entfernen
+- neue Vorlage anlegen
+- ausgewählte Vorlage löschen
+
+Es wird immer nur die ausgewählte Vorlage im Editor angezeigt. Dadurch bleibt der Bereich auch mit vielen Vorlagen kompakt.
 
 Jedes Muster steht in einer eigenen Zeile. Vorlagen müssen einen eindeutigen Namen und mindestens ein Muster enthalten.
 
@@ -406,11 +419,15 @@ Danach Rhythmus, eine oder mehrere Uhrzeiten und bei Bedarf **Maximal parallele 
 
 Ein Job darf nur einem aktiven Zeitplan zugeordnet sein. Überlappungen werden beim Speichern abgewiesen. Bestehende Job-Cronwerte älterer Versionen werden beim ersten Start automatisch in eigene zentrale Zeitpläne migriert.
 
+Der Zeitplan läuft in drei Phasen: zuerst alle Backups, danach alle Prune-Aufträge und anschließend – wenn die Systemeinstellung aktiviert ist – maximal ein Compact je betroffenem Repository. Mehrere Jobs auf demselben Repository lösen daher nicht mehr mehrere Compact-Aufträge aus. Diese Systemeinstellung gilt nur für Zeitpläne; ein manuell gestarteter Prune löst darüber kein Compact aus.
+
+Für manuelle Starts stehen im Backup-Job unter **Aufbewahrung** zwei optionale Nachbereitungen bereit: **Nach manuellem Backup Prune ausführen** und **Nach erfolgreichem manuellen Prune Compact ausführen**. Bei aktivierter Nachbereitung bleibt das Repository für die gesamte Kette reserviert; weitere Jobs desselben Repositorys warten bis zum Abschluss.
+
 ## 10b. Warteschlange und Parallelitätsgrenzen
 
 Pro Repository wird immer nur eine Borg-Aktion gleichzeitig ausgeführt. Starten mehrere Geräte zur selben Zeit, bleibt der erste Lauf **Laufend**, alle weiteren stehen **Wartend**. Das Dashboard zeigt beide Zustände getrennt. Sobald das Repository frei wird, startet der nächste wartende Lauf automatisch. Direkt am Repository gestartetes Compact und repositoryweite Archivlöschungen werden ebenfalls über diese Sperre und ein reguläres Ausführungsprotokoll gesteuert; ein Backup-Job ist dafür nicht erforderlich.
 
-Unter **System → Einstellungen → Parallelitätsgrenzen** kann zusätzlich eine globale Obergrenze von `0` bis `64` gesetzt werden. `0` lässt unterschiedliche Repositorys unbegrenzt parallel arbeiten; `1` erlaubt insgesamt nur eine laufende Manager-Ausführung. Zeitpläne können eine eigene, engere Grenze besitzen. Damit lassen sich beispielsweise zwei Geräte mit zwei verschiedenen Repositorys gemeinsam um 22:00 Uhr einreihen, ohne gleichzeitig Netzwerk und CPU zu belasten.
+Die Parallelität wird in vier Ebenen begrenzt: **global**, **pro Repository**, **pro erkanntem Mount unter `/repositories`** und optional **pro Zeitplan**. Unter **Repositories → Bearbeiten** legt `Maximal parallele Backup-Läufe` fest, wie viele Backup-Jobs dieses Repository gleichzeitig verwenden dürfen; Bestandsrepositorys starten mit dem sicheren Standard `1`. Wartungs- und Prüfaktionen bleiben repositoryweit exklusiv. Unter **System → Einstellungen → Parallelitätsgrenzen** kann die globale Obergrenze von `0` bis `64` gesetzt werden (`0` = unbegrenzt), für jeden erkannten Mount eine gemeinsame Grenze hinterlegt werden (`0` = für diesen Mount unbegrenzt) und die Zahl gleichzeitig laufender manueller Quellenstatistiken separat begrenzt werden (Standard `1`). Quellenstatistiken zählen gleichzeitig gegen die globale Grenze, reservieren aber kein Repository und keinen Repository-Mount, weil sie nur das Quellgerät lesen. Mehrere Repository-Verzeichnisse auf demselben NFS-/Datenträger-Mount teilen sich weiterhin dieselbe I/O-Grenze. Zeitpläne können zusätzlich eine engere Grenze besitzen. Ein Job startet nur, wenn alle für ihn geltenden Grenzen gleichzeitig freie Kapazität besitzen.
 
 Die Reihenfolge wird als datenbankgestützte FIFO-Warteschlange geführt und zusätzlich durch eine lokale Prozesssperre abgesichert. Das tatsächliche Repository-Verzeichnis beziehungsweise die externe URL bildet die Sperridentität, sodass auch versehentlich doppelt erfasste Ziele nicht parallel bearbeitet werden. Freie globale Plätze werden nicht durch einen älteren Lauf verschwendet, der noch auf sein Repository oder seine Zeitplangrenze wartet. Wartende Laufprotokolle nennen die konkrete Ursache und gegebenenfalls die davorliegende Ausführungs-ID. Nur tatsächlich lebende Manager-Tasks belegen Plätze; verwaiste Laufzustände werden nicht als dauerhafte Blocker behandelt. Extern gestartete Borg-Prozesse sind für die Manager-Warteschlange nicht sichtbar und werden weiterhin durch Borgs eigene Repository-Sperre abgefangen.
 
@@ -451,7 +468,7 @@ obfuscate,...
 --keep-yearly
 ```
 
-Die Dateiliste ist standardmäßig aktiv und kann bei sehr großen Sicherungen im Job deaktiviert werden. Die angezeigte Version ist die auf dem Backup-Client tatsächlich verwendete Borg-Version.
+Die vollständige Dateiliste ist bei neu angelegten Jobs standardmäßig deaktiviert, um die Manager-CPU bei sehr großen Sicherungen niedrig zu halten. Borg-Fortschritt, A/M/C/E-Livezähler und C/E-Warnungspfade bleiben trotzdem verfügbar. Bei bestehenden Jobs wird die gespeicherte Einstellung unverändert übernommen. Die angezeigte Version ist die auf dem Backup-Client tatsächlich verwendete Borg-Version.
 
 Der Wert 0 wird nicht an Borg übergeben.
 
@@ -665,7 +682,7 @@ Der Compose-Stack setzt standardmäßig `TZ=Europe/Berlin`. Das Dashboard zeigt 
 
 
 - Darstellung hell, dunkel oder automatisch
-- globale Parallelitätsgrenze für alle Manager-Ausführungen (`0` = unbegrenzt)
+- globale Parallelitätsgrenze für alle Manager-Ausführungen (`0` = unbegrenzt) sowie gemeinsame Parallelitätsgrenzen pro erkanntem Repository-Mount
 - komfortable oder deutlich verdichtete Darstellung; die Umschaltung verändert Tabellen, Formulare, Karten und Navigation
 - Dashboard-Limit
 - Protokolllimit
@@ -924,4 +941,4 @@ Anschließend unter **Archive → Archive anzeigen** prüfen, ob je Archiv Dauer
 
 ## Quellenstatistik und Archivbrowser
 
-Die Quellenstatistik eines Backup-Jobs wird nach abgeschlossenen Backups aus Borgs Abschlusswerten aktualisiert. Eine manuelle Aktualisierung führt einen repositoryunabhängigen Live-Scan auf dem Quellgerät aus. Dieser zählt die konfigurierten Quellen vor Borg-Ausschlüssen und erzeugt kein Archiv. Nach einem abgeschlossenen Backup ersetzen Borgs exakte Abschlusswerte nach Anwendung der Ausschlüsse die Scanwerte. Der Archivbrowser liest Metadaten direkt über `borg list --json-lines`, zeigt Größe, Typ, Rechte, Besitzer/Gruppe und Änderungszeit und benötigt kein FUSE.
+Die Quellenstatistik eines Backup-Jobs wird nach abgeschlossenen Backups aus Borgs Abschlusswerten aktualisiert. Eine manuelle Aktualisierung führt einen repositoryunabhängigen Live-Scan auf dem Quellgerät aus. Dieser zählt die konfigurierten Quellen vor Borg-Ausschlüssen und erzeugt kein Archiv. Bei deaktivierter Option **Nur jeweiliges Quelldateisystem** werden auch eingehängte Unterverzeichnisse durchlaufen. Ist die Option aktiviert, werden erkannte Unter-Mounts wie bei Borg übersprungen und im Ausführungsprotokoll ausdrücklich aufgeführt. Nach einem abgeschlossenen Backup ersetzen Borgs exakte Abschlusswerte nach Anwendung der Ausschlüsse die Scanwerte. Der Archivbrowser liest Metadaten direkt über `borg list --json-lines`, zeigt Größe, Typ, Rechte, Besitzer/Gruppe und Änderungszeit und benötigt kein FUSE.

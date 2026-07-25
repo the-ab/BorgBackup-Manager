@@ -188,6 +188,7 @@ def test_backup_command_is_argument_based_scoped_and_redacts_secret(job):
     assert command.argv[0] == "ssh"
     assert "borg --lock-wait 600 create" in remote
     assert "--stats" in remote
+    assert "--progress" in remote
     assert "--list" in remote
     assert "DATEIVERARBEITUNG (Borg-Status und Pfad):" in remote
     assert "BORG AUF CLIENT:" in remote
@@ -213,8 +214,11 @@ def test_backup_file_listing_can_be_reduced_to_warning_relevant_items(job):
     options["list_files"] = False
     job.create_options_json = json.dumps(options)
     remote = backup_command(job).argv[-1]
-    assert "--list --filter CE" in remote
+    assert "--list --filter AMCE" in remote
     assert "DATEIVERARBEITUNG (Borg-Status und Pfad):" not in remote
+    assert "BBMNET" in remote
+    assert "ip route get" in remote
+    assert "/sys/class/net/$bbm_iface/statistics/rx_bytes" in remote
 
 
 def test_restore_dry_run_does_not_create_target(job):
@@ -889,6 +893,16 @@ def test_source_stats_command_uses_repository_independent_live_scan(job):
     assert command.stdin_controlled_cancel is True
 
 
+def test_source_stats_command_reports_mount_handling(job):
+    from app.runner import source_stats_command
+
+    command = source_stats_command(job)
+    assert "eingehängte Unterverzeichnisse werden wie beim Backup übersprungen" in command.preview
+    assert "skipped_mount_count" in command.preview
+    assert "included_mount_count" in command.preview
+    assert "os.scandir" in command.preview
+
+
 def test_source_stats_live_scan_counts_files_without_repository_access(job, tmp_path):
     from app.runner import source_stats_command
 
@@ -957,3 +971,17 @@ def test_execute_prefers_raw_byte_callback_for_high_volume_output():
     assert stderr == "A file-1\nC live.db\n"
     assert text_calls == []
     assert b"".join(data for stream, data in byte_calls if stream == "stderr") == b"A file-1\nC live.db\n"
+
+
+def test_execute_byte_callback_can_filter_bounded_capture():
+    command = Command(argv=["sh", "-c", "printf 'raw-progress' >&2"], preview="filter capture")
+
+    async def filter_output(stream, chunk):
+        assert stream == "stderr"
+        assert chunk == b"raw-progress"
+        return b"clean-warning"
+
+    return_code, stdout, stderr = asyncio.run(execute(command, on_output_bytes=filter_output))
+    assert return_code == 0
+    assert stdout == ""
+    assert stderr == "clean-warning"

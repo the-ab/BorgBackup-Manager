@@ -115,6 +115,13 @@ def test_ui_contains_scoped_archives_and_advanced_borg_options():
     assert 'name="files_cache"' in html
     assert 'name="list_files"' in html
     assert 'Verarbeitete Dateien im Live-Protokoll anzeigen' in html
+    list_files_markup = html.split('name="list_files"', 1)[0].rsplit('<input', 1)[-1]
+    assert 'checked' not in list_files_markup
+    assert 'form.elements.list_files.checked = false' in javascript
+    assert 'id="exclude-template-select"' in html
+    assert 'id="exclude-template-name"' in html
+    assert 'id="exclude-template-patterns"' in html
+    assert 'id="remove-exclude-template"' in html
     assert "all_archives" in javascript
     assert "data-archive-browse" in javascript
     assert "markArchivesStale" in javascript
@@ -233,3 +240,62 @@ def test_bulk_archive_delete_requires_unique_exact_names():
 
     with pytest.raises(ValidationError):
         ArchiveBulkDeleteIn(archives=["../unsafe"])
+
+
+def test_repository_import_allows_safe_nested_relative_path():
+    data = RepositoryImportIn(
+        name="Offline NAS",
+        directory_name="offline/nas/repository",
+        encryption_mode="none",
+    )
+    assert data.directory_name == "offline/nas/repository"
+    with pytest.raises(ValueError):
+        RepositoryImportIn(name="Bad", directory_name="offline/../escape", encryption_mode="none")
+    with pytest.raises(ValueError):
+        RepositoryImportIn(name="Bad", directory_name="/../escape", encryption_mode="none")
+
+
+def test_source_statistics_parallel_limit_defaults_to_one_and_is_bounded():
+    from app.schemas import SettingsIn
+
+    assert SettingsIn().source_stats_parallel_limit == 1
+    assert SettingsIn(source_stats_parallel_limit=4).source_stats_parallel_limit == 4
+    with pytest.raises(ValidationError):
+        SettingsIn(source_stats_parallel_limit=0)
+    with pytest.raises(ValidationError):
+        SettingsIn(source_stats_parallel_limit=65)
+
+
+def test_mount_parallel_limits_are_normalized_and_restricted_to_repository_root():
+    from app.schemas import SettingsIn
+
+    settings = SettingsIn(mount_parallel_limits={
+        "/repositories": 2,
+        "/repositories/offline-nas/": 1,
+        "/repositories/unlimited": 0,
+    })
+    assert settings.mount_parallel_limits == {
+        "/repositories": 2,
+        "/repositories/offline-nas": 1,
+    }
+
+    with pytest.raises(ValidationError):
+        SettingsIn(mount_parallel_limits={"/mnt/external": 1})
+
+
+def test_manual_backup_maintenance_requires_retention_and_prune_before_compact():
+    base = dict(
+        name="manual-maintenance", host_id=1, repository_id=1,
+        source_paths=["/srv"], prune_options={},
+    )
+    with pytest.raises(ValueError):
+        JobIn(**base, manual_prune_after_backup=True)
+    with pytest.raises(ValueError):
+        JobIn(**base, manual_compact_after_prune=True)
+    job = JobIn(
+        **{**base, "prune_options": {"daily": 7}},
+        manual_prune_after_backup=True,
+        manual_compact_after_prune=True,
+    )
+    assert job.manual_prune_after_backup is True
+    assert job.manual_compact_after_prune is True

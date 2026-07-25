@@ -7,15 +7,32 @@ from app.models import Repository
 
 
 def managed_repository_path(repository: Repository, *, require_directory: bool = True) -> Path:
-    """Return a validated direct child below the managed repository root."""
+    """Return a validated repository path below the managed storage root.
+
+    Imported repositories may live below mount/group directories such as
+    ``/repositories/offline/nas-repo``.  Every path component is checked before
+    resolution so symlinks cannot be used to escape or alias the managed root.
+    """
     if not repository.storage_path:
         raise ValueError("Repository wird nicht lokal verwaltet")
 
-    configured = Path(repository.storage_path)
-    if configured.is_symlink():
-        raise ValueError("Der Pfad eines verwalteten Repositorys darf kein symbolischer Link sein")
-
     root = REPOSITORY_ROOT.resolve()
+    configured = Path(repository.storage_path)
+    try:
+        relative = configured.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Repository-Pfad liegt außerhalb des verwalteten Speicherbereichs") from exc
+    if not relative.parts:
+        raise ValueError("Repository-Pfad darf nicht dem verwalteten Stammverzeichnis entsprechen")
+
+    current = root
+    for part in relative.parts:
+        if part in {"", ".", ".."}:
+            raise ValueError("Repository-Pfad enthält ein unsicheres Pfadsegment")
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Der Pfad eines verwalteten Repositorys darf keine symbolischen Links enthalten")
+
     try:
         path = configured.resolve(strict=require_directory)
     except FileNotFoundError as exc:
@@ -23,7 +40,7 @@ def managed_repository_path(repository: Repository, *, require_directory: bool =
     except OSError as exc:
         raise ValueError(f"Der Pfad des verwalteten Repositorys kann nicht aufgelöst werden: {exc}") from exc
 
-    if path == root or path.parent != root:
+    if path == root or root not in path.parents:
         raise ValueError("Repository-Pfad liegt außerhalb des verwalteten Speicherbereichs")
     if require_directory and not path.is_dir():
         raise ValueError("Der Pfad des verwalteten Repositorys ist kein Verzeichnis")

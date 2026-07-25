@@ -1,5 +1,123 @@
 # Release Notes
 
+## v1.0.71 – 25.07.2026
+
+### Gespeicherte SSH-Aktionen pro Gerät
+
+- Unter **Geräte → Gespeicherte SSH-Aktionen** können Administratoren wiederkehrende, nicht-interaktive Shell-Befehle mit Zielgerät, Name, Aktivstatus und Zeitlimit speichern. Typische Anwendungsfälle sind Host-/NFS-Mounts, `systemctl`-Aktionen und Diagnosebefehle.
+- Die WebUI stellt bewusst keine freie Einmal-Konsole bereit. Ausgeführt werden ausschließlich vorher gespeicherte Aktions-IDs und jeder Start verlangt eine Sicherheitsbestätigung.
+- Die Ausführung verwendet den vorhandenen Controller-Schlüssel und den bestätigten Geräte-Hostschlüssel mit `BatchMode=yes` und `StrictHostKeyChecking=yes`.
+- SSH-Aktionen erscheinen als normale Ausführungen mit Live-Log, Exit-Status, Stoppen-Funktion und Historie und zählen gegen die globale Parallelitätsgrenze. Ein individuelles Zeitlimit von 5 bis 3600 Sekunden verhindert dauerhaft hängende Wartungsbefehle.
+- Befehle werden in `manager.db` gespeichert und nicht als Geheimnis verschlüsselt. WebUI und Dokumentation warnen deshalb ausdrücklich davor, Passwörter, API-Tokens oder andere Zugangsdaten in Befehle einzutragen; `sudo -n` mit eng begrenzter sudoers-Regel wird für privilegierte Aktionen empfohlen.
+- Neue Datenbanktabelle `host_ssh_actions`; bestehende Geräte, Jobs, Repositorys und Ausführungen bleiben unverändert.
+
+## v1.0.70 – 25.07.2026
+
+### Quellenstatistik in Parallelitätssteuerung integriert
+
+- Manuelle Quellenstatistik-Aktualisierungen zählen jetzt gegen die globale Ausführungsgrenze und besitzen zusätzlich eine eigene Parallelitätsgrenze unter **System → Einstellungen → Parallelitätsgrenzen**. Standard ist `1`, damit nicht mehrere ressourcenintensive Quellenscans gleichzeitig laufen.
+- Quellenstatistiken reservieren bewusst weder ein Borg-Repository noch dessen Mount, weil der Scan ausschließlich das Quellgerät liest. Backups eines Repositorys werden dadurch nicht unnötig blockiert.
+- Warteschlangenmeldungen nennen eine belegte Quellenstatistik-Grenze ausdrücklich. Optionaler ENV-Standard: `BBM_SOURCE_STATS_PARALLEL_LIMIT=1`.
+
+### Compact-Einstellung eindeutiger
+
+- Die Systemeinstellung heißt jetzt **Nach erfolgreicher Prune-Phase eines Zeitplans einmal je Repository Compact ausführen**.
+- Sie gilt ausschließlich für Zeitpläne: Nach allen Backups und allen erfolgreichen Prune-Läufen wird je betroffenem Repository höchstens ein Compact gestartet.
+- Ein manuell über **Aufbewahrung** gestarteter Prune löst darüber kein Compact aus. Für manuelle Backup-Ketten gelten weiterhin ausschließlich die jobbezogenen Optionen **Nach manuellem Backup Prune ausführen** und **Nach erfolgreichem manuellen Prune Compact ausführen**.
+
+## v1.0.69 – 25.07.2026
+
+### Mount-aware Quellenstatistik
+
+- Der manuelle Quellen-Live-Scan erkennt Dateisystemgrenzen und eingehängte Unterverzeichnisse explizit. Bei deaktiviertem **Nur jeweiliges Quelldateisystem** werden Unter-Mounts in Größe und Dateianzahl einbezogen.
+- Ist **Nur jeweiliges Quelldateisystem** aktiv, werden Unter-Mounts weiterhin passend zum tatsächlichen Borg-Backup übersprungen, aber nicht mehr stillschweigend: Anzahl und Pfade werden im Scan-Protokoll genannt.
+- Der Python-Scanner verarbeitet große Verzeichnisse direkt über den `os.scandir`-Iterator statt zunächst komplette Verzeichnislisten im Arbeitsspeicher aufzubauen.
+
+### Dateiliste bei neuen Jobs standardmäßig aus
+
+- **Verarbeitete Dateien im Live-Protokoll anzeigen** ist bei neu angelegten Backup-Jobs standardmäßig nicht ausgewählt. Bestehende Jobs behalten ihren gespeicherten Wert.
+- Borg-Fortschritt, A/M/C/E-Livezähler und C/E-Warnungserkennung funktionieren weiterhin unabhängig von der vollständigen Dateiliste.
+
+### Ausschlussvorlagen kompakter verwalten
+
+- Unter **System → Einstellungen → Ausschlussvorlagen** werden nicht mehr alle Vorlagen gleichzeitig untereinander dargestellt.
+- Eine Auswahlbox lädt genau eine vorhandene Vorlage zum Bearbeiten; **Neue Vorlage** und **Vorlage löschen** verwalten den aktuellen Eintrag. Änderungen werden weiterhin gemeinsam über **Einstellungen speichern** übernommen.
+- Die Darstellung bleibt bei vielen Vorlagen und auf Mobilgeräten kompakt.
+
+## v1.0.68 – 25.07.2026
+
+### Zeitplan-Nachbereitung pro Repository zusammengefasst
+
+- Zentrale Zeitpläne laufen jetzt koordiniert in Phasen: zuerst alle zugeordneten Backups, danach alle konfigurierten Prune-Läufe und anschließend höchstens ein Compact je betroffenem Repository.
+- Mehrere Jobs auf demselben Repository starten nach demselben Zeitplan daher keine redundanten Compact-Aufträge mehr.
+- Repository-Größenstatistiken werden nach Abschluss der vollständigen Zeitplan-Nachbereitung nur einmal je geändertem Repository aktualisiert.
+- Backups mit Borg-Warnstatus gelten weiterhin als erzeugte Archive und können in die konfigurierte Aufbewahrung gehen; Compact startet nur, wenn alle Prune-Läufe des Repositorys erfolgreich abgeschlossen wurden.
+
+### Optionales Prune/Compact nach manuellen Backups
+
+- Backup-Jobs besitzen zwei neue optionale Aufbewahrungsoptionen: **Nach manuellem Backup Prune ausführen** und **Nach erfolgreichem manuellen Prune Compact ausführen**. Bestehende Jobs erhalten bei der Migration für beide Optionen den sicheren Standard `aus`.
+- Ist die manuelle Nachbereitung aktiviert, bleibt das Repository für die vollständige Kette Backup → Prune → optional Compact reserviert. Später gestartete Läufe desselben Repositorys warten bis zum Ende der Kette.
+- Bereits vorher wartende Läufe behalten ihre FIFO-Reihenfolge, bis das manuelle Backup startet; ab dessen Start kann kein fremder Lauf zwischen Backup, Prune und Compact in das reservierte Repository eintreten.
+- Die Repository-Größe wird erst nach Abschluss der kompletten manuellen Kette aktualisiert, statt zwischen den einzelnen Phasen mehrfach ermittelt zu werden.
+- Automatische Datenbankschema-Migration: `jobs.manual_prune_after_backup` und `jobs.manual_compact_after_prune`, jeweils mit Standard `false`.
+
+## v1.0.67 – 25.07.2026
+
+### Parallelitätsgrenzen pro Repository und Mount
+
+- Jedes Repository besitzt jetzt **Maximal parallele Backup-Läufe** (`1` bis `64`). Bestehende Repositorys erhalten durch die automatische Datenbankmigration den bisherigen sicheren Standard `1`.
+- Backup-Läufe eines Repositorys dürfen bis zu dessen konfigurierter Kapazität gleichzeitig starten. Wartungs- und Prüfaktionen wie Check, Prune, Compact, Archivlöschung und Reset bleiben repositoryweit exklusiv.
+- Unter **System → Einstellungen → Parallelitätsgrenzen** können zusätzlich gemeinsame Grenzen für jeden tatsächlich erkannten Mount unter `/repositories` gesetzt werden. `0` bedeutet für den jeweiligen Mount unbegrenzt.
+- Mehrere Repositorys auf demselben Datenträger beziehungsweise NFS-Mount teilen sich diese Mount-Grenze. Ein Job startet nur, wenn globale, Repository-, Mount- und gegebenenfalls Zeitplangrenze gleichzeitig freie Kapazität besitzen.
+- Die FIFO-Warteschlange nennt im Laufprotokoll die konkret blockierende Repository-, Mount-, Zeitplan- oder globale Grenze. Die Mount-Topologie wird kurzzeitig zwischengespeichert, damit die 250-ms-Warteschlangenprüfung keine unnötigen Dateisystemabfragen verursacht.
+
+### BBM-Netzwerk und direkter Job-Abbruch im Live-Dialog
+
+- Im Kopf eines geöffneten Live-Dialogs wird neben **Schließen** jetzt die aktuelle Upload-/Downloadrate des BorgBackup-Manager-Containers angezeigt. Die Messung summiert die nicht-loopback Interfaces aus `/proc/net/dev` und wird nur während der ohnehin stattfindenden Live-Abfrage aktualisiert.
+- Die BBM-Netzwerkanzeige ist getrennt von der bereits vorhandenen Client-Netzwerkkachel und wird nicht in `manager.db` gespeichert.
+- Administratoren können wartende oder laufende Ausführungen direkt über **Job stoppen** im Live-Dialog abbrechen. Der vorhandene kontrollierte Abbruchpfad mit Borg-/Remote-Prozessbereinigung wird dafür unverändert wiederverwendet.
+- Responsive Darstellung der neuen Live-Kopfzeile und Mount-Limit-Einstellungen ergänzt.
+- Automatische Datenbankschema-Migration: Spalte `repositories.parallel_limit`; vorhandene Repositorys, Jobs, Archive und Einstellungen bleiben erhalten.
+
+## v1.0.66 – 25.07.2026
+
+### Live-A/M/C/E-Status und Netzwerkbandbreite
+
+- Der Live-Fortschritt zeigt nun Borg-Dateistatus-Zähler für `A` (neu/added), `M` (geändert/modified), `C` (während des Einlesens verändert) und `E` (Datei-Zugriffs-/Lesefehler) sowie den zuletzt gemeldeten A/M/C/E-Pfad.
+- Bei deaktivierter vollständiger Dateiliste verwendet Borg `--list --filter AMCE`. A/M-Zeilen werden ausschließlich für die In-Memory-Zähler ausgewertet und vor dem permanenten Laufprotokoll entfernt; C/E bleiben für die Warnungsdiagnose erhalten. Unveränderte `U`-Einträge werden weiterhin nicht angefordert.
+- Bei aktivierter vollständiger Dateiliste bleibt die komplette Ausgabe erhalten; die A/M/C/E-Zähler werden über einen Byte-basierten Parser ermittelt und nur der jeweils neueste passende Pfad für die WebUI dekodiert.
+- Die bisher freie achte Kachel der Live-Ausführungsübersicht zeigt jetzt Netzwerkinterface, die vom Routing gewählte Quell-IP sowie aktuelle Upload- und Downloadrate.
+- Der Backup-Client ermittelt das zum Repository verwendete Interface über seine Linux-Routingtabelle und liest ausschließlich `/sys/class/net/<Interface>/statistics/{rx,tx}_bytes`. Es sind keine zusätzlichen Rechte und keine zweite SSH-Verbindung erforderlich.
+- Die Netzwerkwerte zeigen den Gesamtverkehr des ausgewählten Client-Interfaces und nicht ausschließlich Borg-Verkehr. Telemetriedaten existieren nur während des laufenden Jobs und werden weder in das permanente Borg-Protokoll noch in SQLite geschrieben.
+- Keine Datenbankschema-Migration erforderlich.
+
+## v1.0.65 – 25.07.2026
+
+### Lokale Repository-Erkennung und Offline-Mounts
+
+- **Automatisch suchen** durchsucht `/repositories` nun sicher rekursiv bis zu sechs Ebenen statt nur direkte Unterordner. Symbolische Links werden nicht verfolgt und erkannte Borg-Repositorys nicht weiter durchlaufen.
+- Der Repository-Browser kann verschachtelte Repositorys auswählen. Befindet sich der Browser bereits in einem Ordner mit Borg-`config`, steht **Dieses Repository auswählen** zur Verfügung.
+- Verwaltete Repository-Pfade dürfen sicher verschachtelt unter `/repositories` liegen; SSH-Forced-Command und Repository-URL behalten den vollständigen relativen Pfad bei.
+- Der Docker-Bind-Mount für `/repositories` verwendet auf Linux `rslave`, damit nach dem Containerstart auf dem Host ein- oder ausgehängte NFS-Unter-Mounts in den laufenden Container propagiert werden können.
+- Temporär nicht sichtbare Repositorys werden als **nicht verfügbar** angezeigt. Nach dem Remount kann **Status aktualisieren** verwendet werden; Verfügbarkeitswechsel werden zusätzlich beim automatischen UI-Refresh übernommen.
+- **Zurücksetzen** bleibt für tatsächlich gelöschte Repositorys vorhanden, warnt aber ausdrücklich davor, einen nur ausgehängten NFS-/Host-Mount zurückzusetzen.
+- Keine Datenbankschema-Migration erforderlich.
+
+## v1.0.64 – 25.07.2026
+
+### Live-Fortschritt für Backup-Jobs
+
+- Backup-Läufe verwenden nun unabhängig von der Option „Verarbeitete Dateien im Live-Protokoll anzeigen“ zusätzlich Borg `--progress`.
+- Der Live-Dialog zeigt die aktuell verarbeiteten Dateien, Original-, komprimierte und deduplizierte Datenmenge sowie den aktuell bearbeiteten Pfad.
+- Vorhandene Quellenstatistiken des Jobs dienen ausschließlich als Schätzbasis für Prozentwert und grobe Restzeit. Bei einem Erstlauf bleibt die Fortschrittsleiste unbestimmt; Dateizähler und Datenmengen bleiben trotzdem sichtbar.
+- Borg-Progresszeilen werden nicht in das permanente Laufprotokoll und nicht in `manager.db` geschrieben. Der Zustand liegt nur während des laufenden Jobs im Arbeitsspeicher.
+- Der Hochvolumenpfad für vollständige Dateilisten bleibt erhalten: Chunks ohne Borg-Carriage-Return-Fortschrittszeile werden ohne zeilenweise Python-Verarbeitung durchgereicht.
+
+### Prüfung
+
+- Progress-Parser, Logfilter, Dateilisten-Schnellpfad, Live-API und responsive Fortschrittsanzeige mit Regressionstests ergänzt.
+- Keine Datenbankschema-Migration erforderlich.
+
 ## v1.0.63 – 22.07.2026
 
 ### Richtige Beschriftung bei Archivvergleichen

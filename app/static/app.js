@@ -1,6 +1,6 @@
 const state = {
   currentUser: null, users: [], securityStatus: null,
-  hosts: [], repos: [], jobs: [], schedules: [], runs: [], mounts: [], system: {}, settings: null, backups: [], runStorage: null, notifications: null, notificationDeliveries: [],
+  hosts: [], hostSshActions: [], repos: [], jobs: [], schedules: [], runs: [], mounts: [], system: {}, settings: null, backups: [], runStorage: null, notifications: null, notificationDeliveries: [],
   liveRunId: null, liveLogOffset: 0, liveLogSession: 0, liveLogRequestPending: false, liveTimer: null, refreshTimer: null,
   archiveData: null, archiveRequestId: 0, archiveSelection: new Set(), activeBrowser: null, browserPath: '', browserSelection: new Set(),
   openJobActions: new Set(), backgroundRefresh: false,
@@ -9,6 +9,7 @@ const state = {
   actionRuns: new Map(), activeRuns: [], refreshQueue: Promise.resolve(), syncResetTimer: null,
   syncDisplay: {message: 'Aktuell', kind: 'idle', persistent: false}, helpLanguage: '',
   sorts: {}, repositoryBrowserPath: '', diagnosticLogs: {}, activeDiagnosticLog: 'sshd',
+  excludeTemplateDrafts: null, excludeTemplateSelection: -1, excludeTemplateSettingsSignature: '',
 };
 
 const SORT_DEFAULTS = {
@@ -160,13 +161,13 @@ function runActionLabel(action) {
     prune: 'Retention', compact: 'Compact', check: 'Repository check',
     verify: 'Full verification', info: 'Job info', probe: 'Connection test',
     'source-stats': 'Source statistics', 'delete-archive': 'Delete archive',
-    'rename-archive': 'Rename archive', version: 'Borg version',
+    'rename-archive': 'Rename archive', version: 'Borg version', 'ssh-command': 'SSH action',
   } : {
     backup: 'Backup', 'diff-archives': 'Archive vergleichen', restore: 'Wiederherstellung',
     prune: 'Aufbewahrung', compact: 'Compact', check: 'Repository-Prüfung',
     verify: 'Vollprüfung', info: 'Job-Info', probe: 'Verbindungstest',
     'source-stats': 'Quellenstatistik', 'delete-archive': 'Archiv löschen',
-    'rename-archive': 'Archiv umbenennen', version: 'Borg-Version',
+    'rename-archive': 'Archiv umbenennen', version: 'Borg-Version', 'ssh-command': 'SSH-Aktion',
   };
   return labels[action] || action || (currentLanguage() === 'en' ? 'Run' : 'Ausführung');
 }
@@ -727,7 +728,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.63`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.71`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -782,11 +783,18 @@ function runTable(runs) {
 }
 
 
+function repositoryAvailabilityChanged(previous, current) {
+  const oldState = new Map((previous || []).map((repo) => [Number(repo.id), `${Boolean(repo.initialized)}:${Boolean(repo.repository_present)}:${repo.validation_error || ''}`]));
+  return (current || []).some((repo) => oldState.get(Number(repo.id)) !== `${Boolean(repo.initialized)}:${Boolean(repo.repository_present)}:${repo.validation_error || ''}`)
+    || oldState.size !== (current || []).length;
+}
+
 
 async function loadAll(background = false) {
   if (!background) setSyncState('Alle Bereiche werden aktualisiert …', 'pending', true);
   try {
     const requestedView = hashView();
+    const previousRepositories = state.repos;
     const storageRequest = (!background || requestedView === 'settings' || !state.runStorage)
       ? api('/runs/storage') : Promise.resolve(state.runStorage);
     const admin = state.currentUser?.role === 'admin';
@@ -794,12 +802,13 @@ async function loadAll(background = false) {
     const securityRequest = admin ? api('/users/security-status') : Promise.resolve(null);
     const backupsRequest = admin ? api('/backups') : Promise.resolve([]);
     const mountsRequest = admin ? api('/mounts') : Promise.resolve([]);
+    const hostSshActionsRequest = admin ? api('/host-ssh-actions') : Promise.resolve([]);
     const notificationSettingsRequest = admin ? api('/notifications/settings') : Promise.resolve(null);
     const notificationDeliveriesRequest = admin ? api('/notifications/deliveries?limit=100') : Promise.resolve([]);
     const protectedStorageRequest = admin ? storageRequest : Promise.resolve(null);
-    const [dashboard, hosts, repos, jobs, schedules, runs, activeRuns, system, settings, backups, mounts, runStorage, users, securityStatus, notifications, notificationDeliveries] = await Promise.all([
+    const [dashboard, hosts, repos, jobs, schedules, runs, activeRuns, system, settings, backups, mounts, hostSshActions, runStorage, users, securityStatus, notifications, notificationDeliveries] = await Promise.all([
       api('/dashboard'), api('/hosts'), api('/repositories'), api('/jobs'), api('/schedules'), api(`/runs?status=${encodeURIComponent(state.runFilter)}`), api('/runs?status=active&limit=100'),
-      api('/system'), api('/settings'), backupsRequest, mountsRequest, protectedStorageRequest, usersRequest, securityRequest, notificationSettingsRequest, notificationDeliveriesRequest,
+      api('/system'), api('/settings'), backupsRequest, mountsRequest, hostSshActionsRequest, protectedStorageRequest, usersRequest, securityRequest, notificationSettingsRequest, notificationDeliveriesRequest,
     ]);
     state.dashboard = dashboard;
     state.hosts = hosts;
@@ -812,6 +821,7 @@ async function loadAll(background = false) {
     state.settings = settings;
     state.backups = backups;
     state.mounts = mounts;
+    state.hostSshActions = hostSshActions;
     state.runStorage = runStorage;
     state.users = users;
     state.securityStatus = securityStatus;
@@ -821,7 +831,7 @@ async function loadAll(background = false) {
     const active = hashView();
     renderDashboard(dashboard);
     if (!background || active !== 'hosts') renderHosts();
-    if (!background || active !== 'repositories') renderRepos();
+    if (!background || active !== 'repositories' || repositoryAvailabilityChanged(previousRepositories, repos)) renderRepos();
     if (!background || active !== 'jobs') renderJobs();
     if (!background || active !== 'schedules') renderSchedules();
     if (!background || active !== 'runs') renderRuns();
@@ -874,6 +884,7 @@ async function performAreaRefresh(areas, message = 'Änderungen werden übernomm
   if (requested.has('security') && state.currentUser?.role === 'admin') add('security', api('/users/security-status'));
   if (requested.has('runStorage') && state.currentUser?.role === 'admin') add('runStorage', api('/runs/storage'));
   if (requested.has('mounts') && state.currentUser?.role === 'admin') add('mounts', api('/mounts'));
+  if (requested.has('sshActions') && state.currentUser?.role === 'admin') add('sshActions', api('/host-ssh-actions'));
   if (requested.has('notifications') && state.currentUser?.role === 'admin') { add('notifications', api('/notifications/settings')); add('notificationDeliveries', api('/notifications/deliveries?limit=100')); }
 
   const values = Object.fromEntries(await Promise.all(requests));
@@ -889,11 +900,12 @@ async function performAreaRefresh(areas, message = 'Änderungen werden übernomm
   if ('security' in values) state.securityStatus = values.security;
   if ('runStorage' in values) state.runStorage = values.runStorage;
   if ('mounts' in values) state.mounts = values.mounts;
+  if ('sshActions' in values) state.hostSshActions = values.sshActions;
   if ('notifications' in values) state.notifications = values.notifications;
   if ('notificationDeliveries' in values) state.notificationDeliveries = values.notificationDeliveries;
 
   if ('dashboard' in values) renderDashboard(state.dashboard);
-  if ('hosts' in values) renderHosts();
+  if ('hosts' in values || 'sshActions' in values) renderHosts();
   if ('repositories' in values) renderRepos();
   if ('jobs' in values) renderJobs();
   if ('schedules' in values) renderSchedules();
@@ -1067,7 +1079,17 @@ function renderDashboard(data) {
 }
 
 function renderHosts() {
-  if (!state.hosts.length) { $('#host-list').innerHTML = '<div class="empty">Noch keine Geräte angelegt.</div>'; return; }
+  const actionHostSelect = $('#host-ssh-action-form')?.elements.host_id;
+  if (actionHostSelect) {
+    const previous = actionHostSelect.value;
+    actionHostSelect.innerHTML = state.hosts.length ? state.hosts.map((host) => `<option value="${host.id}">${esc(host.name)} · ${esc(host.username)}@${esc(host.address)}</option>`).join('') : '<option value="">Keine Geräte vorhanden</option>';
+    if (previous && [...actionHostSelect.options].some((option) => option.value === previous)) actionHostSelect.value = previous;
+  }
+  if (!state.hosts.length) {
+    $('#host-list').innerHTML = '<div class="empty">Noch keine Geräte angelegt.</div>';
+    renderHostSshActions();
+    return;
+  }
   const rows = sortedHosts(state.hosts).map((host) => {
     const assignments = state.jobs.filter((job) => job.host_id === host.id && state.repos.some((repo) => repo.id === job.repository_id && repo.managed));
     const ready = host.repository_ready && assignments.length > 0;
@@ -1076,6 +1098,29 @@ function renderHosts() {
     return `<tr><td data-label="Status"><span class="badge ${host.enabled ? 'success' : 'inactive'}">${host.enabled ? 'aktiv' : 'inaktiv'}</span></td><td data-label="Gerät"><button class="entity-link" ${bbmAction('editHost', host.id)}>${esc(host.name)}</button></td><td data-label="SSH"><code>${esc(host.username)}@${esc(host.address)}:${host.port}</code></td><td data-label="Borg"><span class="badge ${esc(versionClass)}">${versionText}</span></td><td data-label="Repository-Zugänge">${assignments.length ? `${ready ? 'eingerichtet' : 'unvollständig'} · ${assignments.length}<small>Einrichtung direkt beim Backup-Job</small>` : 'keine Zuordnung'}</td><td data-label="Aktionen"><div class="table-actions"><button class="secondary" ${bbmAction('checkHostVersion', host.id)}>Borg prüfen</button><button class="${host.enabled ? 'danger ghost' : 'secondary'}" ${bbmAction('setHostEnabled', host.id, !host.enabled)}>${host.enabled ? 'Deaktivieren' : 'Aktivieren'}</button><button class="secondary" ${bbmAction('editHost', host.id)}>Bearbeiten</button><button class="danger ghost" ${bbmAction('removeEntity', 'hosts', host.id)}>Löschen</button></div></td></tr>`;
   }).join('');
   $('#host-list').innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Status</th><th>Gerät</th><th>SSH</th><th>Borg</th><th>Repository-Zugänge</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  renderHostSshActions();
+}
+
+function renderHostSshActions() {
+  const target = $('#host-ssh-action-list');
+  if (!target) return;
+  const actions = [...(state.hostSshActions || [])].sort((a, b) => {
+    const ah = state.hosts.find((host) => host.id === a.host_id)?.name || '';
+    const bh = state.hosts.find((host) => host.id === b.host_id)?.name || '';
+    return compareText(ah, bh) || compareText(a.name, b.name);
+  });
+  if (!actions.length) {
+    target.innerHTML = '<div class="empty">Noch keine SSH-Aktionen gespeichert.</div>';
+    return;
+  }
+  const rows = actions.map((item) => {
+    const host = state.hosts.find((entry) => entry.id === item.host_id);
+    const runnable = Boolean(item.enabled && host?.enabled && host?.host_key);
+    const title = !item.enabled ? 'SSH-Aktion ist deaktiviert' : !host?.enabled ? 'Gerät ist deaktiviert' : !host?.host_key ? 'SSH-Fingerprint fehlt' : 'Gespeicherte SSH-Aktion ausführen';
+    const commandPreview = item.command.length > 180 ? item.command.slice(0, 177) + '…' : item.command;
+    return `<tr><td data-label="Status"><span class="badge ${item.enabled ? 'success' : 'inactive'}">${item.enabled ? 'aktiv' : 'inaktiv'}</span></td><td data-label="Gerät">${esc(host?.name || `#${item.host_id}`)}</td><td data-label="Aktion"><b>${esc(item.name)}</b><small><code class="ssh-action-command-preview" title="${esc(item.command)}">${esc(commandPreview)}</code></small></td><td data-label="Zeitlimit">${esc(item.timeout_seconds)} Sek.</td><td data-label="Aktionen"><div class="table-actions"><button ${bbmAction('runHostSshAction', item.id)} ${runnable ? '' : 'disabled'} title="${esc(title)}">Ausführen</button><button class="secondary" ${bbmAction('editHostSshAction', item.id)}>Bearbeiten</button><button class="danger ghost" ${bbmAction('deleteHostSshAction', item.id)}>Löschen</button></div></td></tr>`;
+  }).join('');
+  target.innerHTML = `<div class="table-scroll"><table class="data-table ssh-actions-table"><thead><tr><th>Status</th><th>Gerät</th><th>Aktion</th><th>Zeitlimit</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 
@@ -1086,9 +1131,10 @@ function renderRepos() {
     const hosts = new Set(jobs.map((job) => job.host_id)).size;
     const keyInfo = !repo.managed && repo.external_ssh_public_key
       ? `<small>Manager-SSH-Key · ${esc(repo.external_host_fingerprint || 'Hostkey gespeichert')}</small>` : '';
+    const mountLimit = repo.mount_path ? Number(state.settings?.mount_parallel_limits?.[repo.mount_path] || 0) : 0;
     const guardInfo = repo.managed
-      ? `<small>Speicher-Sperre: ${repo.storage_guard_effective_enabled ? `ab ${repo.storage_guard_effective_threshold_percent} % (${repo.storage_guard_source === 'repository' ? 'Repository' : 'global'})` : 'deaktiviert'} · Belegung über Systemdiagnose</small>`
-      : '';
+      ? `<small>Speicher-Sperre: ${repo.storage_guard_effective_enabled ? `ab ${repo.storage_guard_effective_threshold_percent} % (${repo.storage_guard_source === 'repository' ? 'Repository' : 'global'})` : 'deaktiviert'} · Parallel: Repo max. ${repo.parallel_limit || 1}${repo.mount_path ? ` · Mount ${esc(repo.mount_path)} ${mountLimit ? `max. ${mountLimit}` : 'unbegrenzt'}` : ''}</small>`
+      : `<small>Parallel: Repo max. ${repo.parallel_limit || 1}</small>`;
     const detailsButton = repo.validation_details
       ? `<button type="button" class="inline-action" ${bbmAction('showRepositoryDiagnostic', repo.id)}>Details</button>` : '';
     const errorInfo = repo.validation_error
@@ -1107,7 +1153,7 @@ function renderRepos() {
     const repositoryReady = Boolean(repo.initialized && (!repo.managed || repo.repository_present));
     const sizeButton = `<button class="secondary" ${bbmAction('refreshRepoSize', repo.id)} ${repositoryReady ? '' : 'disabled'}>Größe berechnen</button>`;
     const status = repositoryMissing
-      ? {className: 'warning', label: 'Repository fehlt'}
+      ? {className: 'warning', label: 'nicht verfügbar'}
       : repo.validation_error
         ? {className: 'warning', label: 'Prüfung fehlgeschlagen'}
         : repositoryReady
@@ -1117,7 +1163,7 @@ function renderRepos() {
             : {className: 'warning', label: 'nicht initialisiert'};
     const initButton = repo.managed && !repo.repository_present
       ? repositoryMissing
-        ? `<button class="danger ghost" ${bbmAction('resetRepositoryState', repo.id)}>Zurücksetzen</button>`
+        ? `<button class="danger ghost" title="Nur verwenden, wenn das Repository tatsächlich gelöscht wurde – nicht bei einem nur ausgehängten Mount." ${bbmAction('resetRepositoryState', repo.id)}>Zurücksetzen</button>`
         : `<button class="secondary" ${bbmAction('initRepository', repo.id)}>Initialisieren</button>`
       : '';
     const cacheButton = state.currentUser?.role === 'admin'
@@ -1399,33 +1445,62 @@ function renderExcludeTemplateSelect() {
   if ([...select.options].some((option) => option.value === current)) select.value = current;
 }
 
-function appendExcludeTemplateEditor(template = {name: '', patterns: []}) {
-  const container = $('#exclude-template-editor');
-  const card = document.createElement('article');
-  card.className = 'exclude-template-card';
-  card.innerHTML = `<div class="exclude-template-head"><label>Vorlagenname<input data-template-name maxlength="80" value="${esc(template.name || '')}" placeholder="z. B. Linux-Systempfade"></label><button type="button" class="danger ghost" data-remove-template>Vorlage entfernen</button></div><label>Ausschlussmuster <span>(einer pro Zeile)</span><textarea data-template-patterns rows="7" placeholder="/proc
-/sys
-/dev
-/run
-/tmp">${esc((template.patterns || []).join('\n'))}</textarea></label>`;
-  card.querySelector('[data-remove-template]').onclick = () => card.remove();
-  container.append(card);
+function excludeTemplateSignature(templates) {
+  return JSON.stringify((templates || []).map((template) => ({
+    name: String(template?.name || ''), patterns: Array.isArray(template?.patterns) ? [...template.patterns] : [],
+  })));
+}
+
+function ensureExcludeTemplateDrafts() {
+  const templates = state.settings?.exclude_templates || [];
+  const signature = excludeTemplateSignature(templates);
+  if (!Array.isArray(state.excludeTemplateDrafts) || state.excludeTemplateSettingsSignature !== signature) {
+    state.excludeTemplateDrafts = templates.map((template) => ({name: String(template.name || ''), patterns: [...(template.patterns || [])]}));
+    state.excludeTemplateSettingsSignature = signature;
+    state.excludeTemplateSelection = state.excludeTemplateDrafts.length ? 0 : -1;
+  }
+}
+
+function commitExcludeTemplateEditor() {
+  ensureExcludeTemplateDrafts();
+  const index = state.excludeTemplateSelection;
+  const editor = $('#exclude-template-editor');
+  if (index < 0 || index >= state.excludeTemplateDrafts.length || !editor || editor.classList.contains('hidden')) return;
+  state.excludeTemplateDrafts[index] = {
+    name: ($('#exclude-template-name')?.value || '').trim(),
+    patterns: lines($('#exclude-template-patterns')?.value || ''),
+  };
 }
 
 function renderExcludeTemplateEditor() {
-  const container = $('#exclude-template-editor');
-  if (!container) return;
-  container.innerHTML = '';
-  const templates = state.settings?.exclude_templates || [];
-  templates.forEach((template) => appendExcludeTemplateEditor(template));
-  if (!templates.length) container.innerHTML = '<div class="empty template-empty">Keine Ausschlussvorlage angelegt.</div>';
+  ensureExcludeTemplateDrafts();
+  const templates = state.excludeTemplateDrafts;
+  const select = $('#exclude-template-select');
+  const editor = $('#exclude-template-editor');
+  const empty = $('#exclude-template-empty');
+  if (!select || !editor || !empty) return;
+  if (!templates.length) {
+    state.excludeTemplateSelection = -1;
+    select.innerHTML = '<option value="">Keine Vorlage vorhanden</option>';
+    select.value = '';
+    editor.classList.add('hidden');
+    empty.classList.remove('hidden');
+    return;
+  }
+  if (state.excludeTemplateSelection < 0 || state.excludeTemplateSelection >= templates.length) state.excludeTemplateSelection = 0;
+  select.innerHTML = templates.map((template, index) => `<option value="${index}">${esc(template.name || `Neue Vorlage ${index + 1}`)} · ${(template.patterns || []).length} Muster</option>`).join('');
+  select.value = String(state.excludeTemplateSelection);
+  const template = templates[state.excludeTemplateSelection];
+  $('#exclude-template-name').value = template.name || '';
+  $('#exclude-template-patterns').value = (template.patterns || []).join('\n');
+  editor.classList.remove('hidden');
+  empty.classList.add('hidden');
 }
 
 function collectExcludeTemplates() {
-  const cards = $$('.exclude-template-card');
-  const templates = cards.map((card) => ({
-    name: card.querySelector('[data-template-name]').value.trim(),
-    patterns: lines(card.querySelector('[data-template-patterns]').value),
+  commitExcludeTemplateEditor();
+  const templates = (state.excludeTemplateDrafts || []).map((template) => ({
+    name: String(template.name || '').trim(), patterns: [...(template.patterns || [])],
   })).filter((template) => template.name || template.patterns.length);
   for (const template of templates) {
     if (!template.name) throw new Error('Jede Ausschlussvorlage benötigt einen Namen');
@@ -1436,10 +1511,35 @@ function collectExcludeTemplates() {
   return templates;
 }
 
+function mountParallelCandidates() {
+  const paths = new Set(Object.keys(state.settings?.mount_parallel_limits || {}));
+  (state.repos || []).filter((repo) => repo.managed && repo.mount_path).forEach((repo) => paths.add(repo.mount_path));
+  return [...paths].sort((a, b) => a.localeCompare(b, currentLocale()));
+}
+
+function renderMountParallelLimits() {
+  const target = $('#mount-parallel-editor');
+  if (!target) return;
+  const paths = mountParallelCandidates();
+  if (!paths.length) {
+    target.innerHTML = '<div class="empty">Keine verwalteten Repository-Mounts erkannt.</div>';
+    return;
+  }
+  const limits = state.settings?.mount_parallel_limits || {};
+  target.innerHTML = paths.map((path) => {
+    const repos = (state.repos || []).filter((repo) => repo.mount_path === path).map((repo) => repo.name);
+    return `<div class="mount-parallel-row"><div><strong>${esc(path)}</strong><small>${repos.length ? esc(repos.join(', ')) : 'derzeit kein Repository zugeordnet'}</small></div><label>Max. parallel<input type="number" min="0" max="64" value="${esc(limits[path] ?? 0)}" data-mount-parallel-path="${esc(path)}"></label></div>`;
+  }).join('');
+}
+
+function collectMountParallelLimits() {
+  return Object.fromEntries($$('[data-mount-parallel-path]').map((input) => [input.dataset.mountParallelPath, Number(input.value) || 0]).filter(([, limit]) => limit > 0));
+}
+
 function renderSettings() {
   if (!state.settings) return;
   const form = $('#settings-form');
-  for (const name of ['density', 'dashboard_recent_runs_limit', 'runs_list_limit', 'auto_refresh_seconds', 'list_max_height', 'run_retention_days', 'run_log_max_mib', 'run_log_view_kib', 'storage_guard_threshold_percent', 'max_parallel_runs']) form.elements[name].value = state.settings[name];
+  for (const name of ['density', 'dashboard_recent_runs_limit', 'runs_list_limit', 'auto_refresh_seconds', 'list_max_height', 'run_retention_days', 'run_log_max_mib', 'run_log_view_kib', 'storage_guard_threshold_percent', 'max_parallel_runs', 'source_stats_parallel_limit']) form.elements[name].value = state.settings[name];
   form.elements.repository_size_after_run.checked = state.settings.repository_size_after_run;
   form.elements.compact_after_prune.checked = state.settings.compact_after_prune;
   form.elements.storage_guard_enabled.checked = state.settings.storage_guard_enabled;
@@ -1448,6 +1548,7 @@ function renderSettings() {
   if (info && storage) {
     info.innerHTML = `<b>${storage.finished_runs} abgeschlossene Protokolle</b> · Logdateien ${formatBytes(storage.log_file_bytes)} · DB-Protokollanteil ${formatBytes(storage.database_log_payload_bytes)} · SQLite-Datei ${formatBytes(storage.database_file_bytes)}<br><span>Speicherort: <code>${esc(storage.log_directory)}</code>${storage.oldest_run ? ' · ältester Lauf ' + esc(formatDate(storage.oldest_run)) : ''}</span>`;
   }
+  renderMountParallelLimits();
   renderExcludeTemplateEditor();
   renderExcludeTemplateSelect();
   applyPreferences();
@@ -1749,8 +1850,8 @@ async function resetRepositoryState(id) {
   if (!repo) return;
   const english = currentLanguage() === 'en';
   const warning = english
-    ? `Reset the manager state for repository “${repo.name}”?\n\nThis is allowed only when the managed target directory contains no Borg config and is completely empty. No repository files are deleted. Validation, size and initialization metadata are cleared; afterwards the repository can be initialized again.`
-    : `Managerstatus für Repository „${repo.name}“ zurücksetzen?\n\nDies ist nur möglich, wenn der verwaltete Zielordner keine Borg-Konfiguration enthält und vollständig leer ist. Es werden keine Repository-Dateien gelöscht. Prüf-, Größen- und Initialisierungsdaten werden zurückgesetzt; anschließend kann das Repository neu initialisiert werden.`;
+    ? `Reset the manager state for repository “${repo.name}”?\n\nWARNING: Do NOT reset a repository just because an NFS/host mount is currently offline. Remount it first and use “Refresh status”.\n\nReset is intended only when the repository was actually deleted. The target directory must contain no Borg config and be completely empty. No repository files are deleted; validation, size and initialization metadata are cleared.`
+    : `Managerstatus für Repository „${repo.name}“ zurücksetzen?\n\nACHTUNG: Bei einem nur ausgehängten NFS-/Host-Mount NICHT zurücksetzen. In diesem Fall zuerst den Mount wieder einhängen und „Status aktualisieren“ verwenden.\n\nZurücksetzen ist nur vorgesehen, wenn das Repository tatsächlich gelöscht wurde. Der Zielordner muss ohne Borg-Konfiguration und vollständig leer sein. Es werden keine Repository-Dateien gelöscht; Prüf-, Größen- und Initialisierungsdaten werden zurückgesetzt.`;
   if (!confirm(warning)) return;
   const release = markButtonBusy(actionButton(), english ? 'State is being reset …' : 'Status wird zurückgesetzt …');
   try {
@@ -1911,6 +2012,80 @@ function renderWarningCauses(summary) {
   box.classList.remove('hidden');
 }
 
+function renderBackupProgress(run, active) {
+  const box = $('#log-backup-progress');
+  if (!box) return;
+  if (run.action !== 'backup' || !active || run.status !== 'running') {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  const english = String(currentLocale()).toLowerCase().startsWith('en');
+  const progress = run.backup_progress;
+  const activity = run.backup_item_activity || {};
+  box.classList.remove('hidden');
+  if (!progress) {
+    box.innerHTML = `<div class="backup-progress-head"><strong>${english ? 'Live progress' : 'Live-Fortschritt'}</strong><span>${english ? 'Waiting for Borg progress data …' : 'Warte auf Borg-Fortschrittsdaten …'}</span></div><progress max="100"></progress>`;
+    return;
+  }
+  const files = Number(progress.files || 0);
+  const totalFiles = progress.estimated_total_files == null ? null : Number(progress.estimated_total_files);
+  const totalBytes = progress.estimated_total_bytes == null ? null : Number(progress.estimated_total_bytes);
+  const percent = progress.estimated_percent == null ? null : Number(progress.estimated_percent);
+  const eta = progress.estimated_eta_seconds == null ? null : Number(progress.estimated_eta_seconds);
+  const filesLabel = totalFiles && totalFiles > 0
+    ? `${files.toLocaleString(currentLocale())} / ~${totalFiles.toLocaleString(currentLocale())}`
+    : files.toLocaleString(currentLocale());
+  const originalLabel = totalBytes && totalBytes > 0
+    ? `${formatBytes(progress.original_bytes)} / ~${formatBytes(totalBytes)}`
+    : formatBytes(progress.original_bytes);
+  const percentLabel = Number.isFinite(percent)
+    ? `${percent.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} %`
+    : (english ? 'running' : 'läuft');
+  const etaLabel = Number.isFinite(eta) && eta >= 0
+    ? `${english ? 'approx.' : 'ca.'} ${formatDuration(eta)}`
+    : (english ? 'not estimable yet' : 'noch nicht schätzbar');
+  const basis = progress.estimate_basis === 'scan'
+    ? (english ? 'last source scan' : 'letzter Quellenprüfung')
+    : (english ? 'last completed backup' : 'letztem abgeschlossenen Backup');
+  const hint = (totalFiles || totalBytes)
+    ? (english
+      ? `Estimate based on the ${basis}; changed file counts and sizes can make the percentage and remaining time differ.`
+      : `Schätzung auf Basis der ${basis}; geänderte Datei-Anzahl und Datenmenge können Prozentwert und Restzeit beeinflussen.`)
+    : (english
+      ? 'No previous source statistics are available yet; Borg still reports the processed file count and data volumes live.'
+      : 'Noch keine frühere Quellenstatistik vorhanden; Borg liefert Dateizähler und Datenmengen trotzdem live.');
+  const progressTag = Number.isFinite(percent)
+    ? `<progress max="100" value="${Math.max(0, Math.min(100, percent))}"></progress>`
+    : '<progress max="100"></progress>';
+  const statusSpecs = [
+    ['A', Number(activity.added || 0), english ? 'Added / not in files cache' : 'Neu / nicht im Files-Cache'],
+    ['M', Number(activity.modified || 0), english ? 'Modified' : 'Geändert'],
+    ['C', Number(activity.changed || 0), english ? 'Changed while reading' : 'Während Sicherung verändert'],
+    ['E', Number(activity.error || 0), english ? 'Error' : 'Fehler'],
+  ];
+  const statusRow = statusSpecs.map(([status, count, label]) =>
+    `<span class="backup-item-status status-${status.toLowerCase()}" title="${esc(label)}"><b>${status}</b><strong>${count.toLocaleString(currentLocale())}</strong><small>${esc(label)}</small></span>`
+  ).join('');
+  const lastStatus = activity.last_status && activity.last_path
+    ? `<div class="backup-progress-path"><span>${english ? 'Last A/M/C/E status' : 'Letzter A/M/C/E-Status'}</span><code data-i18n-skip title="${esc(activity.last_path)}"><b>${esc(activity.last_status)}</b> ${esc(activity.last_path)}</code></div>`
+    : '';
+  box.innerHTML = `
+    <div class="backup-progress-head"><strong>${english ? 'Live progress' : 'Live-Fortschritt'}</strong><span>${esc(percentLabel)}</span></div>
+    ${progressTag}
+    <div class="backup-progress-grid">
+      <div><span>${english ? 'Files processed' : 'Dateien verarbeitet'}</span><strong>${esc(filesLabel)}</strong></div>
+      <div><span>${english ? 'Original' : 'Original'}</span><strong>${esc(originalLabel)}</strong></div>
+      <div><span>${english ? 'Compressed' : 'Komprimiert'}</span><strong>${esc(formatBytes(progress.compressed_bytes))}</strong></div>
+      <div><span>${english ? 'Deduplicated' : 'Dedupliziert'}</span><strong>${esc(formatBytes(progress.deduplicated_bytes))}</strong></div>
+      <div><span>${english ? 'Remaining' : 'Restzeit'}</span><strong>${esc(etaLabel)}</strong></div>
+    </div>
+    <div class="backup-item-statuses" aria-label="${english ? 'Borg item status counters' : 'Borg-Dateistatus-Zähler'}">${statusRow}</div>
+    <div class="backup-progress-path"><span>${english ? 'Currently processing' : 'Aktuell verarbeitet'}</span><code data-i18n-skip title="${esc(progress.path || '')}">${esc(progress.path || '–')}</code></div>
+    ${lastStatus}
+    <small>${esc(hint)}</small>`;
+}
+
 function renderRunDialog(run, {appendLog = false} = {}) {
   $('#log-dialog h2').textContent = `${run.job_name || 'Repository-Verwaltung'} · ${runActionLabel(run.action)}`;
   $('#log-content').classList.toggle('archive-diff-output', run.action === 'diff-archives');
@@ -1945,12 +2120,44 @@ function renderRunDialog(run, {appendLog = false} = {}) {
   $('#log-stdout').textContent = run.output || 'Keine Standardausgabe.';
   $('#log-stderr').textContent = run.error || 'Keine Fehler oder Warnungen erkannt.';
   const active = ['queued', 'running'].includes(run.status);
-  $('#log-live-state').textContent = active ? `Live · ${run.status}` : `${run.status}${run.duration_seconds != null ? ' · ' + run.duration_seconds + ' s' : ''}`;
+  const progressFiles = run.backup_progress?.files;
+  $('#log-live-state').textContent = active
+    ? `Live · ${run.status}${progressFiles != null ? ' · ' + Number(progressFiles).toLocaleString(currentLocale()) + ' ' + (String(currentLocale()).toLowerCase().startsWith('en') ? 'files' : 'Dateien') : ''}`
+    : `${run.status}${run.duration_seconds != null ? ' · ' + run.duration_seconds + ' s' : ''}`;
+  renderBackupProgress(run, active);
   const trigger = run.trigger_type === 'schedule' ? `Zeitplan: ${esc(run.schedule_name || 'unbekannt')}` : 'Manuell';
   const backupSize = [run.backup_original_size_bytes, run.backup_compressed_size_bytes, run.backup_deduplicated_size_bytes].some((value) => value != null)
     ? `Dedupliziert ${formatBytes(run.backup_deduplicated_size_bytes)} · Original ${formatBytes(run.backup_original_size_bytes)} · Komprimiert ${formatBytes(run.backup_compressed_size_bytes)}`
     : '–';
-  $('#log-summary').innerHTML = `<div><span>Status</span><strong class="status-text ${esc(run.status)}">${esc(runStatusLabel(run.status))}</strong></div><div><span>Gestartet</span><strong>${run.started_at ? esc(formatDate(run.started_at)) : 'wartet'}</strong></div><div><span>Dauer</span><strong>${esc(formatDuration(run.duration_seconds))}</strong></div><div><span>Lauf</span><strong>#${run.id}</strong></div><div><span>Ausführung</span><strong>${trigger}</strong></div><div><span>Backup-Größe</span><strong>${backupSize}</strong></div><div><span>Dateien</span><strong>${run.backup_file_count == null ? '–' : Number(run.backup_file_count).toLocaleString(currentLocale())}</strong></div>`;
+  const network = run.backup_network;
+  const networkInterface = network
+    ? `${esc(network.interface || '–')}${network.ip_address && network.ip_address !== '-' ? ' · ' + esc(network.ip_address) : ''}`
+    : '–';
+  const networkRates = network
+    ? `↑ ${esc(formatBitRate(network.upload_bits_per_second))} · ↓ ${esc(formatBitRate(network.download_bits_per_second))}`
+    : '–';
+  const networkTitle = String(currentLocale()).toLowerCase().startsWith('en')
+    ? 'Total traffic on the client interface selected by the route to the repository.'
+    : 'Gesamtverkehr des Client-Interfaces, das die Route zum Repository verwendet.';
+  $('#log-summary').innerHTML = `<div><span>Status</span><strong class="status-text ${esc(run.status)}">${esc(runStatusLabel(run.status))}</strong></div><div><span>Gestartet</span><strong>${run.started_at ? esc(formatDate(run.started_at)) : 'wartet'}</strong></div><div><span>Dauer</span><strong>${esc(formatDuration(run.duration_seconds))}</strong></div><div><span>Lauf</span><strong>#${run.id}</strong></div><div><span>Ausführung</span><strong>${trigger}</strong></div><div><span>Backup-Größe</span><strong>${backupSize}</strong></div><div><span>Dateien</span><strong>${run.backup_file_count == null ? '–' : Number(run.backup_file_count).toLocaleString(currentLocale())}</strong></div><div class="run-network-summary" title="${esc(networkTitle)}"><span>Netzwerk</span><strong>${networkInterface}</strong><small>${networkRates}</small></div>`;
+
+  const bbmNetwork = run.bbm_network;
+  const bbmChip = $('#bbm-network-live');
+  if (bbmChip) {
+    bbmChip.classList.toggle('hidden', !active);
+    const managerInterface = bbmNetwork?.interface || 'BBM';
+    const managerRates = bbmNetwork
+      ? `↑ ${formatBitRate(bbmNetwork.upload_bits_per_second)} · ↓ ${formatBitRate(bbmNetwork.download_bits_per_second)}`
+      : '↑ – · ↓ –';
+    bbmChip.innerHTML = `<span>BBM · ${esc(managerInterface)}</span><strong>${esc(managerRates)}</strong>`;
+  }
+  const stopLiveButton = $('#stop-live-run');
+  if (stopLiveButton) {
+    const canStop = active && state.currentUser?.role === 'admin';
+    stopLiveButton.classList.toggle('hidden', !canStop);
+    stopLiveButton.disabled = !canStop;
+    stopLiveButton.dataset.runId = canStop ? String(run.id) : '';
+  }
   renderWarningCauses(run.warning_summary);
   const box = $('#log-diagnosis');
   box.classList.toggle('hidden', !run.diagnosis);
@@ -1971,7 +2178,11 @@ function showTextDialog(title, text) {
   state.liveLogRequestPending = false;
   $('#log-dialog h2').textContent = title;
   $('#log-live-state').textContent = '';
+  $('#bbm-network-live')?.classList.add('hidden');
+  $('#stop-live-run')?.classList.add('hidden');
   $('#log-diagnosis').classList.add('hidden');
+  $('#log-backup-progress').classList.add('hidden');
+  $('#log-backup-progress').innerHTML = '';
   $('#log-warning-causes').classList.add('hidden');
   $('#log-warning-causes').innerHTML = '';
   $('#log-version-warning').classList.add('hidden');
@@ -2005,8 +2216,8 @@ async function showRun(id) {
   }
 }
 
-async function cancelExecution(id) {
-  const release = markButtonBusy(actionButton(), 'Abbruch läuft …');
+async function cancelExecution(id, explicitButton = null) {
+  const release = markButtonBusy(actionButton(explicitButton), 'Abbruch läuft …');
   try {
     await api(`/runs/${id}/cancel`, {method: 'POST'});
     await refreshAreas(['dashboard', 'runs'], `Abbruch für #${id} wurde angefordert …`);
@@ -2100,10 +2311,59 @@ function editHost(id) {
   form.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
+function resetHostSshActionForm() {
+  const form = $('#host-ssh-action-form');
+  if (!form) return;
+  form.reset();
+  form.elements.id.value = '';
+  form.elements.timeout_seconds.value = '300';
+  form.elements.enabled.checked = true;
+  $('#host-ssh-action-submit').textContent = 'SSH-Aktion speichern';
+  $('#cancel-host-ssh-action-edit').classList.add('hidden');
+  renderHosts();
+}
+
+function editHostSshAction(id) {
+  const item = state.hostSshActions.find((entry) => entry.id === id);
+  if (!item) return;
+  goToView('hosts');
+  const form = $('#host-ssh-action-form');
+  for (const name of ['id', 'host_id', 'name', 'command', 'timeout_seconds']) form.elements[name].value = item[name] ?? '';
+  form.elements.enabled.checked = Boolean(item.enabled);
+  $('#host-ssh-action-submit').textContent = 'Änderungen speichern';
+  $('#cancel-host-ssh-action-edit').classList.remove('hidden');
+  form.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+
+async function runHostSshAction(id) {
+  const item = state.hostSshActions.find((entry) => entry.id === id);
+  const host = state.hosts.find((entry) => entry.id === item?.host_id);
+  if (!item || !host) return;
+  if (!confirm(`SSH-Aktion „${item.name}“ auf „${host.name}“ wirklich ausführen?\n\n${item.command}`)) return;
+  try {
+    const result = await api(`/host-ssh-actions/${id}/run`, {method: 'POST'});
+    toast(`SSH-Aktion gestartet · Lauf #${result.run_id}`);
+    await refreshAreas(['dashboard', 'runs'], 'SSH-Aktion wurde eingereiht …');
+    watchRunCompletion(result.run_id, {areas: ['dashboard', 'runs', 'repositories', 'jobs']});
+    showRun(result.run_id);
+  } catch (error) { toast(error.message, true); }
+}
+
+async function deleteHostSshAction(id) {
+  const item = state.hostSshActions.find((entry) => entry.id === id);
+  if (!item || !confirm(`SSH-Aktion „${item.name}“ wirklich löschen?`)) return;
+  try {
+    await api(`/host-ssh-actions/${id}`, {method: 'DELETE'});
+    if (String($('#host-ssh-action-form').elements.id.value) === String(id)) resetHostSshActionForm();
+    await refreshAreas(['sshActions'], 'SSH-Aktionen werden aktualisiert …');
+    toast('SSH-Aktion gelöscht');
+  } catch (error) { toast(error.message, true); }
+}
+
 function resetRepositoryForm() {
   const form = $('#repo-form'); form.reset(); form.elements.id.value = ''; form.elements.import_directory.value = '';
   form.elements.managed.disabled = false; form.elements.encryption_mode.disabled = false; form.elements.generate_external_ssh_key.checked = true; form.elements.scan_external_host_key.checked = true; form.elements.external_ssh_private_key.value = ''; form.elements.external_known_hosts.value = '';
-  form.elements.storage_guard_mode.value = 'inherit'; form.elements.storage_guard_threshold_percent.value = '';
+  form.elements.storage_guard_mode.value = 'inherit'; form.elements.storage_guard_threshold_percent.value = ''; form.elements.parallel_limit.value = '1';
   $('#repo-form-title').textContent = 'Repository hinzufügen'; $('#cancel-repo-edit').classList.add('hidden');
   $('#repo-manager-key-info').classList.add('hidden'); $('#repo-manager-key-info').innerHTML = '';
   clearRepositoryStatus();
@@ -2120,6 +2380,7 @@ function editRepository(id) {
   form.elements.generate_external_ssh_key.checked = false; form.elements.scan_external_host_key.checked = false;
   form.elements.storage_guard_mode.value = repo.storage_guard_enabled == null ? 'inherit' : (repo.storage_guard_enabled ? 'enabled' : 'disabled');
   form.elements.storage_guard_threshold_percent.value = repo.storage_guard_threshold_percent ?? '';
+  form.elements.parallel_limit.value = repo.parallel_limit || 1;
   form.elements.managed.disabled = true; form.elements.encryption_mode.disabled = repo.repository_present;
   const keyInfo = $('#repo-manager-key-info');
   if (!repo.managed && repo.external_ssh_public_key) {
@@ -2168,6 +2429,13 @@ async function browseRepositoryDirectories(path = '') {
     const up = $('#repository-browser-up');
     up.disabled = data.parent == null;
     up.dataset.parent = data.parent ?? '';
+    const selectCurrent = $('#repository-browser-select-current');
+    selectCurrent.classList.toggle('hidden', !data.current_selectable);
+    selectCurrent.dataset.repositoryBrowserSelect = data.current_selectable ? data.path : '';
+    selectCurrent.onclick = data.current_selectable ? () => {
+      prepareRepositoryImport(data.path, repositoryBrowserSuggestedName(data.path));
+      panel.classList.add('hidden');
+    } : null;
     list.innerHTML = data.entries.length ? data.entries.map((item) => {
       const type = translateMessage(item.type === 'directory' ? (item.is_repository ? 'Borg-Repository' : 'Ordner') : (item.type === 'symlink' ? 'Symbolischer Link' : 'Datei'));
       const meta = `${type}${item.modified_at ? ' · ' + formatDate(item.modified_at) : ''}${item.size != null ? ' · ' + formatBytes(item.size) : ''}`;
@@ -2235,11 +2503,12 @@ function toggleRepositoryMode() {
 
 function resetJobForm() {
   const form = $('#job-form'); form.reset(); form.elements.id.value = ''; form.elements.enabled.checked = true;
-  form.elements.one_file_system.checked = true; form.elements.exclude_caches.checked = true; form.elements.exclude_nodump.checked = true; form.elements.numeric_ids.checked = false; form.elements.list_files.checked = true;
+  form.elements.one_file_system.checked = true; form.elements.exclude_caches.checked = true; form.elements.exclude_nodump.checked = true; form.elements.numeric_ids.checked = false; form.elements.list_files.checked = false;
   form.elements.files_cache.value = 'ctime,size,inode'; form.elements.checkpoint_interval.value = 1800;
+  form.elements.manual_prune_after_backup.checked = false; form.elements.manual_compact_after_prune.checked = false;
   $('#archive-prefix-hint').textContent = 'Automatisches Präfix wird nach dem Speichern erzeugt.';
   $('#job-form-title').textContent = 'Backup-Job erstellen'; $('#job-submit').textContent = 'Job speichern'; $('#cancel-job-edit').classList.add('hidden');
-  toggleCompressionMode();
+  toggleCompressionMode(); syncManualMaintenanceOptions();
 }
 
 function editJob(id) {
@@ -2255,9 +2524,10 @@ function editJob(id) {
   for (const key of ['one_file_system', 'exclude_caches', 'exclude_nodump', 'numeric_ids']) form.elements[key].checked = Boolean(options[key]);
   form.elements.list_files.checked = options.list_files !== false;
   form.elements.files_cache.value = options.files_cache || 'ctime,size,inode'; form.elements.checkpoint_interval.value = options.checkpoint_interval || 1800; form.elements.enabled.checked = job.enabled;
+  form.elements.manual_prune_after_backup.checked = Boolean(job.manual_prune_after_backup); form.elements.manual_compact_after_prune.checked = Boolean(job.manual_compact_after_prune);
   $('#archive-prefix-hint').textContent = 'Effektiver Archivname: ' + job.archive_prefix + job.archive_template;
   $('#job-form-title').textContent = 'Backup-Job bearbeiten'; $('#job-submit').textContent = 'Änderungen speichern'; $('#cancel-job-edit').classList.remove('hidden');
-  toggleCompressionMode(); form.scrollIntoView({behavior: 'smooth', block: 'start'});
+  toggleCompressionMode(); syncManualMaintenanceOptions(); form.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 function bindForm(selector, handler, impacts) {
@@ -2268,6 +2538,7 @@ function bindForm(selector, handler, impacts) {
     try {
       await handler(new FormData(event.target));
       if (selector === '#host-form') resetHostForm();
+      else if (selector === '#host-ssh-action-form') resetHostSshActionForm();
       else if (selector === '#job-form') resetJobForm();
       else if (selector === '#repo-form') resetRepositoryForm();
       else event.target.reset();
@@ -2284,6 +2555,17 @@ bindForm('#host-form', (form) => {
   return api(id ? `/hosts/${id}` : '/hosts', {method: id ? 'PUT' : 'POST', body: JSON.stringify({name: form.get('name'), address: form.get('address'), username: form.get('username'), port: +form.get('port'), enabled: form.get('enabled') === 'on', host_key: form.get('host_key')})});
 }, ['dashboard', 'hosts', 'jobs']);
 
+bindForm('#host-ssh-action-form', (form) => {
+  const id = form.get('id');
+  return api(id ? `/host-ssh-actions/${id}` : '/host-ssh-actions', {
+    method: id ? 'PUT' : 'POST',
+    body: JSON.stringify({
+      host_id: +form.get('host_id'), name: form.get('name'), command: form.get('command'),
+      timeout_seconds: +form.get('timeout_seconds') || 300, enabled: form.get('enabled') === 'on',
+    }),
+  });
+}, ['sshActions']);
+
 bindForm('#repo-form', (form) => {
   const id = form.get('id');
   const importDirectory = form.get('import_directory');
@@ -2293,8 +2575,8 @@ bindForm('#repo-form', (form) => {
   const guardMode = managed ? form.get('storage_guard_mode') : 'inherit';
   const guardEnabled = guardMode === 'inherit' ? null : guardMode === 'enabled';
   const guardThreshold = managed && form.get('storage_guard_threshold_percent') ? +form.get('storage_guard_threshold_percent') : null;
-  if (importDirectory) return api('/repositories/import', {method: 'POST', body: JSON.stringify({name: form.get('name'), directory_name: importDirectory, encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, storage_guard_enabled: guardEnabled, storage_guard_threshold_percent: guardThreshold})});
-  return api(id ? `/repositories/${id}` : '/repositories', {method: id ? 'PUT' : 'POST', body: JSON.stringify({name: form.get('name'), managed, location: managed ? null : form.get('location'), external_ssh_private_key: managed ? null : (form.get('external_ssh_private_key') || null), external_known_hosts: managed ? null : (form.get('external_known_hosts') || null), generate_external_ssh_key: managed ? false : form.get('generate_external_ssh_key') === 'on', scan_external_host_key: managed ? false : form.get('scan_external_host_key') === 'on', encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, passphrase_env: null, extra_env: {}, storage_guard_enabled: managed ? guardEnabled : null, storage_guard_threshold_percent: managed ? guardThreshold : null})});
+  if (importDirectory) return api('/repositories/import', {method: 'POST', body: JSON.stringify({name: form.get('name'), directory_name: importDirectory, encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, storage_guard_enabled: guardEnabled, storage_guard_threshold_percent: guardThreshold, parallel_limit: +form.get('parallel_limit') || 1})});
+  return api(id ? `/repositories/${id}` : '/repositories', {method: id ? 'PUT' : 'POST', body: JSON.stringify({name: form.get('name'), managed, location: managed ? null : form.get('location'), external_ssh_private_key: managed ? null : (form.get('external_ssh_private_key') || null), external_known_hosts: managed ? null : (form.get('external_known_hosts') || null), generate_external_ssh_key: managed ? false : form.get('generate_external_ssh_key') === 'on', scan_external_host_key: managed ? false : form.get('scan_external_host_key') === 'on', encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, passphrase_env: null, extra_env: {}, storage_guard_enabled: managed ? guardEnabled : null, storage_guard_threshold_percent: managed ? guardThreshold : null, parallel_limit: +form.get('parallel_limit') || 1})});
 }, ['dashboard', 'repositories', 'jobs']);
 
 bindForm('#job-form', (form) => {
@@ -2302,7 +2584,7 @@ bindForm('#job-form', (form) => {
   if (!compression) throw new Error('Kompressionsspezifikation fehlt');
   const id = form.get('id');
   const createOptions = {one_file_system: form.get('one_file_system') === 'on', exclude_caches: form.get('exclude_caches') === 'on', exclude_nodump: form.get('exclude_nodump') === 'on', numeric_ids: form.get('numeric_ids') === 'on', list_files: form.get('list_files') === 'on', files_cache: form.get('files_cache'), checkpoint_interval: +form.get('checkpoint_interval')};
-  return api(id ? `/jobs/${id}` : '/jobs', {method: id ? 'PUT' : 'POST', body: JSON.stringify({name: form.get('name'), host_id: +form.get('host_id'), repository_id: +form.get('repository_id'), source_paths: lines(form.get('source_paths')), exclude_patterns: lines(form.get('exclude_patterns')), archive_template: form.get('archive_template'), compression, prune_options: Object.fromEntries(['last', 'hourly', 'daily', 'weekly', 'monthly', 'yearly'].map((key) => [key, +form.get(key)]).filter(([, value]) => value > 0)), create_options: createOptions, enabled: form.get('enabled') === 'on'})});
+  return api(id ? `/jobs/${id}` : '/jobs', {method: id ? 'PUT' : 'POST', body: JSON.stringify({name: form.get('name'), host_id: +form.get('host_id'), repository_id: +form.get('repository_id'), source_paths: lines(form.get('source_paths')), exclude_patterns: lines(form.get('exclude_patterns')), archive_template: form.get('archive_template'), compression, prune_options: Object.fromEntries(['last', 'hourly', 'daily', 'weekly', 'monthly', 'yearly'].map((key) => [key, +form.get(key)]).filter(([, value]) => value > 0)), create_options: createOptions, manual_prune_after_backup: form.get('manual_prune_after_backup') === 'on', manual_compact_after_prune: form.get('manual_compact_after_prune') === 'on', enabled: form.get('enabled') === 'on'})});
 }, ['dashboard', 'jobs', 'hosts', 'repositories', 'schedules']);
 
 
@@ -2896,6 +3178,15 @@ function formatBytes(value) {
   return `${number.toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
+function formatBitRate(value) {
+  if (value == null || !Number.isFinite(Number(value))) return '–';
+  const units = ['bit/s', 'kbit/s', 'Mbit/s', 'Gbit/s', 'Tbit/s'];
+  let number = Math.max(0, Number(value));
+  let unit = 0;
+  while (number >= 1000 && unit < units.length - 1) { number /= 1000; unit += 1; }
+  return `${number.toLocaleString(currentLocale(), {maximumFractionDigits: unit ? 1 : 0})} ${units[unit]}`;
+}
+
 function formatDuration(value) {
   if (value == null || Number.isNaN(Number(value))) return '–';
   let seconds = Math.max(0, Number(value));
@@ -2931,12 +3222,29 @@ $('#apply-exclude-template').onclick = () => {
   field.value = merged.join('\n');
   toast(`Vorlage „${template.name}“ hinzugefügt`);
 };
+$('#exclude-template-select').onchange = (event) => {
+  commitExcludeTemplateEditor();
+  state.excludeTemplateSelection = Number.parseInt(event.target.value, 10);
+  if (!Number.isInteger(state.excludeTemplateSelection)) state.excludeTemplateSelection = -1;
+  renderExcludeTemplateEditor();
+};
 $('#add-exclude-template').onclick = () => {
-  const empty = $('#exclude-template-editor .template-empty');
-  if (empty) empty.remove();
-  appendExcludeTemplateEditor();
-  const cards = $$('.exclude-template-card');
-  cards[cards.length - 1]?.querySelector('[data-template-name]')?.focus();
+  commitExcludeTemplateEditor();
+  ensureExcludeTemplateDrafts();
+  state.excludeTemplateDrafts.push({name: '', patterns: []});
+  state.excludeTemplateSelection = state.excludeTemplateDrafts.length - 1;
+  renderExcludeTemplateEditor();
+  $('#exclude-template-name')?.focus();
+};
+$('#remove-exclude-template').onclick = () => {
+  ensureExcludeTemplateDrafts();
+  const index = state.excludeTemplateSelection;
+  if (index < 0 || index >= state.excludeTemplateDrafts.length) return;
+  const name = state.excludeTemplateDrafts[index]?.name || `Vorlage ${index + 1}`;
+  if (!confirm(`Ausschlussvorlage „${name}“ wirklich löschen? Die Änderung wird erst mit „Einstellungen speichern“ übernommen.`)) return;
+  state.excludeTemplateDrafts.splice(index, 1);
+  state.excludeTemplateSelection = state.excludeTemplateDrafts.length ? Math.min(index, state.excludeTemplateDrafts.length - 1) : -1;
+  renderExcludeTemplateEditor();
 };
 $('#job-search').oninput = (event) => { state.jobSearch = event.target.value; renderJobs(); };
 $('#job-status-filter').onchange = (event) => { state.jobStatus = event.target.value; renderJobs(); };
@@ -2945,6 +3253,7 @@ $('#runs-search').oninput = (event) => { state.runSearch = event.target.value; r
 $('#sync-state').onclick = openCurrentActiveRun;
 $('#refresh').onclick = async (event) => { const release = markButtonBusy(event.currentTarget, 'Aktualisiere …'); try { await loadAll(false); } finally { release(); } };
 $('#close-dialog').onclick = () => { state.liveRunId = null; state.liveLogOffset = 0; state.liveLogSession += 1; state.liveLogRequestPending = false; $('#log-dialog').close(); };
+$('#stop-live-run').onclick = (event) => { const runId = Number(event.currentTarget.dataset.runId || state.liveRunId || 0); if (runId) cancelExecution(runId, event.currentTarget); };
 $('#scan-host-key').onclick = async (event) => {
   const form = $('#host-form'); const address = form.elements.address.value.trim(); const port = +form.elements.port.value;
   if (!address) return toast('Adresse zuerst eingeben', true);
@@ -2965,6 +3274,7 @@ $('#accept-host-key').onclick = acceptPendingHostKey;
 $('#discard-host-key').onclick = () => { $('#host-form').elements.host_key.value = ''; clearPendingHostKey(); };
 ['address', 'port'].forEach((name) => $('#host-form').elements[name].addEventListener('input', () => { $('#host-form').elements.host_key.value = ''; clearPendingHostKey(); }));
 $('#cancel-host-edit').onclick = resetHostForm;
+$('#cancel-host-ssh-action-edit').onclick = resetHostSshActionForm;
 $('#cancel-repo-edit').onclick = resetRepositoryForm;
 $('#repo-form').elements.managed.onchange = toggleRepositoryMode;
 $('#repo-form').elements.encryption_mode.onchange = toggleRepositoryMode;
@@ -2979,6 +3289,7 @@ $('#add-schedule-time').onclick = () => { addScheduleTime('02:00'); updateSchedu
 $$('#schedule-weekdays input').forEach((input) => input.onchange = updateSchedulePreview);
 $('#schedule-day').oninput = updateSchedulePreview;
 $('#schedule-custom').oninput = updateSchedulePreview;
+$('#refresh-repositories').onclick = () => refreshAreas(['repositories', 'jobs', 'dashboard'], 'Repository-Status wird aktualisiert …');
 $('#discover-repositories').onclick = discoverRepositories;
 $('#browse-repositories').onclick = () => browseRepositoryDirectories('');
 $('#repository-browser-up').onclick = () => browseRepositoryDirectories($('#repository-browser-up').dataset.parent || '');
@@ -3409,7 +3720,7 @@ $('#settings-form').elements.list_max_height.oninput = (event) => {
 };
 $('#settings-form').onsubmit = async (event) => {
   event.preventDefault(); const release = markButtonBusy(event.submitter, 'Wird gespeichert …'); setSyncState('Einstellungen werden gespeichert …', 'pending', true); const form = new FormData(event.target);
-  const payload = {appearance: state.settings.appearance || 'auto', density: form.get('density'), dashboard_recent_runs_limit: +form.get('dashboard_recent_runs_limit'), runs_list_limit: +form.get('runs_list_limit'), auto_refresh_seconds: +form.get('auto_refresh_seconds'), list_max_height: +form.get('list_max_height'), run_retention_days: +form.get('run_retention_days'), run_log_max_mib: +form.get('run_log_max_mib'), run_log_view_kib: +form.get('run_log_view_kib'), max_parallel_runs: +form.get('max_parallel_runs'), repository_size_after_run: form.get('repository_size_after_run') === 'on', compact_after_prune: form.get('compact_after_prune') === 'on', storage_guard_enabled: form.get('storage_guard_enabled') === 'on', storage_guard_threshold_percent: +form.get('storage_guard_threshold_percent'), exclude_templates: collectExcludeTemplates()};
+  const payload = {appearance: state.settings.appearance || 'auto', density: form.get('density'), dashboard_recent_runs_limit: +form.get('dashboard_recent_runs_limit'), runs_list_limit: +form.get('runs_list_limit'), auto_refresh_seconds: +form.get('auto_refresh_seconds'), list_max_height: +form.get('list_max_height'), run_retention_days: +form.get('run_retention_days'), run_log_max_mib: +form.get('run_log_max_mib'), run_log_view_kib: +form.get('run_log_view_kib'), max_parallel_runs: +form.get('max_parallel_runs'), source_stats_parallel_limit: +form.get('source_stats_parallel_limit'), mount_parallel_limits: collectMountParallelLimits(), repository_size_after_run: form.get('repository_size_after_run') === 'on', compact_after_prune: form.get('compact_after_prune') === 'on', storage_guard_enabled: form.get('storage_guard_enabled') === 'on', storage_guard_threshold_percent: +form.get('storage_guard_threshold_percent'), exclude_templates: collectExcludeTemplates()};
   try { state.settings = await api('/settings', {method: 'PUT', body: JSON.stringify(payload)}); renderSettings(); scheduleRefresh(); setSyncState('Einstellungen übernommen', 'success'); toast('Einstellungen gespeichert'); }
   catch (error) { setSyncState('Einstellungen konnten nicht gespeichert werden', 'error'); toast(error.message, true); }
   finally { release(); }
@@ -3439,7 +3750,7 @@ document.addEventListener('bbm-language-changed', (event) => {
 const BBM_ACTION_HANDLERS = Object.freeze({
   removeEntity, action, showRun, resetRepositoryState, initRepository, compactRepository, goToView, goToRuns,
   toggleJobActions, cancelExecution, retryExecution, deleteExecution, refreshRepoSize, testRepository,
-  clearRepositoryCache, editHost, checkHostVersion, setHostEnabled, editRepository, copyRepositoryPublicKey, editJob, setJobEnabled,
+  clearRepositoryCache, editHost, checkHostVersion, setHostEnabled, editHostSshAction, runHostSshAction, deleteHostSshAction, editRepository, copyRepositoryPublicKey, editJob, setJobEnabled,
   bootstrapJob, confirmRepositoryLocation, editSchedule, deleteSchedule, openRepositoryArchives,
   editUser, resetUserPassword, deleteUser, showRepositoryDiagnostic, showRepositoryStatusDetails,
 });
@@ -3479,7 +3790,7 @@ document.addEventListener('click', (event) => {
 
 Object.assign(window, {
   removeEntity, action, showRun, openActiveRun, resetRepositoryState, initRepository, compactRepository, goToView, goToRuns, toggleJobActions, cancelExecution, retryExecution, deleteExecution, cleanupRunHistory,
-  refreshRepoSize, testRepository, clearRepositoryCache, downloadBackup, deleteBackup, rotateControllerKey, editHost, setHostEnabled, editRepository, editJob, setJobEnabled, editSchedule, deleteSchedule, prepareRepositoryImport,
+  refreshRepoSize, testRepository, clearRepositoryCache, downloadBackup, deleteBackup, rotateControllerKey, editHost, setHostEnabled, editHostSshAction, runHostSshAction, deleteHostSshAction, editRepository, editJob, setJobEnabled, editSchedule, deleteSchedule, prepareRepositoryImport,
   openRepositoryArchives, archiveInfo, renameArchive, deleteArchive, deleteSelectedArchives, openArchiveBrowser, prepareRestore, exportBrowserSelection, editUser, resetUserPassword, deleteUser,
   showRepositoryDiagnostic, showRepositoryStatusDetails,
 });
@@ -3508,3 +3819,7 @@ async function restoreBrowserSession() {
   }
 }
 restoreBrowserSession();
+
+function syncManualMaintenanceOptions() { const form = $('#job-form'); if (!form) return; const prune = form.elements.manual_prune_after_backup; const compact = form.elements.manual_compact_after_prune; if (!prune || !compact) return; compact.disabled = !prune.checked; if (!prune.checked) compact.checked = false; }
+$('#job-form').elements.manual_prune_after_backup.addEventListener('change', syncManualMaintenanceOptions);
+syncManualMaintenanceOptions();

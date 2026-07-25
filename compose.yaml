@@ -32,6 +32,7 @@ services:
       BBM_COMMAND_TIMEOUT: ${BBM_COMMAND_TIMEOUT:-86400}
       BBM_REPOSITORY_SIZE_AFTER_RUN: ${BBM_REPOSITORY_SIZE_AFTER_RUN:-1}
       BBM_MAX_PARALLEL_RUNS: ${BBM_MAX_PARALLEL_RUNS:-0}
+      BBM_SOURCE_STATS_PARALLEL_LIMIT: ${BBM_SOURCE_STATS_PARALLEL_LIMIT:-1}
       BBM_APPEARANCE: ${BBM_APPEARANCE:-auto}
       BBM_SESSION_COOKIE_NAME: ${BBM_SESSION_COOKIE_NAME:-bbm_session_v2}
       BBM_SESSION_COOKIE_SECURE: ${BBM_SESSION_COOKIE_SECURE:-always}
@@ -51,7 +52,7 @@ services:
       - no-new-privileges:true
     volumes:
       - ${BBM_DATA_PATH:-./data}:/data
-      - ${BBM_REPOSITORY_PATH:-./repositories}:/repositories
+      - ${BBM_REPOSITORY_PATH:-./repositories}:/repositories:rslave
       - ./.env:/run/bbm-host.env
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('https://127.0.0.1:8443/api/ready', context=__import__('ssl')._create_unverified_context(), timeout=5)"]

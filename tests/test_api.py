@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 TEST_DATA_DIR = Path(tempfile.gettempdir()) / f"bbm-test-data-{os.getpid()}"
@@ -741,7 +742,7 @@ def test_existing_repository_can_be_discovered_and_imported(monkeypatch, tmp_pat
 
     suffix = uuid4().hex[:8]
     repository_root = tmp_path / "repositories"
-    existing = repository_root / f"existing-{suffix}"
+    existing = repository_root / "offline-nas" / "borg" / f"existing-{suffix}"
     existing.mkdir(parents=True)
     (existing / "config").write_text("[repository]\nid = abcdef123456\n", encoding="utf-8")
     monkeypatch.setattr(main_module, "REPOSITORY_ROOT", repository_root)
@@ -756,18 +757,20 @@ def test_existing_repository_can_be_discovered_and_imported(monkeypatch, tmp_pat
             "/api/repositories/import", headers=AUTH,
             json={
                 "name": f"Imported {suffix}",
-                "directory_name": existing.name,
+                "directory_name": existing.relative_to(repository_root).as_posix(),
                 "encryption_mode": "none",
             },
         )
         discovered_after = client.get("/api/repositories/discover", headers=AUTH)
 
     assert discovered.status_code == 200
-    assert any(item["directory_name"] == existing.name for item in discovered.json())
+    relative = existing.relative_to(repository_root).as_posix()
+    assert any(item["directory_name"] == relative for item in discovered.json())
     assert imported.status_code == 201
     assert imported.json()["managed"] is True
     assert imported.json()["initialized"] is True
-    assert all(item["directory_name"] != existing.name for item in discovered_after.json())
+    assert all(item["directory_name"] != relative for item in discovered_after.json())
+    assert imported.json()["location"].endswith("/./" + relative)
 
 
 def test_host_deletion_removes_repository_access_rows():
@@ -3042,3 +3045,68 @@ def test_archive_diff_labels_mixed_jobs_instead_of_first_repository_job(monkeypa
     assert captured["job_id"] == first_id
     assert captured["action"] == "diff-archives"
     assert captured["run_label"] == f"{first_name} ↔ {second_name}"
+
+
+def test_run_json_exposes_lightweight_live_backup_progress(monkeypatch):
+    job = Job(
+        id=701,
+        name="progress-job",
+        host_id=1,
+        repository_id=1,
+        source_paths_json='["/srv"]',
+        exclude_patterns_json='[]',
+        source_size_bytes=10_000,
+        source_file_count=100,
+        source_stats_origin="backup",
+    )
+    row = Run(
+        id=17001,
+        job_id=job.id,
+        action="backup",
+        status="running",
+        started_at=datetime.now(timezone.utc) - timedelta(seconds=100),
+    )
+    row.job = job
+    monkeypatch.setattr(main_module, "get_run_progress", lambda _run_id: {
+        "original_bytes": 5_000,
+        "compressed_bytes": 4_000,
+        "deduplicated_bytes": 500,
+        "files": 60,
+        "path": "/srv/current.dat",
+    })
+    monkeypatch.setattr(main_module, "read_run_log", lambda *_args, **_kwargs: "")
+    payload = main_module.run_json(row)
+    progress = payload["backup_progress"]
+    assert progress["files"] == 60
+    assert progress["estimated_total_files"] == 100
+    assert progress["estimated_total_bytes"] == 10_000
+    assert progress["estimated_percent"] == 50.0
+    assert 95 <= progress["estimated_eta_seconds"] <= 105
+    assert progress["path"] == "/srv/current.dat"
+
+
+def test_run_json_exposes_manager_network_only_for_incremental_active_poll(monkeypatch):
+    row = Run(
+        id=17002,
+        job_id=None,
+        action="backup",
+        status="running",
+        started_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+    )
+    monkeypatch.setattr(main_module, "read_run_log_delta", lambda *_args, **_kwargs: {
+        "text": "", "offset": 0, "reset": False, "truncated": False,
+    })
+    monkeypatch.setattr(main_module, "sample_manager_network", lambda: {
+        "interface": "eth0",
+        "download_bits_per_second": 1_000.0,
+        "upload_bits_per_second": 2_000.0,
+    })
+    payload = main_module.run_json(row, log_offset=0)
+    assert payload["bbm_network"] == {
+        "interface": "eth0",
+        "download_bits_per_second": 1_000.0,
+        "upload_bits_per_second": 2_000.0,
+    }
+
+    payload = main_module.run_json(row)
+    assert payload["bbm_network"] is None

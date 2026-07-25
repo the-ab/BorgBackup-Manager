@@ -53,6 +53,7 @@ def migrate_schema(target_engine=engine) -> None:
             "validated_at": "DATETIME",
             "storage_guard_enabled": "BOOLEAN",
             "storage_guard_threshold_percent": "INTEGER",
+            "parallel_limit": "INTEGER NOT NULL DEFAULT 1",
         },
         "jobs": {
             "archive_prefix": "VARCHAR(80)",
@@ -62,6 +63,8 @@ def migrate_schema(target_engine=engine) -> None:
             "source_file_count": "INTEGER",
             "source_stats_checked_at": "DATETIME",
             "source_stats_origin": "VARCHAR(20)",
+            "manual_prune_after_backup": "BOOLEAN NOT NULL DEFAULT 0",
+            "manual_compact_after_prune": "BOOLEAN NOT NULL DEFAULT 0",
         },
         "backup_schedules": {
             "parallel_limit": "INTEGER NOT NULL DEFAULT 0",

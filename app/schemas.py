@@ -121,6 +121,36 @@ class HostOut(HostIn, ORMModel):
     borg_checked_at: datetime | None = None
 
 
+class HostSshActionIn(BaseModel):
+    host_id: int = Field(gt=0)
+    name: str = Field(min_length=1, max_length=100)
+    command: str = Field(min_length=1, max_length=4000)
+    timeout_seconds: int = Field(default=300, ge=5, le=3600)
+    enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def normalize_action_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value or any(c in value for c in "\x00\r\n"):
+            raise ValueError("action name must be a non-empty single-line value")
+        return value
+
+    @field_validator("command")
+    @classmethod
+    def normalize_action_command(cls, value: str) -> str:
+        value = value.strip()
+        if not value or "\x00" in value:
+            raise ValueError("SSH command must not be empty or contain NUL")
+        return value
+
+
+class HostSshActionOut(HostSshActionIn, ORMModel):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class HostScanIn(BaseModel):
     address: str = Field(min_length=1, max_length=255)
     port: int = Field(default=22, ge=1, le=65535)
@@ -149,6 +179,7 @@ class RepositoryIn(BaseModel):
     extra_env: dict[str, str] = Field(default_factory=dict)
     storage_guard_enabled: bool | None = None
     storage_guard_threshold_percent: int | None = Field(default=None, ge=1, le=100)
+    parallel_limit: int = Field(default=1, ge=1, le=64)
 
     @model_validator(mode="after")
     def valid_repository_mode(self):
@@ -265,6 +296,8 @@ class RepositoryOut(BaseModel):
     size_checked_at: Any | None = None
     storage_guard_enabled: bool | None = None
     storage_guard_threshold_percent: int | None = None
+    parallel_limit: int = 1
+    mount_path: str | None = None
     storage_guard_effective_enabled: bool = False
     storage_guard_effective_threshold_percent: int = 95
     storage_guard_source: str = "global"
@@ -283,6 +316,7 @@ class RepositoryImportIn(BaseModel):
     keyfile: SecretStr | None = None
     storage_guard_enabled: bool | None = None
     storage_guard_threshold_percent: int | None = Field(default=None, ge=1, le=100)
+    parallel_limit: int = Field(default=1, ge=1, le=64)
 
     @field_validator("name")
     @classmethod
@@ -293,9 +327,17 @@ class RepositoryImportIn(BaseModel):
     @classmethod
     def safe_directory_name(cls, value: str) -> str:
         value = value.strip()
-        if value in {".", ".."} or "/" in value or "\\" in value or any(c in value for c in "\x00\r\n"):
-            raise ValueError("directory_name must be one safe directory component")
-        return value
+        if value.startswith("/"):
+            raise ValueError("directory_name must be relative to /repositories")
+        value = value.strip("/")
+        if not value or "\\" in value or any(c in value for c in "\x00\r\n"):
+            raise ValueError("directory_name must be a safe relative path below /repositories")
+        parts = value.split("/")
+        if any(not part or part in {".", ".."} for part in parts):
+            raise ValueError("directory_name contains an unsafe path segment")
+        if len(parts) > 12:
+            raise ValueError("directory_name is nested too deeply")
+        return "/".join(parts)
 
     @field_validator("encryption_mode")
     @classmethod
@@ -366,6 +408,8 @@ class SettingsIn(BaseModel):
     density: str = Field(default="comfortable", pattern=r"^(comfortable|compact)$")
     appearance: str = Field(default="auto", pattern=r"^(light|dark|auto)$")
     max_parallel_runs: int = Field(default=0, ge=0, le=64)
+    source_stats_parallel_limit: int = Field(default=1, ge=1, le=64)
+    mount_parallel_limits: dict[str, int] = Field(default_factory=dict)
     repository_size_after_run: bool = True
     compact_after_prune: bool = True
     storage_guard_enabled: bool = True
@@ -377,6 +421,22 @@ class SettingsIn(BaseModel):
         default_factory=lambda: [ExcludeTemplate.model_validate(item) for item in DEFAULT_EXCLUDE_TEMPLATES],
         max_length=50,
     )
+
+    @field_validator("mount_parallel_limits")
+    @classmethod
+    def safe_mount_parallel_limits(cls, values: dict[str, int]) -> dict[str, int]:
+        normalized: dict[str, int] = {}
+        for raw_path, raw_limit in values.items():
+            path = str(raw_path).strip().rstrip("/") or "/"
+            pure = PurePosixPath(path)
+            if not pure.is_absolute() or ".." in pure.parts or not (path == "/repositories" or path.startswith("/repositories/")):
+                raise ValueError("mount parallel limit paths must stay below /repositories")
+            limit = int(raw_limit)
+            if not 0 <= limit <= 64:
+                raise ValueError("mount parallel limits must be between 0 and 64")
+            if limit > 0:
+                normalized[path] = limit
+        return normalized
 
     @field_validator("exclude_templates")
     @classmethod
@@ -410,6 +470,7 @@ class RepositoryUpdate(BaseModel):
     extra_env: dict[str, str] = Field(default_factory=dict)
     storage_guard_enabled: bool | None = None
     storage_guard_threshold_percent: int | None = Field(default=None, ge=1, le=100)
+    parallel_limit: int = Field(default=1, ge=1, le=64)
 
     @field_validator("name")
     @classmethod
@@ -486,6 +547,8 @@ class JobIn(BaseModel):
     compression: str = Field(default="zstd,6", max_length=100)
     prune_options: dict[str, int] = Field(default_factory=dict)
     create_options: dict[str, Any] = Field(default_factory=lambda: dict(DEFAULT_CREATE_OPTIONS))
+    manual_prune_after_backup: bool = False
+    manual_compact_after_prune: bool = False
     enabled: bool = True
 
     @field_validator("name")
@@ -558,6 +621,14 @@ class JobIn(BaseModel):
     @classmethod
     def valid_create_options(cls, values: dict[str, Any]) -> dict[str, Any]:
         return validate_create_options(values)
+
+    @model_validator(mode="after")
+    def valid_manual_maintenance(self):
+        if self.manual_compact_after_prune and not self.manual_prune_after_backup:
+            raise ValueError("manual compact requires manual prune")
+        if self.manual_prune_after_backup and not self.prune_options:
+            raise ValueError("manual prune requires at least one positive retention rule")
+        return self
 
 
 class JobOut(JobIn):

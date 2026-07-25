@@ -149,3 +149,33 @@ def test_job_editor_uses_left_space_and_keeps_paths_at_top_right():
     assert paths.index("Quellpfade") < paths.index("Ausschlussvorlage") < paths.index("Ausschlüsse")
     assert ".job-create-paths { align-self: start; }" in css
     assert "@media (max-width: 820px)" in css
+
+
+def test_live_backup_progress_widget_is_present_and_lightweight():
+    index = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    style = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    assert 'id="log-backup-progress"' in index
+    assert 'run.backup_progress' in script
+    assert 'estimated_eta_seconds' in script
+    assert 'backup-progress-grid' in style
+
+
+def test_live_dialog_exposes_manager_network_and_direct_stop_controls():
+    index = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    style = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    assert 'id="bbm-network-live"' in index
+    assert 'id="stop-live-run"' in index
+    assert 'run.bbm_network' in script
+    assert 'cancelExecution(runId, event.currentTarget)' in script
+    assert '.bbm-network-chip' in style
+
+
+def test_repository_and_mount_parallel_limit_controls_are_present():
+    index = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert 'name="parallel_limit"' in index
+    assert 'id="mount-parallel-editor"' in index
+    assert 'mount_parallel_limits: collectMountParallelLimits()' in script
+    assert 'repo.parallel_limit || 1' in script

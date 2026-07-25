@@ -386,7 +386,8 @@ def test_container_and_remote_borg_commands_use_europe_berlin():
     assert "AsyncIOScheduler(timezone=APP_TIMEZONE)" in main_source
     assert "schedule_expressions(schedule.expressions)" in main_source
     assert "CronTrigger.from_crontab(expression, timezone=APP_TIMEZONE)" in main_source
-    assert "id=f\"schedule-{schedule.id}-job-{job_id}-{index}\"" in main_source
+    assert "id=f\"schedule-{schedule.id}-{index}\"" in main_source
+    assert "scheduled_schedule" in main_source
 
 
 def test_job_workspace_and_manager_backup_ui_are_restructured():
@@ -789,3 +790,8 @@ def test_versioned_static_assets_are_cached_immutably():
     assert f"/static/style.css?v={version}" in html
     assert f"/static/help.${{normalized}}.html?v={version}" in javascript
     assert "{cache: 'no-store'}" not in javascript
+
+
+def test_repository_bind_mount_propagates_host_submounts():
+    compose = (PROJECT_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    assert "${BBM_REPOSITORY_PATH:-./repositories}:/repositories:rslave" in compose

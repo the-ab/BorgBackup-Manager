@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.0.63
+# Installation and Operations — BorgBackup Manager 1.0.71
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.0.63.zip
+BorgBackup-Manager-1.0.71.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.63.zip
+unzip /path/BorgBackup-Manager-1.0.71.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.0.63.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.0.71.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -120,6 +120,7 @@ BBM_COMMAND_TIMEOUT=86400
 BBM_APPEARANCE=auto
 BBM_REPOSITORY_SIZE_AFTER_RUN=1
 BBM_MAX_PARALLEL_RUNS=0
+BBM_SOURCE_STATS_PARALLEL_LIMIT=1
 BBM_STORAGE_GUARD_ENABLED=1
 BBM_STORAGE_GUARD_THRESHOLD_PERCENT=95
 BBM_HEALTH_REQUIRE_SSHD=1
@@ -210,6 +211,17 @@ Do not accept an unverified host-key change. Compare the fingerprint through a t
 
 Disabling a device automatically disables all active backup jobs assigned to it. Re-enabling the device does not re-enable those jobs automatically.
 
+### Saved SSH actions
+
+**Devices -> Saved SSH actions** lets administrators store recurring maintenance commands for a device. For example, a host mount already defined in fstab can be controlled with commands such as:
+
+```bash
+sudo -n mount /mnt/offline-backup
+sudo -n umount /mnt/offline-backup
+```
+
+The WebUI does not expose an ad-hoc SSH console. Only saved actions can be started, and every start requires confirmation. Name, command, target device, enabled state, and timeout are stored in `manager.db`. **Do not put credentials or tokens into commands**, because command text is not encrypted. Interactive password prompts are unsupported; use a narrowly scoped sudoers rule with `sudo -n` when elevated privileges are required. Output and errors are recorded as regular runs and can be cancelled from the live log.
+
 ## 9. Create or attach a repository
 
 ### Managed repository
@@ -259,7 +271,7 @@ A path below `/root/.cache/...` refers to the local cache of the SSH user `root`
 
 ## 10. Configure exclusion templates
 
-Create reusable templates in the central exclusion section. Assign one or more templates to jobs and add job-specific patterns where needed.
+Create reusable templates in the central exclusion section. Existing templates are selected from a drop-down and only the selected template is loaded into the editor. Assign a template to jobs and add job-specific patterns where needed. New jobs default to the CPU-efficient mode with the complete processed-file list disabled.
 
 Typical exclusions:
 
@@ -318,14 +330,20 @@ Schedules can target:
 
 A job may belong to only one active schedule. Configure multiple times inside that single schedule when required.
 
+Each schedule runs in three phases: all backups first, then the configured prune runs, and, when the system setting is enabled, finally at most one compact per affected repository. Several jobs sharing one repository therefore no longer trigger redundant compact operations. This system setting applies only to scheduled prune phases; a manually started prune does not trigger compact through it.
+
+For manual starts, a job can optionally enable **Prune after manual backup** and **Compact after successful manual prune** in its retention settings. While that chain is active, later runs for the same repository remain queued until backup, prune and optional compact have finished.
+
 ### Parallelism
 
-The repository lock always permits only one write/administration operation per physical repository. In addition, configure:
+Parallel execution is controlled at four additive levels:
 
-- **System -> Settings -> Global maximum parallel executions**,
-- **Maximum parallel executions** inside each schedule.
+- **global** maximum parallel manager executions (`0` = unlimited),
+- **per repository** maximum parallel backup runs (default `1`; repository maintenance/check operations remain exclusive),
+- **per detected managed mount** below `/repositories` (`0` = unlimited for that mount),
+- **per schedule** maximum parallel executions.
 
-Set a schedule limit to `1` to serialize jobs across different repositories when concurrent jobs would overload CPU, storage or network links.
+Repositories stored on the same physical filesystem or NFS mount share the configured mount limit, so separate repository directories cannot bypass the intended disk/I/O concurrency cap. A run starts only when every applicable limit has free capacity.
 
 ## 13. Run and monitor backups
 
@@ -333,7 +351,8 @@ Start a job from the dashboard or job list. Open the live log from the task indi
 
 Queue reasons are displayed explicitly:
 
-- repository busy,
+- repository capacity reached,
+- repository mount capacity reached,
 - global limit reached,
 - schedule limit reached,
 - waiting for an older FIFO repository operation.

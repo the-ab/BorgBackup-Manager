@@ -58,11 +58,15 @@ def parse_source_scan_statistics(text: str | None) -> dict[str, Any]:
         count = max(0, int(payload.get("file_count")))
     except (TypeError, ValueError):
         return {}
+    skipped_mounts = payload.get("skipped_mounts") if isinstance(payload.get("skipped_mounts"), list) else []
     return {
         "original_size_bytes": size,
         "file_count": count,
         "scan_method": str(payload.get("method") or "live-scan"),
         "warning_count": max(0, int(payload.get("warning_count") or 0)),
+        "skipped_mount_count": max(0, int(payload.get("skipped_mount_count") or 0)),
+        "skipped_mounts": [str(path) for path in skipped_mounts[:50]],
+        "included_mount_count": max(0, int(payload.get("included_mount_count") or 0)),
     }
 
 def parse_human_size(value: str) -> int | None:

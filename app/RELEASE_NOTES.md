@@ -1,5 +1,123 @@
 # Release Notes
 
+## v1.0.71 – 2026-07-25
+
+### Saved SSH actions per device
+
+- **Devices -> Saved SSH actions** lets administrators persist reusable non-interactive shell commands with target device, name, enabled state, and timeout. Typical use cases are host/NFS mount operations, controlled `systemctl` actions, and diagnostics.
+- The WebUI deliberately exposes no ad-hoc shell. Only previously saved action IDs can execute and every start requires confirmation.
+- Execution uses the existing controller key and verified device host key with `BatchMode=yes` and `StrictHostKeyChecking=yes`.
+- SSH actions are regular runs with live output, exit status, cancellation and history, and they count against the global concurrency limit. A per-action timeout from 5 to 3600 seconds prevents indefinitely hanging maintenance commands.
+- Command text is stored in `manager.db` and is not treated as an encrypted secret. The UI and documentation explicitly prohibit passwords, API tokens or other credentials in commands; `sudo -n` with a narrowly scoped sudoers rule is recommended for privileged operations.
+- New `host_ssh_actions` database table; existing devices, jobs, repositories and runs remain unchanged.
+
+## v1.0.70 – 2026-07-25
+
+### Source statistics integrated into concurrency control
+
+- Manual source-statistics refreshes now count against the global run limit and also have their own cap under **System → Settings → Parallelism limits**. The default is `1`, preventing several resource-intensive source scans from running simultaneously.
+- Source-statistics scans deliberately do not reserve a Borg repository or its mount because only the source device is read. Repository backups therefore are not blocked unnecessarily.
+- Queue messages explicitly identify the source-statistics limit. Optional environment default: `BBM_SOURCE_STATS_PARALLEL_LIMIT=1`.
+
+### Clearer compact setting
+
+- The system setting is now labelled **Run compact once per repository after a successful schedule prune phase**.
+- It applies only to schedules: after all backups and successful prune runs, at most one compact is started per affected repository.
+- A prune started manually through **Retention** does not trigger compact via this setting. Manual backup chains continue to use only the job-specific **Prune after manual backup** and **Compact after successful manual prune** options.
+
+## v1.0.69 – 2026-07-25
+
+### Mount-aware source statistics
+
+- The manual source live scan now detects filesystem boundaries and mounted subdirectories explicitly. With **Stay on each source filesystem** disabled, sub-mounts are included in size and file-count statistics.
+- With that option enabled, sub-mounts remain excluded to match the actual Borg backup, but the scan log now reports their count and paths instead of skipping them silently.
+- The Python scanner iterates large directories directly through `os.scandir` instead of materializing every directory entry in memory first.
+
+### Full processed-file list disabled by default for new jobs
+
+- **Show processed files in the live log** is no longer selected by default when creating a new backup job. Existing jobs keep their stored setting.
+- Borg progress, A/M/C/E live counters and C/E warning detection remain available independently of the full file list.
+
+### Compact exclusion-template management
+
+- **System → Settings → Exclusion templates** no longer renders all templates at once.
+- A selector loads one template into the editor; **New template** and **Delete template** manage the current entry. Changes are still committed with **Save settings**.
+- The section remains compact with many templates and on mobile layouts.
+
+## v1.0.68 – 2026-07-25
+
+### Schedule maintenance is consolidated per repository
+
+- Central schedules now run as coordinated phases: all target backups first, then all configured prune runs, then at most one compact per affected repository.
+- Several jobs sharing one repository therefore no longer start redundant compact operations after the same schedule.
+- Repository-size statistics are refreshed once per changed repository after the complete schedule maintenance phase.
+- Backups that complete with Borg warning status are still treated as created archives and may continue into configured retention processing; compact starts only when every prune for that repository completed successfully.
+
+### Optional prune/compact after manual backups
+
+- Backup jobs now have two opt-in retention options: **Run prune after a manual backup** and **Run compact after a successful manual prune**. Existing jobs keep both disabled after migration.
+- When manual post-processing is enabled, the repository is reserved for the complete backup → prune → optional compact chain. Later runs for the same repository remain queued until the chain finishes.
+- Runs already queued before the manual chain keep FIFO precedence until the root backup starts; once it starts, unrelated runs cannot enter the reserved repository between backup, prune and compact.
+- The repository-size refresh is delayed until the complete manual chain has finished, avoiding repeated statistics scans between its phases.
+- Automatic database-schema migration adds `jobs.manual_prune_after_backup` and `jobs.manual_compact_after_prune` with safe default `false`.
+
+## v1.0.67 – 2026-07-25
+
+### Per-repository and per-mount parallelism limits
+
+- Every repository now has a **Maximum parallel backup runs** value from `1` to `64`. Existing repositories receive the previous safe default `1` through the automatic database migration.
+- Backup runs may share a repository up to that configured capacity. Maintenance and verification operations such as check, prune, compact, archive deletion and reset remain repository-exclusive.
+- **System -> Settings -> Parallelism limits** can additionally define a shared limit for each detected mount below `/repositories`; `0` means unlimited for that mount.
+- Multiple repositories on the same disk or NFS mount share that mount capacity. A run starts only when global, repository, mount and optional schedule limits all have capacity.
+- FIFO queue messages identify the exact repository, mount, schedule or global limiter. Mount topology is briefly cached so the 250 ms queue poll does not cause unnecessary filesystem scans.
+
+### BBM network rate and direct live-run cancellation
+
+- The live-dialog header now shows current upload/download traffic for the BorgBackup Manager container next to **Close**. It aggregates non-loopback interfaces from `/proc/net/dev` and samples only during existing live polling.
+- BBM traffic is independent of the existing client-network tile and is never persisted to `manager.db`.
+- Administrators can stop queued or running executions directly from the live dialog with **Stop job**. The existing controlled Borg/remote-process cancellation path is reused unchanged.
+- Responsive layout coverage was added for the new live-dialog controls and mount-limit settings.
+- Automatic database-schema migration adds `repositories.parallel_limit`; existing repositories, jobs, archives and settings remain intact.
+
+## v1.0.66 – 2026-07-25
+
+### Live A/M/C/E activity and network bandwidth
+
+- The live backup progress now includes Borg item counters for `A` (added), `M` (modified), `C` (changed while being read) and `E` (file access/read error), plus the most recently reported A/M/C/E path.
+- With the full file list disabled, Borg uses `--list --filter AMCE`. A/M lines are consumed only for the in-memory counters and are removed before the persistent run log; C/E remain available for warning diagnosis. Unchanged `U` entries are still not requested.
+- Full-file-list jobs retain their complete output while the A/M/C/E counters are derived with a bytes-first parser; only the newest matching path is decoded for the UI.
+- The free eighth tile in the live run summary now shows network interface, route-selected source IP, current upload and download rate.
+- The source client determines the interface used to reach the repository with its Linux routing table and reads only `/sys/class/net/<interface>/statistics/{rx,tx}_bytes`. No additional privileges and no second SSH session are required.
+- Network values represent total traffic of the selected client interface, not Borg-exclusive traffic. Telemetry frames exist only during the active run and are removed from the permanent Borg log and SQLite data.
+- No database-schema migration is required.
+
+## v1.0.65 – 2026-07-25
+
+### Local repository discovery and offline mounts
+
+- **Search automatically** now scans safely below `/repositories` up to six levels instead of checking direct children only. Symbolic links are never followed and detected Borg repositories are not traversed further.
+- The repository browser can select nested repositories and offers **Select this repository** when the current directory itself contains Borg `config`.
+- Managed repository paths may safely be nested below `/repositories`; repository URLs and SSH forced commands retain the full relative path.
+- The `/repositories` Linux bind mount now uses `rslave` propagation so host/NFS submounts mounted or unmounted after container startup can become visible in the running container.
+- Temporarily missing repositories are shown as **unavailable**. After remounting, **Refresh status** is sufficient; availability changes are also applied by the regular UI refresh.
+- **Reset** remains available for repositories that were actually deleted, with an explicit warning not to use it for a temporarily unmounted target.
+- No database-schema migration is required.
+
+## v1.0.64 – 2026-07-25
+
+### Live backup progress
+
+- Backup runs now add Borg `--progress` independently of the “Show processed files in the live log” option.
+- The live dialog shows processed files, original/compressed/deduplicated data volumes and the currently processed path.
+- Existing job source statistics are used only as an estimate basis for percentage and rough ETA. First runs keep an indeterminate progress bar while file count and data volumes are still shown.
+- Borg progress frames are not persisted in the run log or `manager.db`; the state exists only in memory while the job is active.
+- The high-volume full-file-list fast path remains intact: chunks without Borg carriage-return progress frames pass through without line-by-line Python processing.
+
+### Verification
+
+- Regression coverage added for progress parsing, log filtering, the file-list fast path, live API output and responsive progress rendering.
+- No database schema migration is required.
+
 ## v1.0.63 – 2026-07-22
 
 ### Correct labels for archive comparisons

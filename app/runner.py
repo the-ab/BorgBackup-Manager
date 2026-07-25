@@ -41,6 +41,7 @@ class Command:
     # SSH jobs: killing the local ssh client alone can otherwise disconnect the
     # remote shell before Borg has received SIGINT and released its lock.
     stdin_controlled_cancel: bool = False
+    timeout_seconds: int | None = None
 
 
 class CommandCancelled(RuntimeError):
@@ -95,6 +96,18 @@ def repository_identity_file(repository: Repository) -> str:
 def _repository_uses_ssh(repository: Repository) -> bool:
     parsed = urlsplit(repository.location)
     return parsed.scheme == "ssh" or bool(re.match(r"^[^/@:]+@[^/:]+:.+", repository.location))
+
+
+def _repository_network_host(repository: Repository) -> str | None:
+    """Return the source-side network target for an SSH repository."""
+    location = str(repository.location or "").strip()
+    parsed = urlsplit(location)
+    if parsed.scheme == "ssh" and parsed.hostname:
+        return parsed.hostname
+    match = re.match(r"^[^/@:]+@(?P<host>\[[^\]]+\]|[^/:]+):.+", location)
+    if not match:
+        return None
+    return match.group("host").strip("[]") or None
 
 
 def _common_repository_env(repository: Repository) -> dict[str, str]:
@@ -536,14 +549,14 @@ def backup_command(job: Job) -> Command:
     options = validate_create_options(json.loads(job.create_options_json or "{}"))
     # Human-readable Borg statistics are the primary live log. Raw JSON is reserved
     # for API operations which need machine-readable archive metadata.
-    parts = [*_borg_base("create"), "--stats", "--show-rc", "--compression", job.compression]
+    parts = [*_borg_base("create"), "--stats", "--progress", "--show-rc", "--compression", job.compression]
     if options["list_files"]:
         parts.append("--list")
     else:
-        # Even when the full file list is disabled, keep Borg's warning-relevant
-        # item statuses in the log. ``C`` identifies files that changed while
-        # being read and ``E`` identifies file-level access/read errors.
-        parts.extend(["--list", "--filter", "CE"])
+        # Keep a lightweight A/M/C/E activity stream even when the complete file
+        # list is disabled. A/M are consumed only for live counters and stripped
+        # before the persistent log; C/E remain visible for warning diagnosis.
+        parts.extend(["--list", "--filter", "AMCE"])
     if options["one_file_system"]:
         parts.append("--one-file-system")
     if options["exclude_caches"]:
@@ -564,6 +577,59 @@ def backup_command(job: Job) -> Command:
             "printf '%s\\n' 'DATEIVERARBEITUNG (Borg-Status und Pfad):'",
             "printf '%s\\n' '------------------------------------------------------------------------------'",
         ])
+
+    # The backup data path is source client -> repository. Monitor exactly the
+    # client interface selected by Linux routing for the repository host. The
+    # monitor is unprivileged and reads only standard kernel byte counters.
+    network_host = _repository_network_host(job.repository)
+    network_monitor = "bbm_stop_network_monitor() { :; }"
+    if network_host:
+        network_monitor = rf"""
+bbm_network_pid=""
+bbm_stop_network_monitor() {{
+  if [ -n "${{bbm_network_pid:-}}" ]; then
+    kill "$bbm_network_pid" 2>/dev/null || true
+    wait "$bbm_network_pid" 2>/dev/null || true
+    bbm_network_pid=""
+  fi
+}}
+bbm_start_network_monitor() {{
+  bbm_net_target={shlex.quote(network_host)}
+  command -v ip >/dev/null 2>&1 || return 0
+  bbm_net_ip="$bbm_net_target"
+  if command -v getent >/dev/null 2>&1; then
+    set -- $(getent ahosts "$bbm_net_target" 2>/dev/null)
+    [ "$#" -gt 0 ] && bbm_net_ip="$1"
+  fi
+  set -- $(ip route get "$bbm_net_ip" 2>/dev/null)
+  [ "$#" -gt 0 ] || return 0
+  bbm_iface=""
+  bbm_src=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      dev) shift; [ "$#" -gt 0 ] && bbm_iface="$1" ;;
+      src) shift; [ "$#" -gt 0 ] && bbm_src="$1" ;;
+    esac
+    [ "$#" -gt 0 ] && shift
+  done
+  [ -n "$bbm_iface" ] || return 0
+  [ -n "$bbm_src" ] || bbm_src="-"
+  bbm_rx_file="/sys/class/net/$bbm_iface/statistics/rx_bytes"
+  bbm_tx_file="/sys/class/net/$bbm_iface/statistics/tx_bytes"
+  [ -r "$bbm_rx_file" ] && [ -r "$bbm_tx_file" ] || return 0
+  (
+    while :; do
+      IFS= read -r bbm_rx < "$bbm_rx_file" || exit 0
+      IFS= read -r bbm_tx < "$bbm_tx_file" || exit 0
+      printf '\036BBMNET\t%s\t%s\t%s\t%s\n' "$bbm_iface" "$bbm_src" "$bbm_rx" "$bbm_tx" >&2
+      sleep 1
+    done
+  ) &
+  bbm_network_pid=$!
+}}
+bbm_start_network_monitor
+""".strip()
+
     script = f"""
 set +e
 printf '%s\\n' '=============================================================================='
@@ -574,9 +640,11 @@ printf 'REPOSITORY: %s\\n' {shlex.quote(job.repository.name)}
 printf '%s\\n' '------------------------------------------------------------------------------'
 {version_probe_shell(fail_unsupported=True)}
 printf '%s\\n' '------------------------------------------------------------------------------'
+{network_monitor}
 {file_list_header}
 {shlex.join(parts)}
 bbm_rc=$?
+bbm_stop_network_monitor 2>/dev/null || true
 printf '%s\\n' '------------------------------------------------------------------------------'
 if [ "$bbm_rc" -eq 0 ]; then
   printf '%s\\n' 'ERGEBNIS: Backup erfolgreich abgeschlossen.'
@@ -614,6 +682,14 @@ size_bytes = 0
 file_count = 0
 warning_count = 0
 seen_paths = set()
+skipped_mounts = []
+included_mounts = []
+
+
+def remember(items, path):
+    normalized = os.path.normpath(path)
+    if normalized not in items and len(items) < 50:
+        items.append(normalized)
 
 
 def warn(message):
@@ -649,37 +725,59 @@ for root in roots:
     if normalized_root in seen_paths:
         continue
     seen_paths.add(normalized_root)
-    stack = [root]
+    stack = [(root, root_device)]
     while stack:
-        directory = stack.pop()
+        directory, directory_device = stack.pop()
         try:
             with os.scandir(directory) as iterator:
-                entries = list(iterator)
+                for entry in iterator:
+                    path = entry.path
+                    try:
+                        item_stat = entry.stat(follow_symlinks=False)
+                    except OSError as exc:
+                        warn(f"{path}: {exc}")
+                        continue
+                    if stat.S_ISDIR(item_stat.st_mode):
+                        if one_file_system and item_stat.st_dev != root_device:
+                            remember(skipped_mounts, path)
+                            continue
+                        if not one_file_system and item_stat.st_dev != directory_device:
+                            remember(included_mounts, path)
+                        normalized_path = os.path.normpath(path)
+                        if normalized_path in seen_paths:
+                            continue
+                        seen_paths.add(normalized_path)
+                        stack.append((path, item_stat.st_dev))
+                    else:
+                        account(path, item_stat)
         except OSError as exc:
             warn(f"{directory}: {exc}")
             continue
-        for entry in entries:
-            path = entry.path
-            try:
-                item_stat = entry.stat(follow_symlinks=False)
-            except OSError as exc:
-                warn(f"{path}: {exc}")
-                continue
-            if stat.S_ISDIR(item_stat.st_mode):
-                if one_file_system and item_stat.st_dev != root_device:
-                    continue
-                normalized_path = os.path.normpath(path)
-                if normalized_path in seen_paths:
-                    continue
-                seen_paths.add(normalized_path)
-                stack.append(path)
-            else:
-                account(path, item_stat)
+
+if skipped_mounts:
+    print(
+        "HINWEIS: " + str(len(skipped_mounts))
+        + " eingebundene Unterdateisystem(e) wurden wegen "
+        + "'Nur jeweiliges Quelldateisystem' nicht mitgezählt: "
+        + ", ".join(skipped_mounts[:10])
+        + (" …" if len(skipped_mounts) > 10 else ""),
+        file=sys.stderr,
+    )
+elif included_mounts:
+    print(
+        "HINWEIS: Eingebundene Unterdateisysteme werden mitgezählt: "
+        + ", ".join(included_mounts[:10])
+        + (" …" if len(included_mounts) > 10 else ""),
+        file=sys.stderr,
+    )
 
 print("BBM_SOURCE_STATS_JSON=" + json.dumps({
     "size_bytes": size_bytes,
     "file_count": file_count,
     "warning_count": warning_count,
+    "skipped_mount_count": len(skipped_mounts),
+    "skipped_mounts": skipped_mounts,
+    "included_mount_count": len(included_mounts),
     "method": "python-lstat",
 }, separators=(",", ":")))
 sys.exit(1 if warning_count else 0)
@@ -728,6 +826,11 @@ printf '%s\n' 'Hinweis: Der manuelle Scan zählt die konfigurierten Quellen vor 
 printf '%s\n' 'Das Repository wird nicht geöffnet und es wird kein Archiv geschrieben.'
 printf '%s\n' '------------------------------------------------------------------------------'
 one_file_system={one_file_system}
+if [ "$one_file_system" = "1" ]; then
+  printf '%s\n' "HINWEIS: 'Nur jeweiliges Quelldateisystem' ist aktiv; eingehängte Unterverzeichnisse werden wie beim Backup übersprungen."
+else
+  printf '%s\n' 'HINWEIS: Eingehängte Unterverzeichnisse werden in die Quellenstatistik einbezogen.'
+fi
 if command -v python3 >/dev/null 2>&1; then
   python3 -S -c {shlex.quote(python_scan)} "$one_file_system" "$@"
   bbm_rc=$?
@@ -778,6 +881,23 @@ def prune_command(job: Job) -> Command:
         ])
     script_lines.append('exit "$bbm_result"')
     return _repository_operation(job, ["sh", "-c", "\n".join(script_lines)])
+
+
+def host_ssh_action_command(host: Host, shell_command: str, timeout_seconds: int = 300) -> Command:
+    """Execute one explicitly saved administrator command on a managed device.
+
+    The command is passed as a single ``sh -lc`` argument through the same
+    strict host-key verified controller SSH channel used by the manager. The
+    Web API never accepts an ad-hoc command for execution; only persisted action
+    IDs can reach this helper.
+    """
+    text = shell_command.strip()
+    if not text or "\x00" in text:
+        raise ValueError("SSH command must not be empty")
+    command = _ssh_argv(host, ["sh", "-lc", text], {}, supervised=False)
+    command.preview = f"ssh -i [temporärer Controller-Schlüssel] {host.username}@{host.address} -- sh -lc {shlex.quote(text)}"
+    command.timeout_seconds = max(5, min(3600, int(timeout_seconds)))
+    return command
 
 
 def host_version_command(host: Host) -> Command:
@@ -1391,7 +1511,7 @@ async def execute(
     command: Command,
     on_output: Callable[[str, str], Awaitable[None] | None] | None = None,
     capture_limit_bytes: int | None = None,
-    on_output_bytes: Callable[[str, bytes], Awaitable[None] | None] | None = None,
+    on_output_bytes: Callable[[str, bytes], Awaitable[bytes | None] | bytes | None] | None = None,
 ) -> tuple[int, str, str]:
     process_env = {**os.environ, **command.env} if command.env else None
     temporary_directory: tempfile.TemporaryDirectory[str] | None = None
@@ -1458,15 +1578,18 @@ async def execute(
             # Large reads significantly reduce Python callback overhead for
             # ``borg create --list`` while preserving the byte stream exactly.
             while chunk := await stream.read(256 * 1024):
-                capture(name, chunk)
+                capture_chunk = chunk
                 if on_output_bytes:
                     result = on_output_bytes(name, chunk)
-                    if result is not None:
-                        await result
+                    if result is not None and hasattr(result, "__await__"):
+                        result = await result
+                    if isinstance(result, (bytes, bytearray, memoryview)):
+                        capture_chunk = bytes(result)
                 elif on_output:
                     result = on_output(name, chunk.decode(errors="replace"))
                     if result is not None:
                         await result
+                capture(name, capture_chunk)
 
         if command.stdin_data is not None and process.stdin:
             process.stdin.write(command.stdin_data)
@@ -1479,7 +1602,10 @@ async def execute(
         wait_task = asyncio.create_task(process.wait())
         process_tasks = asyncio.gather(stdout_task, stderr_task, wait_task)
         try:
-            await asyncio.wait_for(asyncio.shield(process_tasks), timeout=COMMAND_TIMEOUT)
+            await asyncio.wait_for(
+                asyncio.shield(process_tasks),
+                timeout=command.timeout_seconds if command.timeout_seconds is not None else COMMAND_TIMEOUT,
+            )
         except TimeoutError:
             if not await wait_after_signal(signal.SIGTERM, 5):
                 await wait_after_signal(signal.SIGKILL, 5)

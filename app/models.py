@@ -28,6 +28,22 @@ class Host(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+
+
+class HostSshAction(Base):
+    __tablename__ = "host_ssh_actions"
+    __table_args__ = (UniqueConstraint("host_id", "name", name="uq_host_ssh_action_name"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    host_id: Mapped[int] = mapped_column(ForeignKey("hosts.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(100))
+    command: Mapped[str] = mapped_column(Text)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    host: Mapped[Host] = relationship()
+
+
 class Repository(Base):
     __tablename__ = "repositories"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -56,6 +72,7 @@ class Repository(Base):
     size_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     storage_guard_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     storage_guard_threshold_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parallel_limit: Mapped[int] = mapped_column(Integer, default=1)
     extra_env_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -75,6 +92,8 @@ class Job(Base):
     compression: Mapped[str] = mapped_column(String(100), default="zstd,6")
     prune_options_json: Mapped[str] = mapped_column(Text, default="{}")
     create_options_json: Mapped[str] = mapped_column(Text, default="{}")
+    manual_prune_after_backup: Mapped[bool] = mapped_column(Boolean, default=False)
+    manual_compact_after_prune: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     source_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.63
+# BorgBackup Manager 1.0.71
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -34,7 +34,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.0.63.zip
+BorgBackup-Manager-1.0.71.zip
 ```
 
 ## Sicherheit und Härtung
@@ -202,6 +202,12 @@ Der öffentliche Controller-Schlüssel muss einmalig auf jedem Client in `author
 
 Controller-Schlüssel und Geräte-Hostschlüssel erfüllen unterschiedliche Aufgaben: Der Controller-Schlüssel authentifiziert den Manager am Client; der beim Fingerprint-Scan bestätigte Ed25519-Hostschlüssel authentifiziert den Client gegenüber dem Manager. Bei jeder Verbindung werden beide Prüfungen verwendet. Nach dem Scan bleibt der Fingerprint direkt im Geräteformular sichtbar und muss dort ausdrücklich bestätigt werden. Der Geräte-Hostschlüssel wird als temporäre `known_hosts`-Datei eingebunden, während `StrictHostKeyChecking=yes` aktiv bleibt.
 
+#### Gespeicherte SSH-Aktionen
+
+Administratoren können unter **Geräte → Gespeicherte SSH-Aktionen** wiederkehrende, nicht-interaktive Shell-Befehle je Gerät speichern und gezielt ausführen. Typische Beispiele sind das Ein- und Aushängen eines bereits auf dem Host konfigurierten NFS-Mounts, `systemctl`-Aktionen oder Diagnosebefehle. Eine freie Einmal-Konsole existiert bewusst nicht: Ausführbar sind nur vorher gespeicherte Aktions-IDs. Jeder Start verlangt eine Bestätigung und verwendet denselben Controller-Schlüssel, den bestätigten Geräte-Hostschlüssel, `BatchMode=yes` und `StrictHostKeyChecking=yes` wie die übrigen Clientzugriffe.
+
+Jede Aktion besitzt Name, Gerät, Befehl, Aktivstatus und ein Zeitlimit von 5 bis 3600 Sekunden. Die Ausführung erscheint als regulärer Lauf mit Live-Log, Exit-Status, Stoppen-Funktion und Historie und zählt gegen die globale Parallelitätsgrenze. Die Befehle selbst liegen in `manager.db` und sind **nicht verschlüsselt**; Passwörter, API-Tokens oder andere Geheimnisse dürfen deshalb nicht in einer Aktion hinterlegt werden. Befehle müssen ohne interaktive Eingabe funktionieren; für `sudo` ist eine passende sudoers-Regel zusammen mit `sudo -n` vorgesehen.
+
 ### Repositories
 
 Die Repository-Liste lässt sich nach Name, Bereitschaftsstatus, Typ, Anzahl zugeordneter Jobs oder gespeicherter Größe sortieren. Die Auswahl wird benutzer- und browserbezogen gespeichert. Direkt neben dem Status wird die numerische Manager-ID des Repository-Eintrags angezeigt; sie entspricht der Kennung in BBM-Cachepfaden wie `repository-<ID>`.
@@ -281,11 +287,13 @@ Externe Repositories aus Version 0.9.3 verlieren beim Upgrade ihre frühere Clie
 
 #### Vorhandenes Repository einbinden
 
-Die Suchfunktion prüft direkte Unterverzeichnisse des eingebundenen Repository-Pfads auf eine Borg-Konfiguration. Beim Import werden Name, Verschlüsselungsmodus, Passphrase und bei Keyfile-Repositories der vorhandene Keyfile-Inhalt abgefragt. Der Manager öffnet das Repository testweise, bevor der Eintrag gespeichert wird.
+Die Suchfunktion durchsucht den eingebundenen Repository-Pfad rekursiv bis zu sechs Ebenen nach Borg-Konfigurationen. Symbolische Links werden nicht verfolgt; gefundene Repository-Verzeichnisse werden nicht weiter durchlaufen. Damit werden auch Strukturen wie `/repositories/offline-nas/borg/server-a` erkannt. Beim Import werden Name, Verschlüsselungsmodus, Passphrase und bei Keyfile-Repositories der vorhandene Keyfile-Inhalt abgefragt. Der Manager öffnet das Repository testweise, bevor der Eintrag gespeichert wird.
 
 Ein vorhandenes Repository wird durch **Repository prüfen und einbinden** nicht initialisiert, geleert oder zurückgesetzt. Die Aktion **Initialisieren** wird nur angeboten, wenn im verwalteten Zielverzeichnis noch keine Borg-Konfiguration vorhanden ist. Schlägt eine spätere Verbindungsprüfung fehl, bleibt ein bereits vorhandenes Repository als vorhanden erkannt und wird nicht wieder als neu zu initialisieren dargestellt.
 
-Wurde ein bereits registriertes verwaltetes Repository außerhalb des Managers vollständig gelöscht, erkennt die Repository-Liste die fehlende Borg-`config` unabhängig vom früher gespeicherten Initialisierungsstatus. Der Status wechselt auf **Repository fehlt** und bietet **Zurücksetzen** an. Die Rücksetzung ist nur zulässig, wenn der verwaltete Zielordner vorhanden, vollständig leer und frei von einer Borg-Konfiguration ist. Sie löscht keine Dateien, sondern setzt ausschließlich Initialisierungs-, Prüf- und Größenmetadaten sowie den Archivcache zurück. Laufende oder wartende Repository-Aktionen und aktive Archiv-Mounts blockieren die Rücksetzung. Danach steht **Initialisieren** wieder zur Verfügung.
+Ist die Borg-`config` eines bereits registrierten verwalteten Repositorys vorübergehend nicht sichtbar, zeigt die Liste **nicht verfügbar**. Das kann insbesondere bei ausgeschalteten oder ausgehängten NFS-Zielen normal sein. Nach dem erneuten Mount genügt **Status aktualisieren**; zusätzlich erkennt die normale automatische WebUI-Aktualisierung einen Verfügbarkeitswechsel. Ein Container-Neustart ist bei funktionierender Mount-Propagation nicht mehr erforderlich. **Zurücksetzen** ist ausschließlich für tatsächlich gelöschte Repositorys vorgesehen und warnt deshalb ausdrücklich vor der Verwendung bei nur ausgehängten Mounts.
+
+Der Docker-Bind-Mount für `/repositories` verwendet `rslave`, damit nachträglich auf dem Linux-Host eingehängte Unter-Mounts in den laufenden Container propagiert werden. Die Host-Dateisystemstruktur muss Linux-Mount-Propagation unterstützen. Das Update auf v1.0.65 erstellt den Container einmal neu; danach sollen spätere Unmount-/Remount-Vorgänge ohne Container-Neustart sichtbar werden.
 
 Bei `keyfile`-Verschlüsselung wird der Schlüssel des gelöschten Repositorys entfernt, da er für die neue Repository-ID nicht mehr verwendbar ist; die Neuinitialisierung erzeugt und speichert automatisch einen neuen Keyfile. Eine vorhandene Passphrase bleibt erhalten. Jobs, Zeitpläne und Gerätezuordnungen bleiben bestehen, ihre Repository-Aktionen sind jedoch bis zur erfolgreichen Neuinitialisierung gesperrt.
 
@@ -303,7 +311,7 @@ Repository-Passphrasen und Keyfiles werden mit einem zufälligen Fernet-Master-K
 
 ### Backup-Jobs
 
-Die Jobübersicht zeigt zusätzlich eine Quellenstatistik mit Originalgröße und Dateianzahl. Nach einem erfolgreichen oder mit Warnung abgeschlossenen Backup werden die Werte direkt aus Borgs Abschlussstatistik übernommen. Über **Aktualisieren** beziehungsweise **Quellenstatistik** kann ein repositoryunabhängiger Live-Scan auf dem Quellgerät gestartet werden. Dieser zählt die konfigurierten Quellen vor Borg-Ausschlüssen und schreibt kein Archiv. Nach dem nächsten abgeschlossenen Backup werden die Werte wieder durch Borgs exakte Statistik nach Anwendung der Ausschlüsse ersetzt.
+Die Jobübersicht zeigt zusätzlich eine Quellenstatistik mit Originalgröße und Dateianzahl. Nach einem erfolgreichen oder mit Warnung abgeschlossenen Backup werden die Werte direkt aus Borgs Abschlussstatistik übernommen. Über **Aktualisieren** beziehungsweise **Quellenstatistik** kann ein repositoryunabhängiger Live-Scan auf dem Quellgerät gestartet werden. Dieser zählt die konfigurierten Quellen vor Borg-Ausschlüssen und schreibt kein Archiv. Eingehängte Unterverzeichnisse werden mitgezählt, wenn **Nur jeweiliges Quelldateisystem** deaktiviert ist. Ist die Option aktiv, werden erkannte Unter-Mounts wie beim eigentlichen Borg-Backup übersprungen und im Scan-Protokoll ausdrücklich genannt. Nach dem nächsten abgeschlossenen Backup werden die Werte wieder durch Borgs exakte Statistik nach Anwendung der Ausschlüsse ersetzt.
 
 
 
@@ -332,11 +340,11 @@ Quellpfade werden zeilenweise als absolute POSIX-Pfade angegeben:
 /srv/data
 ```
 
-Bei Quelle `/` sollte `Nur jeweiliges Quelldateisystem sichern` aktiviert bleiben. Separate Dateisysteme müssen dann als zusätzliche Quelle angegeben werden.
+Bei Quelle `/` sollte **Nur jeweiliges Quelldateisystem** in der Regel aktiviert bleiben. Eingehängte Unterdateisysteme werden dann bewusst nicht durchlaufen. Sollen beispielsweise mehrere NFS-Mounts unter einem gemeinsamen Quellordner gesichert werden, muss die Option deaktiviert oder jeder Mount als eigener Quellpfad angegeben werden. Die manuelle Quellenstatistik verwendet dieselbe Dateisystemgrenze wie das Backup.
 
 #### Zentrale Ausschlussvorlagen
 
-Unter **System → Einstellungen → Ausschlussvorlagen** können beliebig viele benannte Vorlagen gepflegt werden. Die mitgelieferte Standardvorlage lautet:
+Unter **System → Einstellungen → Ausschlussvorlagen** können beliebig viele benannte Vorlagen gepflegt werden. Damit der Einstellungsbereich auch bei vielen Vorlagen kompakt bleibt, wird jeweils nur eine Vorlage über die Auswahlbox geladen und bearbeitet. Die mitgelieferte Standardvorlage lautet:
 
 ```text
 Linux-Systempfade
@@ -348,7 +356,7 @@ Linux-Systempfade
 /var/tmp
 ```
 
-Im Jobformular wird eine Vorlage ausgewählt und mit **Vorlage zur Liste hinzufügen** in die Ausschlussliste kopiert. Bereits vorhandene Muster werden nicht doppelt eingetragen.
+Im Jobformular wird eine Vorlage ausgewählt und mit **Vorlage zur Liste hinzufügen** in die Ausschlussliste kopiert. Bereits vorhandene Muster werden nicht doppelt eingetragen. Neue Backup-Jobs starten standardmäßig mit deaktivierter vollständiger Dateiliste; A/M/C/E-Zähler, Warnungserkennung und Borg-Fortschritt bleiben trotzdem verfügbar.
 
 Wichtig:
 
@@ -429,7 +437,7 @@ Unterstützt werden die gemeinsamen Borg-1.2-bis-1.4-Spezifikationen:
 - Monatlich: `--keep-monthly`
 - Jährlich: `--keep-yearly`
 
-Der Wert 0 deaktiviert die jeweilige Regel. Prune wird auf das feste Jobpräfix begrenzt. Compact kann nach einem geplanten Prune automatisch ausgeführt werden. Compact wird mit ausführlicher Borg-Ausgabe gestartet, sodass im Laufprotokoll auch die von Borg geschätzte freigegebene Größe erscheint, sofern tatsächlich unreferenzierte Segmente vorhanden sind.
+Der Wert 0 deaktiviert die jeweilige Regel. Prune wird auf das feste Jobpräfix begrenzt. Die Systemeinstellung für Compact gilt ausschließlich für Zeitpläne: Nach der vollständigen erfolgreichen Prune-Phase wird je betroffenem Repository höchstens einmal Compact ausgeführt. Manuell gestartete Prunes lösen darüber kein Compact aus. Compact wird mit ausführlicher Borg-Ausgabe gestartet, sodass im Laufprotokoll auch die von Borg geschätzte freigegebene Größe erscheint, sofern tatsächlich unreferenzierte Segmente vorhanden sind.
 
 #### Jobaktionen
 
@@ -472,13 +480,17 @@ Jeder Zeitplan kann eine eigene Obergrenze für gleichzeitig laufende Ausführun
 
 Ein aktiver Backup-Job darf nur einem aktiven zentralen Zeitplan zugeordnet sein. Überlappende Zuordnungen werden beim Speichern abgewiesen, damit ein Job nicht doppelt gestartet wird. Beim Upgrade werden vorhandene Job-Cronwerte automatisch als eigene zentrale Zeitpläne übernommen; anschließend wird das alte Jobfeld geleert.
 
+Ein Zeitplan arbeitet phasenweise: Zuerst werden alle zugeordneten Backups unter Beachtung der Parallelitätsgrenzen abgearbeitet. Erst wenn alle Backup-Läufe beendet sind, folgen die konfigurierten Prune-Läufe. Danach wird pro betroffenem Repository höchstens **ein** Compact ausgeführt – unabhängig davon, wie viele Jobs dieses Repository im Zeitplan verwendet haben. Damit entstehen bei mehreren Jobs auf demselben Repository keine redundanten Compact-Läufe.
+
+Für manuell gestartete Backups können im Job unter **Aufbewahrung** optional **Nach manuellem Backup Prune ausführen** und anschließend **Compact ausführen** aktiviert werden. Diese Kette reserviert das Repository vom Start des Backups bis zum Abschluss der Nachbereitung; später gestartete Jobs desselben Repositorys warten, bis Backup, Prune und optional Compact abgeschlossen sind.
+
 ### Warteschlange und Parallelitätsgrenzen
 
-Alle Borg-Aktionen werden pro Repository serialisiert. Beginnen mehrere Geräte gleichzeitig ein Backup in dasselbe Repository, wechselt nur der erste Lauf auf **Laufend**. Weitere Anforderungen bleiben als **Wartend** sichtbar und starten automatisch, sobald das Repository frei ist. Dies verhindert parallele Schreibzugriffe und Borg-Lock-Konflikte. Repositoryweite Administratoraktionen wie **Compact** und eine gemeinsame Mehrfachlöschung von Archiven verwenden dieselbe Sperr- und Laufprotokollierung und benötigen keinen Backup-Job.
+Backup-Läufe besitzen pro Repository eine eigene Parallelitätsgrenze. Der Standardwert ist `1`; höhere Werte können unter **Repositories → Bearbeiten** gesetzt werden. Wartungs- und Prüfaktionen wie Check, Prune, Compact, Archivlöschung und Reset bleiben unabhängig davon exklusiv und starten erst, wenn keine andere Manager-Ausführung dieses Repository verwendet.
 
-Zusätzlich kann unter **System → Einstellungen → Parallelitätsgrenzen** die maximale Anzahl aller gleichzeitig laufenden Manager-Ausführungen festgelegt werden. `0` bedeutet unbegrenzt; `1` serialisiert auch Aktionen auf unterschiedlichen Repositorys. Eine am Zeitplan gesetzte Grenze kann die Ausführungen dieses Zeitplans weiter einschränken. Repository-Grenze, Zeitplangrenze und globale Grenze werden gemeinsam angewendet; die jeweils engste zutreffende Grenze entscheidet.
+Unter **System → Einstellungen → Parallelitätsgrenzen** kann zusätzlich für jeden erkannten Mount unter `/repositories` eine gemeinsame Obergrenze gesetzt werden. Diese Mount-Grenze gilt für alle verwalteten Repositorys auf demselben Dateisystem beziehungsweise NFS-Mount. Dadurch können mehrere Repository-Verzeichnisse auf einem physischen Datenträger die gewünschte I/O-Grenze nicht umgehen. `0` bedeutet für den jeweiligen Mount unbegrenzt. Manuelle Quellenstatistiken zählen ebenfalls gegen die globale Ausführungsgrenze und besitzen zusätzlich eine eigene Obergrenze mit Standard `1`; sie belegen bewusst weder Repository- noch Mount-Kapazität, weil ausschließlich das Quellgerät gelesen wird. Zusätzlich gelten weiterhin eine gegebenenfalls niedrigere Grenze des auslösenden Zeitplans.
 
-Die Reihenfolge wird dauerhaft über die Datenbank als FIFO bestimmt. Maßgeblich ist das tatsächliche Repository-Ziel – bei verwalteten Repositorys das Verzeichnis, bei externen Repositorys die URL – und nicht nur die interne Datenbank-ID. Dadurch werden auch ältere doppelte Einträge mit demselben Ziel gemeinsam gesperrt. Freie globale Plätze werden mit startfähigen Läufen belegt; ein älterer Lauf, der selbst noch an einem belegten Repository oder Zeitplan wartet, blockiert unabhängige Repositorys nicht unnötig. Im vollständigen Laufprotokoll wird unterschieden, ob auf eine Repository-Ausführung, die Zeitplangrenze oder die globale Grenze gewartet wird. Nur tatsächlich lebende Manager-Tasks belegen Parallelitätsplätze, damit verwaiste Laufzustände die Warteschlange nicht dauerhaft sperren. Die Manager-Warteschlange kann keine Borg-Prozesse erfassen, die außerhalb des Managers gestartet wurden; für diese Fälle verwendet Borg zusätzlich seine eigene Sperre und `--lock-wait`.
+Die Reihenfolge wird dauerhaft über die Datenbank als FIFO bestimmt. Maßgeblich ist das tatsächliche Repository-Ziel – bei verwalteten Repositorys das Verzeichnis, bei externen Repositorys die URL – und nicht nur die interne Datenbank-ID. Freie Plätze werden mit startfähigen Läufen belegt; ein älterer Lauf, der selbst an Repository-, Mount-, Zeitplan- oder globaler Grenze wartet, blockiert unabhängige Ziele nicht unnötig. Im Laufprotokoll wird die konkret blockierende Grenze mit Lauf-ID genannt. Die Manager-Warteschlange kann Borg-Prozesse außerhalb des Managers nicht erfassen; Borg verwendet deshalb zusätzlich seine eigene Sperrlogik und `--lock-wait`.
 
 ### Ausführungen und Protokolle
 
@@ -498,7 +510,7 @@ Jede Aktion erzeugt einen Lauf mit:
 - lesbarer Ausgabe
 - technischen Details
 
-Die Standardansicht zeigt eine aufbereitete Borg-Ausgabe mit Job, Gerät, Quellen, eindeutig als **Borg auf Client** bezeichneter Version, Statistik und Ergebnis. Der Detailkopf zeigt zusätzlich die Ausführungsart und – bei Backup-Läufen – die gespeicherten Original-, komprimierten und deduplizierten Größen. Bei `rc 1` sammelt der Manager Warnungsursachen bereits während des Borg-Prozesses und speichert sie strukturiert direkt am Lauf. Dadurch bleiben frühe Warnungen auch dann erhalten, wenn danach sehr große Dateilisten folgen oder die sichtbare Protokollansicht gekürzt wird. Borg-Status `C` bedeutet „Datei während der Sicherung verändert“, `E` kennzeichnet einen Datei-Zugriffs- oder Lesefehler; zusätzlich werden verschwundene Dateien, Berechtigungsfehler, E/A-Fehler und nie passende Include-/Exclude-Muster unterschieden. Ist die Joboption **Verarbeitete Dateien im Live-Protokoll anzeigen** aktiv, werden alle Borg-Status und Pfade fortlaufend in die dateibasierte Protokolldatei geschrieben. Normale Dateiblöcke bleiben dabei im Rohdatenpfad: Sie werden nicht vollständig nach UTF-8 dekodiert, nicht zeilenweise in Python zerlegt und nicht fortlaufend in SQLite gespiegelt. Nur Blöcke mit `C`, `E` oder textuellen Borg-Warnungen werden genauer ausgewertet. Bei deaktivierter Dateiliste protokolliert Borg weiterhin ausschließlich die warnungsrelevanten Status `C` und `E`. Gibt Borg trotz `rc 1` tatsächlich keine Detailzeile aus, wird dies ausdrücklich als **Ursache nicht ausgegeben** angezeigt. Der vollständige SSH-/Borg-Befehl, stdout und eine gefilterte Fehler-/Warnungsausgabe stehen getrennt unter **Technische Details**. Borg schreibt Dateilisten und Statistik regulär nach stderr; normale Statuszeilen werden nicht als Fehler angezeigt.
+Die Standardansicht zeigt eine aufbereitete Borg-Ausgabe mit Job, Gerät, Quellen, eindeutig als **Borg auf Client** bezeichneter Version, Statistik und Ergebnis. Der Detailkopf zeigt zusätzlich die Ausführungsart und – bei Backup-Läufen – die gespeicherten Original-, komprimierten und deduplizierten Größen. Bei `rc 1` sammelt der Manager Warnungsursachen bereits während des Borg-Prozesses und speichert sie strukturiert direkt am Lauf. Dadurch bleiben frühe Warnungen auch dann erhalten, wenn danach sehr große Dateilisten folgen oder die sichtbare Protokollansicht gekürzt wird. Borg-Status `C` bedeutet „Datei während der Sicherung verändert“, `E` kennzeichnet einen Datei-Zugriffs- oder Lesefehler; zusätzlich werden verschwundene Dateien, Berechtigungsfehler, E/A-Fehler und nie passende Include-/Exclude-Muster unterschieden. Ist die Joboption **Verarbeitete Dateien im Live-Protokoll anzeigen** aktiv, werden alle Borg-Status und Pfade fortlaufend in die dateibasierte Protokolldatei geschrieben. Normale Dateiblöcke bleiben dabei im Rohdatenpfad: Sie werden nicht vollständig nach UTF-8 dekodiert, nicht zeilenweise in Python zerlegt und nicht fortlaufend in SQLite gespiegelt. Nur Blöcke mit `C`, `E` oder textuellen Borg-Warnungen werden genauer ausgewertet. Bei deaktivierter vollständiger Dateiliste verwendet Borg `--list --filter AMCE`: `A` und `M` werden ausschließlich als leichtgewichtige Live-Zähler ausgewertet und nicht in das permanente Protokoll geschrieben; `C` und `E` bleiben wegen der Warnungsdiagnose erhalten. Unveränderte `U`-Einträge werden weiterhin nicht angefordert. Unabhängig von dieser Option verwendet der Manager zusätzlich Borg `--progress`: Im Live-Dialog erscheinen dadurch die aktuell verarbeitete Dateianzahl, Original-/komprimierte/deduplizierte Datenmenge und der aktuell bearbeitete Pfad. Zusätzlich werden die Zähler `A` (neu), `M` (geändert), `C` (während des Einlesens verändert) und `E` (Fehler) sowie der zuletzt gemeldete A/M/C/E-Pfad angezeigt. Liegt eine frühere Quellenstatistik vor, zeigt die WebUI außerdem einen ausdrücklich als Schätzung behandelten Prozentwert und eine grobe Restzeit; bei einem Erstlauf bleibt die Fortschrittsleiste unbestimmt. Die Progress-, Status- und Netzwerkdaten werden nur im Arbeitsspeicher gehalten und nicht in `manager.db` gespeichert. Die Live-Ausführungsübersicht zeigt außerdem das vom Client-Routing für das Repository gewählte Netzwerkinterface samt Quell-IP und aktueller Upload-/Downloadrate. Diese Rate ist der Gesamtverkehr des betreffenden Interfaces und nicht ausschließlich Borg-Verkehr. Im Kopf des geöffneten Live-Dialogs zeigt eine zusätzliche **BBM**-Anzeige den gesamten Upload-/Downloadverkehr der nicht-loopback Netzwerkinterfaces des Manager-Containers. Sie dient insbesondere dazu, unerwarteten Manager-Netzwerkverkehr während eines Backups sichtbar zu machen und wird nur bei geöffnetem Live-Dialog ermittelt. Administratoren können einen wartenden oder laufenden Job außerdem direkt im Live-Dialog über **Job stoppen** kontrolliert abbrechen; ein Wechsel zu „Letzte Aktivitäten“ ist dafür nicht mehr erforderlich. Gibt Borg trotz `rc 1` tatsächlich keine Detailzeile aus, wird dies ausdrücklich als **Ursache nicht ausgegeben** angezeigt. Der vollständige SSH-/Borg-Befehl, stdout und eine gefilterte Fehler-/Warnungsausgabe stehen getrennt unter **Technische Details**. Borg schreibt Dateilisten und Statistik regulär nach stderr; normale Statuszeilen werden nicht als Fehler angezeigt.
 
 Laufende Aktionen können gestoppt werden. Der Manager beendet dabei nicht mehr nur den direkten Wrapper-Prozess, sondern die vollständige Prozessgruppe aus SSH, Shell, runuser und Borg. Bei über SSH auf einem Gerät ausgeführten Backups bleibt nach der einmaligen Geheimnisübergabe zusätzlich ein überwachter Steuerkanal offen. Ein Abbruch schließt zuerst diesen Kanal; der Remote-Wrapper signalisiert Borg auf dem Gerät mit SIGINT und wartet auf das tatsächliche Prozessende, bevor SSH und der repositoryweite Queue-Platz freigegeben werden. Das verhindert insbesondere zurückbleibende Locks externer Repositorys. Erst bei ausbleibender Reaktion folgen SIGTERM und als letzte Stufe SIGKILL. Die Abbruchanforderung wartet auf diesen Abschluss, bevor ein neuer Lauf angeboten wird. Ein automatisches `borg break-lock` wird bewusst nicht ausgeführt, da bei gemeinsam genutzten Repositories sonst eine aktive Sperre eines anderen Clients entfernt werden könnte. Abgeschlossene Jobläufe können wiederholt oder einzeln gelöscht werden. Die Ausführungsliste bietet die Filter Alle, laufend/wartend, fehlgeschlagen, Warnung, erfolgreich und abgebrochen sowie eine Textsuche.
 
@@ -674,7 +686,7 @@ Release Notes werden passend zur persönlichen Spracheinstellung auf Deutsch ode
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.63.zip
+unzip /pfad/BorgBackup-Manager-1.0.71.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -766,7 +778,7 @@ Die persistente `.env`, Manager- und Sicherheitsdatenbank, Schlüssel und TLS-Da
 
 ## Vorhandenes verwaltetes Repository gezielt auswählen
 
-Neben **Automatisch suchen** steht auf der Repository-Seite **Ordner auswählen** zur Verfügung. Der Browser ist strikt auf `/repositories` begrenzt, folgt keinen symbolischen Links und kennzeichnet direkte Unterordner mit Borg-`config` als auswählbar. Die Auswahl füllt das vorhandene Importformular; vor der Registrierung wird das Repository geprüft und niemals initialisiert oder überschrieben.
+Neben **Automatisch suchen** steht auf der Repository-Seite **Ordner auswählen** zur Verfügung. Der Browser ist strikt auf `/repositories` begrenzt, folgt keinen symbolischen Links und kennzeichnet auch verschachtelte Unterordner mit Borg-`config` als auswählbar. Befindet man sich bereits im Repository-Ordner, erscheint **Dieses Repository auswählen**. Die Auswahl füllt das vorhandene Importformular; vor der Registrierung wird das Repository geprüft und niemals initialisiert oder überschrieben.
 
 ## Diagnose
 

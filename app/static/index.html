@@ -6,26 +6,26 @@
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
-<link href="/static/favicon.svg?v=1.0.63" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.0.63"></script>
-<link href="/static/style.css?v=1.0.63" rel="stylesheet"/>
+<link href="/static/favicon.svg?v=1.0.71" rel="icon" type="image/svg+xml"/>
+<script src="/static/theme-init.js?v=1.0.71"></script>
+<link href="/static/style.css?v=1.0.71" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
 <form class="login-card" id="login-form">
-<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.0.63"/>
+<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.0.71"/>
 <p class="eyebrow">BorgBackup Manager</p>
 <h1>Zentrale für deine Backups.</h1>
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.0.63</b></p>
+<p class="login-version">Version <b id="login-version">v1.0.71</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
 <div class="app-shell hidden" id="app">
 <aside>
-<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.0.63"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
+<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.0.71"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
 <nav id="main-navigation">
 <span class="nav-label">Betrieb</span>
 <button class="active" data-view="dashboard">Übersicht</button>
@@ -77,7 +77,24 @@
 </div>
 <label class="check"><input checked="" name="enabled" type="checkbox"/> Gerät aktivieren</label>
 <div class="form-actions"><button id="host-submit" type="submit">Gerät speichern</button><button class="secondary hidden" id="cancel-host-edit" type="button">Abbrechen</button></div></form>
-<div class="panel"><div class="panel-head responsive-head"><h2>Verbundene Geräte</h2><div class="list-controls"><label>Sortierung<select id="host-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="status-active">Aktive zuerst</option><option value="address-asc">Adresse</option><option value="borg-desc">Borg-Version absteigend</option></select></label></div></div><div class="bounded-list" id="host-list"></div></div></div>
+<div class="panel"><div class="panel-head responsive-head"><h2>Verbundene Geräte</h2><div class="list-controls"><label>Sortierung<select id="host-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="status-active">Aktive zuerst</option><option value="address-asc">Adresse</option><option value="borg-desc">Borg-Version absteigend</option></select></label></div></div><div class="bounded-list" id="host-list"></div></div>
+<div class="panel" data-admin-only-block="" id="host-ssh-actions-panel">
+<div class="panel-head responsive-head"><div><h2>Gespeicherte SSH-Aktionen</h2><span>Wiederkehrende Wartungsbefehle auf verbundenen Geräten kontrolliert ausführen.</span></div></div>
+<form id="host-ssh-action-form" class="ssh-action-form">
+<input name="id" type="hidden"/>
+<div class="ssh-action-form-grid">
+<label>Gerät<select name="host_id" required=""></select></label>
+<label>Aktionsname<input name="name" maxlength="100" placeholder="NFS-Backupmount einhängen" required=""/></label>
+<label>Zeitlimit (Sekunden)<input name="timeout_seconds" type="number" min="5" max="3600" value="300" required=""/></label>
+<label class="check ssh-action-enabled"><input name="enabled" type="checkbox" checked=""/> Aktion aktivieren</label>
+</div>
+<label>SSH-Befehl<textarea name="command" rows="3" maxlength="4000" placeholder="sudo -n mount /mnt/backup" required=""></textarea></label>
+<p class="hint warning-text">Nur nicht-interaktive Befehle verwenden. Befehle werden in manager.db gespeichert; keine Passwörter, API-Tokens oder andere Geheimnisse eintragen. Für sudo nach Möglichkeit <code>sudo -n</code> verwenden.</p>
+<div class="form-actions"><button id="host-ssh-action-submit" type="submit">SSH-Aktion speichern</button><button class="secondary hidden" id="cancel-host-ssh-action-edit" type="button">Abbrechen</button></div>
+</form>
+<div class="bounded-list" id="host-ssh-action-list"></div>
+</div>
+</div>
 </section>
 <section class="view" id="view-repositories">
 <div class="repositories-stack">
@@ -97,7 +114,9 @@
 <option value="authenticated">authenticated – unverschlüsselt, authentifiziert</option>
 <option value="none">none – unverschlüsselt und nicht authentifiziert</option>
 </select></label>
+<label>Maximal parallele Backup-Läufe<input name="parallel_limit" type="number" min="1" max="64" value="1"/></label>
 </div>
+<p class="hint">Standard 1. Höhere Werte erlauben mehrere Backup-Läufe auf demselben Repository; Wartungs- und Prüfaktionen bleiben exklusiv.</p>
 <div class="repository-form-grid storage-guard-options" id="repo-storage-guard-fields">
 <label>Speicherplatz-Sperre<select name="storage_guard_mode"><option value="inherit">Globale Einstellung übernehmen</option><option value="enabled">Für dieses Repository aktivieren</option><option value="disabled">Für dieses Repository deaktivieren</option></select></label>
 <label>Eigene Sperrgrenze in Prozent<input max="100" min="1" name="storage_guard_threshold_percent" placeholder="globale Grenze" type="number"/></label>
@@ -126,11 +145,11 @@
 <div class="form-actions"><button id="repo-submit" type="submit">Repository erstellen</button><button class="secondary hidden" id="cancel-repo-edit" type="button">Abbrechen</button></div>
 </form>
 <div class="panel repositories-panel">
-<div class="panel-head responsive-head"><div><h2>Repositories</h2><span>Verbindung, Borg-Nutzdaten, Archive und Verwaltung zentral im Manager.</span></div><div class="list-controls"><label>Sortierung<select id="repo-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="status-ready">Bereite zuerst</option><option value="type-managed">Verwaltete zuerst</option><option value="jobs-desc">Meiste Jobs zuerst</option><option value="size-desc">Größe absteigend</option></select></label></div></div>
+<div class="panel-head responsive-head"><div><h2>Repositories</h2><span>Verbindung, Borg-Nutzdaten, Archive und Verwaltung zentral im Manager.</span></div><div class="list-controls"><button class="secondary" id="refresh-repositories" type="button">Status aktualisieren</button><label>Sortierung<select id="repo-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="status-ready">Bereite zuerst</option><option value="type-managed">Verwaltete zuerst</option><option value="jobs-desc">Meiste Jobs zuerst</option><option value="size-desc">Größe absteigend</option></select></label></div></div>
 <div aria-live="polite" class="persistent-info hidden" id="repo-operation-status" role="status"></div>
 <div class="bounded-list" id="repo-list"></div>
 </div>
-<div class="panel"><div class="panel-head responsive-head"><div><h2>Vorhandene lokale Repositories einbinden</h2><span>Automatisch nach Borg-Repositories suchen oder den Inhalt von <code>/repositories</code> gezielt durchsuchen.</span></div><div class="table-actions"><button class="secondary" id="discover-repositories" type="button">Automatisch suchen</button><button class="secondary" id="browse-repositories" type="button">Ordner auswählen</button></div></div><div class="bounded-list" id="repository-discovery-list"><div class="empty">Suche oder Dateibrowser bei Bedarf starten.</div></div><div class="repository-folder-browser hidden" id="repository-folder-browser"><div class="browser-toolbar"><button class="secondary" id="repository-browser-up" type="button">Eine Ebene höher</button><code id="repository-browser-path">/repositories</code><button class="secondary" id="close-repository-browser" type="button">Browser schließen</button></div><div class="repository-browser-list" id="repository-browser-list"></div><p class="hint">Nur direkte Unterordner von <code>/repositories</code> mit einer Borg-<code>config</code> können eingebunden werden. Symbolische Links werden nicht geöffnet.</p></div></div>
+<div class="panel"><div class="panel-head responsive-head"><div><h2>Vorhandene lokale Repositories einbinden</h2><span>Automatisch nach Borg-Repositories suchen oder den Inhalt von <code>/repositories</code> gezielt durchsuchen.</span></div><div class="table-actions"><button class="secondary" id="discover-repositories" type="button">Automatisch suchen</button><button class="secondary" id="browse-repositories" type="button">Ordner auswählen</button></div></div><div class="bounded-list" id="repository-discovery-list"><div class="empty">Suche oder Dateibrowser bei Bedarf starten.</div></div><div class="repository-folder-browser hidden" id="repository-folder-browser"><div class="browser-toolbar"><button class="secondary" id="repository-browser-up" type="button">Eine Ebene höher</button><code id="repository-browser-path">/repositories</code><button class="hidden" id="repository-browser-select-current" type="button">Dieses Repository auswählen</button><button class="secondary" id="close-repository-browser" type="button">Browser schließen</button></div><div class="repository-browser-list" id="repository-browser-list"></div><p class="hint">Borg-Repositories in sicheren Unterordnern von <code>/repositories</code> können eingebunden werden. Symbolische Links werden nicht geöffnet.</p></div></div>
 </div>
 </section>
 <section class="view" id="view-jobs">
@@ -172,11 +191,11 @@
 </div>
 <details class="job-options"><summary>Dateisystem- und Konsistenzoptionen</summary>
 <div class="option-grid compact-options">
-<label class="check"><input checked="" name="one_file_system" type="checkbox"/> Nur jeweiliges Quelldateisystem</label>
+<label class="check"><input checked="" name="one_file_system" type="checkbox"/> Nur jeweiliges Quelldateisystem <span class="option-help">(eingehängte Unterverzeichnisse überspringen)</span></label>
 <label class="check"><input checked="" name="exclude_caches" type="checkbox"/> CACHEDIR.TAG ausschließen</label>
 <label class="check"><input checked="" name="exclude_nodump" type="checkbox"/> nodump-Dateien ausschließen</label>
 <label class="check"><input name="numeric_ids" type="checkbox"/> Numerische IDs speichern</label>
-<label class="check"><input checked="" name="list_files" type="checkbox"/> Verarbeitete Dateien im Live-Protokoll anzeigen</label>
+<label class="check"><input name="list_files" type="checkbox"/> Verarbeitete Dateien im Live-Protokoll anzeigen</label>
 <label>Datei-Cache<select name="files_cache"><option value="ctime,size,inode">ctime,size,inode – Standard</option><option value="mtime,size,inode">mtime,size,inode</option><option value="ctime,size">ctime,size</option><option value="mtime,size">mtime,size</option><option value="rechunk,ctime">rechunk,ctime</option><option value="rechunk,mtime">rechunk,mtime</option><option value="disabled">deaktiviert</option></select></label>
 <label>Checkpoint (Sekunden)<input max="86400" min="60" name="checkpoint_interval" type="number" value="1800"/></label>
 </div>
@@ -184,7 +203,12 @@
 <details class="job-options"><summary>Aufbewahrung</summary>
 <div class="retention-grid">
 <label>Letzte<input min="0" name="last" type="number" value="0"/></label><label>Stündlich<input min="0" name="hourly" type="number" value="0"/></label><label>Täglich<input min="0" name="daily" type="number" value="7"/></label><label>Wöchentlich<input min="0" name="weekly" type="number" value="4"/></label><label>Monatlich<input min="0" name="monthly" type="number" value="6"/></label><label>Jährlich<input min="0" name="yearly" type="number" value="0"/></label>
-</div><p class="hint">0 deaktiviert die jeweilige Borg-Aufbewahrungsregel.</p>
+</div>
+<div class="manual-maintenance-options">
+<label class="check"><input name="manual_prune_after_backup" type="checkbox"/> Nach manuellem Backup Prune ausführen</label>
+<label class="check"><input name="manual_compact_after_prune" type="checkbox"/> Nach erfolgreichem manuellen Prune Compact ausführen</label>
+</div>
+<p class="hint">0 deaktiviert die jeweilige Borg-Aufbewahrungsregel. Die beiden Nachbereitungsoptionen gelten nur für manuell gestartete Backups; Zeitpläne führen ihre gemeinsame Repository-Nachbereitung automatisch aus.</p>
 </details>
 <div class="job-form-footer"><label class="check"><input checked="" name="enabled" type="checkbox"/> Job aktivieren</label><div class="form-actions"><button id="job-submit" type="submit">Job speichern</button><button class="secondary hidden" id="cancel-job-edit" type="button">Abbrechen</button></div></div>
 </form>
@@ -347,8 +371,10 @@
 </section>
 <section class="settings-section">
 <div class="panel-head"><div><h2>Parallelitätsgrenzen</h2><span>Begrenzt gleichzeitig laufende Borg-Ausführungen auch dann, wenn sie unterschiedliche Repositorys verwenden.</span></div></div>
-<label>Maximal parallele Ausführungen global<input max="64" min="0" name="max_parallel_runs" type="number"/></label>
-<p class="hint">0 bedeutet unbegrenzt. Die feste Regel „höchstens eine schreibende oder prüfende Aktion je Repository“ bleibt zusätzlich bestehen. Ein Zeitplan kann unter „Zeitpläne“ einen niedrigeren eigenen Grenzwert erhalten.</p>
+<div class="row"><label>Maximal parallele Ausführungen global<input max="64" min="0" name="max_parallel_runs" type="number"/></label><label>Maximal parallele Quellenstatistiken<input max="64" min="1" name="source_stats_parallel_limit" type="number"/></label></div>
+<p class="hint">0 bedeutet bei der globalen Grenze unbegrenzt. Manuelle Quellenstatistiken zählen zusätzlich gegen die globale Grenze und besitzen eine eigene Grenze (Standard 1), damit mehrere ressourcenintensive Quellenscans nicht unbeabsichtigt gleichzeitig laufen. Repository- und Mount-Grenzen gelten für Quellenstatistiken nicht, weil dabei nur das Quellgerät gelesen wird.</p>
+<div class="mount-parallel-editor" id="mount-parallel-editor"></div>
+<p class="hint">Mount-Grenzen gelten gemeinsam für alle verwalteten Repositorys auf demselben Dateisystem. 0 bedeutet für diesen Mount unbegrenzt.</p>
 </section>
 <section class="settings-section">
 <div class="panel-head"><div><h2>Ausführungsprotokolle</h2><span>Vollständige neue Live-Protokolle liegen als Dateien; die Datenbank enthält nur begrenzte Vorschauen und Metadaten.</span></div></div>
@@ -365,11 +391,19 @@
 <p class="hint">Repositories übernehmen diese Werte standardmäßig. Unter „Repositories → Bearbeiten“ kann die Sperre pro Repository deaktiviert oder mit einer eigenen Grenze versehen werden.</p>
 </section>
 <label class="check"><input name="repository_size_after_run" type="checkbox"/> Repository-Größe nach manuellen Schreibvorgängen und nach Abschluss eines Zeitplans automatisch aktualisieren</label>
-<label class="check"><input name="compact_after_prune" type="checkbox"/> Nach erfolgreichem geplanten Prune automatisch Compact ausführen</label>
+<label class="check"><input name="compact_after_prune" type="checkbox"/> Nach erfolgreicher Prune-Phase eines Zeitplans einmal je Repository Compact ausführen</label>
 <section class="settings-section">
-<div class="panel-head"><div><h2>Ausschlussvorlagen</h2><span>Zentrale, wiederverwendbare Ausschlusslisten für neue und bestehende Backup-Jobs.</span></div><button class="secondary" id="add-exclude-template" type="button">Vorlage zur Liste hinzufügen</button></div>
-<div class="template-editor" id="exclude-template-editor"></div>
-<p class="hint">Die Vorlage wird beim Job nur in dessen Ausschlussliste kopiert. Spätere Änderungen an einer Vorlage verändern bereits gespeicherte Jobs nicht automatisch.</p>
+<div class="panel-head"><div><h2>Ausschlussvorlagen</h2><span>Zentrale, wiederverwendbare Ausschlusslisten einzeln auswählen und bearbeiten.</span></div><button class="secondary" id="add-exclude-template" type="button">Neue Vorlage</button></div>
+<div class="exclude-template-manager">
+<label>Vorlage auswählen<select id="exclude-template-select"><option value="">Keine Vorlage vorhanden</option></select></label>
+<div class="exclude-template-card hidden" id="exclude-template-editor">
+<label>Vorlagenname<input id="exclude-template-name" maxlength="80" placeholder="z. B. Linux-Systempfade"/></label>
+<label>Ausschlussmuster <span>(einer pro Zeile)</span><textarea id="exclude-template-patterns" rows="7" placeholder="/proc&#10;/sys&#10;/dev&#10;/run&#10;/tmp"></textarea></label>
+<div class="template-editor-actions"><button class="danger ghost" id="remove-exclude-template" type="button">Vorlage löschen</button></div>
+</div>
+<div class="empty" id="exclude-template-empty">Noch keine Ausschlussvorlage angelegt.</div>
+</div>
+<p class="hint">Es wird jeweils nur eine Vorlage geladen. Änderungen werden mit „Einstellungen speichern“ übernommen. Beim Backup-Job wird eine Vorlage nur in dessen Ausschlussliste kopiert; spätere Vorlagenänderungen verändern gespeicherte Jobs nicht automatisch.</p>
 </section>
 <button type="submit">Einstellungen speichern</button>
 </form>
@@ -422,8 +456,9 @@
 </form>
 </dialog>
 <dialog class="run-dialog" id="log-dialog">
-<div class="panel-head run-dialog-head"><div><p class="eyebrow">Ausführung</p><h2>Ausführungsdetails</h2><span id="log-live-state"></span></div><button class="secondary" id="close-dialog">Schließen</button></div>
+<div class="panel-head run-dialog-head"><div><p class="eyebrow">Ausführung</p><h2>Ausführungsdetails</h2><span id="log-live-state"></span></div><div class="run-dialog-head-actions"><div class="bbm-network-chip hidden" id="bbm-network-live" title="Gesamtverkehr des BorgBackup-Manager-Containers"></div><button class="danger hidden" id="stop-live-run" type="button">Job stoppen</button><button class="secondary" id="close-dialog">Schließen</button></div></div>
 <div class="run-summary" id="log-summary"></div>
+<div class="backup-progress hidden" id="log-backup-progress" aria-live="polite"></div>
 <div class="diagnosis-box hidden" id="log-version-warning"></div>
 <div class="diagnosis-box hidden" id="log-diagnosis"></div>
 <div class="diagnosis-box warning-causes hidden" id="log-warning-causes"></div>
@@ -433,6 +468,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.0.63"></script><script src="/static/app.js?v=1.0.63"></script>
+<script src="/static/i18n.js?v=1.0.71"></script><script src="/static/app.js?v=1.0.71"></script>
 </body>
 </html>
