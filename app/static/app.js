@@ -728,7 +728,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.71`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.72`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -2130,16 +2130,32 @@ function renderRunDialog(run, {appendLog = false} = {}) {
     ? `Dedupliziert ${formatBytes(run.backup_deduplicated_size_bytes)} · Original ${formatBytes(run.backup_original_size_bytes)} · Komprimiert ${formatBytes(run.backup_compressed_size_bytes)}`
     : '–';
   const network = run.backup_network;
-  const networkInterface = network
-    ? `${esc(network.interface || '–')}${network.ip_address && network.ip_address !== '-' ? ' · ' + esc(network.ip_address) : ''}`
-    : '–';
-  const networkRates = network
-    ? `↑ ${esc(formatBitRate(network.upload_bits_per_second))} · ↓ ${esc(formatBitRate(network.download_bits_per_second))}`
+  const networkTraffic = network
+    ? `↑ ${formatBytes(network.upload_bytes)} · ↓ ${formatBytes(network.download_bytes)}`
     : '–';
   const networkTitle = String(currentLocale()).toLowerCase().startsWith('en')
-    ? 'Total traffic on the client interface selected by the route to the repository.'
-    : 'Gesamtverkehr des Client-Interfaces, das die Route zum Repository verwendet.';
-  $('#log-summary').innerHTML = `<div><span>Status</span><strong class="status-text ${esc(run.status)}">${esc(runStatusLabel(run.status))}</strong></div><div><span>Gestartet</span><strong>${run.started_at ? esc(formatDate(run.started_at)) : 'wartet'}</strong></div><div><span>Dauer</span><strong>${esc(formatDuration(run.duration_seconds))}</strong></div><div><span>Lauf</span><strong>#${run.id}</strong></div><div><span>Ausführung</span><strong>${trigger}</strong></div><div><span>Backup-Größe</span><strong>${backupSize}</strong></div><div><span>Dateien</span><strong>${run.backup_file_count == null ? '–' : Number(run.backup_file_count).toLocaleString(currentLocale())}</strong></div><div class="run-network-summary" title="${esc(networkTitle)}"><span>Netzwerk</span><strong>${networkInterface}</strong><small>${networkRates}</small></div>`;
+    ? 'Cumulative traffic on the client interface used for the repository route since this job started. Other traffic on the same interface is included.'
+    : 'Kumulierter Verkehr des für die Repository-Route verwendeten Client-Interfaces seit Jobstart. Anderer Verkehr auf demselben Interface ist enthalten.';
+  const networkHint = String(currentLocale()).toLowerCase().startsWith('en') ? 'since job start' : 'seit Jobstart';
+  $('#log-summary').innerHTML = `<div><span>Status</span><strong class="status-text ${esc(run.status)}">${esc(runStatusLabel(run.status))}</strong></div><div><span>Gestartet</span><strong>${run.started_at ? esc(formatDate(run.started_at)) : 'wartet'}</strong></div><div><span>Dauer</span><strong>${esc(formatDuration(run.duration_seconds))}</strong></div><div><span>Lauf</span><strong>#${run.id}</strong></div><div><span>Ausführung</span><strong>${trigger}</strong></div><div><span>Backup-Größe</span><strong>${backupSize}</strong></div><div><span>Dateien</span><strong>${run.backup_file_count == null ? '–' : Number(run.backup_file_count).toLocaleString(currentLocale())}</strong></div><div class="run-network-summary" title="${esc(networkTitle)}"><span>Netzwerk</span><strong>${esc(networkTraffic)}</strong><small>${esc(networkHint)}</small></div>`;
+
+  const clientNetworkChip = $('#client-network-live');
+  if (clientNetworkChip) {
+    const interfaces = active && Array.isArray(network?.interfaces) ? network.interfaces.slice(0, 3) : [];
+    clientNetworkChip.classList.toggle('hidden', interfaces.length === 0);
+    if (interfaces.length) {
+      const clientTitle = String(currentLocale()).toLowerCase().startsWith('en') ? 'Client network' : 'Client-Netzwerk';
+      const routeLabel = String(currentLocale()).toLowerCase().startsWith('en') ? 'repository route' : 'Repository-Route';
+      const rows = interfaces.map((item) => {
+        const identity = `${esc(item.interface || '–')}${item.ip_address && item.ip_address !== '-' ? ' · ' + esc(item.ip_address) : ''}`;
+        const rates = `↑ ${esc(formatBitRate(item.upload_bits_per_second))} · ↓ ${esc(formatBitRate(item.download_bits_per_second))}`;
+        return `<div class="client-network-row${item.route_selected ? ' route-selected' : ''}"><strong>${identity}</strong><small>${rates}${item.route_selected ? ' · ' + esc(routeLabel) : ''}</small></div>`;
+      }).join('');
+      clientNetworkChip.innerHTML = `<span>${esc(clientTitle)}</span><div class="client-network-lines">${rows}</div>`;
+    } else {
+      clientNetworkChip.innerHTML = '';
+    }
+  }
 
   const bbmNetwork = run.bbm_network;
   const bbmChip = $('#bbm-network-live');
@@ -2178,6 +2194,7 @@ function showTextDialog(title, text) {
   state.liveLogRequestPending = false;
   $('#log-dialog h2').textContent = title;
   $('#log-live-state').textContent = '';
+  $('#client-network-live')?.classList.add('hidden');
   $('#bbm-network-live')?.classList.add('hidden');
   $('#stop-live-run')?.classList.add('hidden');
   $('#log-diagnosis').classList.add('hidden');

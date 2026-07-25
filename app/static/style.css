@@ -1964,3 +1964,51 @@ body.compact .job-action-buttons button { min-height: 27px !important; padding: 
 .ssh-actions-table td[data-label="Aktion"] { min-width: 18rem; }
 @media (max-width: 1050px) { .ssh-action-form-grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 680px) { .ssh-action-form-grid { grid-template-columns: 1fr; } .ssh-actions-table td[data-label="Aktion"] { min-width: 0; } .ssh-action-command-preview { white-space: normal; overflow-wrap: anywhere; } }
+
+/* 1.0.72: cumulative job traffic and up to three client interfaces */
+.client-network-chip {
+  display: grid;
+  gap: 4px;
+  min-width: min(440px, 46vw);
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  line-height: 1.15;
+}
+.client-network-chip > span {
+  color: var(--muted);
+  font-size: .66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.client-network-lines { display: grid; gap: 3px; }
+.client-network-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+.client-network-row strong {
+  min-width: 0;
+  font-size: .76rem;
+  overflow-wrap: anywhere;
+}
+.client-network-row small {
+  color: var(--muted);
+  font-size: .7rem;
+  white-space: nowrap;
+}
+.client-network-row.route-selected strong { color: var(--primary); }
+.run-network-summary strong { font-variant-numeric: tabular-nums; }
+@media (max-width: 980px) {
+  .client-network-chip { flex: 1 1 100%; min-width: 0; }
+}
+@media (max-width: 620px) {
+  .client-network-row { grid-template-columns: 1fr; gap: 1px; }
+  .client-network-row small { white-space: normal; }
+}
+@media (max-width: 480px) {
+  .client-network-chip { grid-column: 1 / -1; }
+}

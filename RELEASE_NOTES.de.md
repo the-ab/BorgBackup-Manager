@@ -1,5 +1,15 @@
 # Release Notes
 
+## v1.0.72 – 25.07.2026
+
+### Live-Netzwerkdarstellung erweitert
+
+- Die Kachel **Netzwerk** in der Ausführungsübersicht zeigt jetzt den seit Jobstart kumulierten Upload- und Download-Traffic des Client-Interfaces, das Linux für die Route zum Repository verwendet. Diese Summen bleiben nach Abschluss des Backup-Laufs wie Dateianzahl und Backup-Größen in der Ausführung erhalten.
+- Der kumulierte Wert basiert auf den Kernel-Zählern des Repository-Routeninterfaces. Anderer Verkehr auf demselben Interface während des Jobs ist deshalb enthalten; es handelt sich nicht um eine paketgenaue Borg-only-Messung.
+- Im Kopf des geöffneten Live-Dialogs erscheint zusätzlich **Client-Netzwerk** mit bis zu drei aktiven IPv4-Interfaces des Backup-Clients. Angezeigt werden Interface-Name, IP-Adresse sowie aktuelle Upload-/Downloadrate; das für die Repository-Route verwendete Interface steht zuerst und ist gekennzeichnet.
+- Die zusätzlichen Interface-Raten bleiben reine In-Memory-Livedaten und werden nicht in `manager.db` geschrieben. Persistiert werden ausschließlich die beiden kumulierten Traffic-Summen des Backup-Laufs.
+- Automatische Datenbankschema-Migration ergänzt `runs.backup_network_download_bytes` und `runs.backup_network_upload_bytes`; bestehende Ausführungen bleiben unverändert und zeigen dort weiterhin keinen historischen Netzwerkwert.
+
 ## v1.0.71 – 25.07.2026
 
 ### Gespeicherte SSH-Aktionen pro Gerät

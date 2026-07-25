@@ -1,5 +1,15 @@
 # Release Notes
 
+## v1.0.72 – 2026-07-25
+
+### Extended live network view
+
+- The **Network** tile in run details now shows cumulative upload and download traffic since the job started on the client interface Linux selected for the route to the repository. These totals remain available after the backup finishes, just like file count and backup sizes.
+- The cumulative value is derived from kernel counters of the repository-route interface. Other traffic on that interface during the run is therefore included; this is not packet-exact Borg-only accounting.
+- The open live-dialog header now also shows **Client network** with up to three active IPv4 interfaces from the backup client. Each row contains interface name, IP address and current upload/download rate; the repository-route interface is ordered first and marked.
+- The additional per-interface rates remain process-local live data and are never written to `manager.db`. Only the two cumulative per-run traffic totals are persisted.
+- Automatic schema migration adds `runs.backup_network_download_bytes` and `runs.backup_network_upload_bytes`; existing runs remain unchanged and naturally have no historical network total.
+
 ## v1.0.71 – 2026-07-25
 
 ### Saved SSH actions per device

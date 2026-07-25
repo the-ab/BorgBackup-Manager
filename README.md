@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.71
+# BorgBackup Manager 1.0.72
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -33,7 +33,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.0.71.zip
+BorgBackup-Manager-1.0.72.zip
 ```
 
 The documentation naming convention is:
@@ -292,7 +292,7 @@ The manager distinguishes:
 
 For remote backup cancellation, a supervised control channel first signals the remote Borg process group and waits for confirmed termination before releasing the queue. Automatic `borg break-lock` is deliberately not performed.
 
-Warning causes are captured while Borg is running, before log truncation. Changed files, missing files, permission errors, I/O errors and general Borg warnings are persisted separately. If Borg returns warning status without a detail line, the UI explicitly reports that no cause was emitted. Full file-list output uses a raw-byte path: ordinary Borg item blocks are not fully decoded or split line by line. Complete status/path output is stored only in `/data/run-logs`; SQLite keeps cleaned metadata/diagnostic previews and bounded structured warning causes, not the ordinary file list. When the complete file list is disabled Borg uses `--list --filter AMCE`: A/M entries are consumed only for lightweight live counters and are not persisted in the run log, while C/E remain available for warning diagnosis. Unchanged U entries are still not requested. Independently of the full file-list option, backup runs also use Borg `--progress`. The live dialog therefore shows the processed file count, original/compressed/deduplicated data volumes and the currently processed path, plus A (added), M (modified), C (changed while being read) and E (file error) counters and the latest A/M/C/E path. When previous source statistics exist, the UI adds an explicitly approximate percentage and ETA; first runs use an indeterminate progress bar. Progress, item-status and network state are process-local and are never written to `manager.db`. The live run summary also shows the client network interface selected by routing for the repository, its source IP, and current upload/download rate. The rate is total traffic on that interface, not Borg-exclusive traffic. The header of an open live dialog additionally shows **BBM** upload/download traffic aggregated across the manager container's non-loopback interfaces. This lightweight value is sampled only during live polling and helps identify unexpected manager-side network traffic. Administrators can also stop a queued or running job directly in the live dialog via **Stop job** without returning to the run list. With the run dialog closed, status polling reads no file-backed log. An open live dialog requests only bytes appended since its previous file offset; the initial request and background poll are serialized so stale responses cannot duplicate the header. The browser view remains bounded and the configured complete head/tail view is loaded once after completion.
+Warning causes are captured while Borg is running, before log truncation. Changed files, missing files, permission errors, I/O errors and general Borg warnings are persisted separately. If Borg returns warning status without a detail line, the UI explicitly reports that no cause was emitted. Full file-list output uses a raw-byte path: ordinary Borg item blocks are not fully decoded or split line by line. Complete status/path output is stored only in `/data/run-logs`; SQLite keeps cleaned metadata/diagnostic previews and bounded structured warning causes, not the ordinary file list. When the complete file list is disabled Borg uses `--list --filter AMCE`: A/M entries are consumed only for lightweight live counters and are not persisted in the run log, while C/E remain available for warning diagnosis. Unchanged U entries are still not requested. Independently of the full file-list option, backup runs also use Borg `--progress`. The live dialog therefore shows the processed file count, original/compressed/deduplicated data volumes and the currently processed path, plus A (added), M (modified), C (changed while being read) and E (file error) counters and the latest A/M/C/E path. When previous source statistics exist, the UI adds an explicitly approximate percentage and ETA; first runs use an indeterminate progress bar. Progress and item-status state remain process-local. The **Network** tile instead shows cumulative upload/download traffic since job start on the client interface selected by Linux routing for the repository; these two totals are persisted with the run. Because kernel interface counters are used, unrelated traffic on the same interface is included. The open live-dialog header additionally shows **Client network** with up to three active IPv4 client interfaces, each with interface name, IP address and current upload/download rate; the repository-route interface is first. These instantaneous interface rates are not persisted. A separate **BBM** indicator continues to show upload/download traffic aggregated across the manager container's non-loopback interfaces. This lightweight value is sampled only during live polling and helps identify unexpected manager-side network traffic. Administrators can also stop a queued or running job directly in the live dialog via **Stop job** without returning to the run list. With the run dialog closed, status polling reads no file-backed log. An open live dialog requests only bytes appended since its previous file offset; the initial request and background poll are serialized so stale responses cannot duplicate the header. The browser view remains bounded and the configured complete head/tail view is loaded once after completion.
 
 ## Archives
 
@@ -370,7 +370,7 @@ System diagnostics cover:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.71.zip
+unzip /path/BorgBackup-Manager-1.0.72.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh

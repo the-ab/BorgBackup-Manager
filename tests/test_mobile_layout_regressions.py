@@ -67,6 +67,9 @@ def test_live_backup_status_and_network_tiles_are_responsive():
     assert "backup_network" in javascript
     assert "formatBitRate" in javascript
     assert 'class="run-network-summary"' in javascript
+    assert "network.upload_bytes" in javascript
+    assert "network.download_bytes" in javascript
+    assert "network?.interfaces" in javascript
     assert 'class="backup-item-status status-' in javascript
     assert ".backup-item-statuses { display: grid; grid-template-columns: repeat(4" in css
     assert ".backup-item-statuses { grid-template-columns: repeat(2" in css

@@ -99,32 +99,51 @@ def test_network_filter_handles_prefix_split_across_chunks(monkeypatch):
     assert filtered == b"normal output\n"
     assert activity is None
 
-    filtered, activity = filter_.feed(b"MNET\teth9\t10.0.0.9\t100\t200\n")
+    filtered, activity = filter_.feed(b"MNET\teth9\t10.0.0.9\t100\t200\t1\n")
     assert filtered == b""
     assert activity is not None
-    assert activity.interface == "eth9"
-    assert activity.ip_address == "10.0.0.9"
+    assert activity.interfaces[0].interface == "eth9"
+    assert activity.interfaces[0].ip_address == "10.0.0.9"
+    assert activity.download_bytes == 0
+    assert activity.upload_bytes == 0
 
-    filtered, activity = filter_.feed(b"\x1eBBMNET\teth9\t10.0.0.9\t150\t300\n")
+    filtered, activity = filter_.feed(b"\x1eBBMNET\teth9\t10.0.0.9\t150\t300\t1\n")
     assert filtered == b""
     assert activity is not None
-    assert activity.download_bits_per_second == 400.0
-    assert activity.upload_bits_per_second == 800.0
+    assert activity.interfaces[0].download_bits_per_second == 400.0
+    assert activity.interfaces[0].upload_bits_per_second == 800.0
+    assert activity.download_bytes == 50
+    assert activity.upload_bytes == 100
 
 
-def test_network_filter_strips_telemetry_and_calculates_directional_rates(monkeypatch):
-    timestamps = iter([10.0, 12.0])
+def test_network_filter_strips_telemetry_tracks_three_interfaces_and_route_totals(monkeypatch):
+    timestamps = iter([10.0, 10.0, 10.0, 12.0, 12.0, 12.0])
     monkeypatch.setattr("app.borg_progress.time.monotonic", lambda: next(timestamps))
     filter_ = BorgNetworkStreamFilter()
-    filtered, first = filter_.feed(b"before\n\x1eBBMNET\teth1\t10.0.0.5\t1000\t2000\nafter\n")
+    first_payload = (
+        b"before\n"
+        b"\x1eBBMNET\teth1\t10.0.0.5\t1000\t2000\t1\n"
+        b"\x1eBBMNET\teth2\t10.0.1.5\t4000\t5000\t0\n"
+        b"\x1eBBMNET\teth3\t10.0.2.5\t7000\t8000\t0\n"
+        b"after\n"
+    )
+    filtered, first = filter_.feed(first_payload)
     assert filtered == b"before\nafter\n"
     assert first is not None
-    assert first.interface == "eth1"
-    assert first.ip_address == "10.0.0.5"
-    assert first.download_bits_per_second is None
-    assert first.upload_bits_per_second is None
-    filtered, second = filter_.feed(b"\x1eBBMNET\teth1\t10.0.0.5\t3000\t5000\n")
+    assert [item.interface for item in first.interfaces] == ["eth1", "eth2", "eth3"]
+    assert first.interfaces[0].route_selected is True
+    assert first.download_bytes == 0
+    assert first.upload_bytes == 0
+
+    second_payload = (
+        b"\x1eBBMNET\teth1\t10.0.0.5\t3000\t5000\t1\n"
+        b"\x1eBBMNET\teth2\t10.0.1.5\t4500\t5500\t0\n"
+        b"\x1eBBMNET\teth3\t10.0.2.5\t9000\t10000\t0\n"
+    )
+    filtered, second = filter_.feed(second_payload)
     assert filtered == b""
     assert second is not None
-    assert second.download_bits_per_second == 8000.0
-    assert second.upload_bits_per_second == 12000.0
+    assert second.interfaces[0].download_bits_per_second == 8000.0
+    assert second.interfaces[0].upload_bits_per_second == 12000.0
+    assert second.download_bytes == 2000
+    assert second.upload_bytes == 3000

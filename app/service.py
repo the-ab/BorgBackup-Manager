@@ -17,7 +17,7 @@ from sqlalchemy.orm import joinedload
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
 from app.borg_progress import (
     BorgItemActivityStreamFilter, BorgNetworkStreamFilter, BorgProgressStreamFilter,
-    clear_run_live_activity, clear_run_progress, set_run_item_activity,
+    clear_run_live_activity, clear_run_progress, get_run_network_activity, set_run_item_activity,
     set_run_network_activity, set_run_progress,
 )
 from app.backup_stats import parse_backup_statistics, parse_source_scan_statistics
@@ -1172,6 +1172,12 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
                     host.borg_version = version
                     host.borg_version_status = compatibility.level
                     host.borg_checked_at = datetime.now(timezone.utc)
+            if action == "backup":
+                network_snapshot = get_run_network_activity(run_id, max_age_seconds=None)
+                if network_snapshot is not None:
+                    run.backup_network_download_bytes = int(network_snapshot.get("download_bytes") or 0)
+                    run.backup_network_upload_bytes = int(network_snapshot.get("upload_bytes") or 0)
+
             if action in {"backup", "source-stats"} and status in {"success", "warning"}:
                 statistics = (
                     parse_backup_statistics(output + "\n" + error)

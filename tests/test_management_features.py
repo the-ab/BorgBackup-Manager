@@ -395,6 +395,8 @@ def test_run_json_skips_legacy_backup_parser_when_statistics_are_persisted(monke
         backup_compressed_size_bytes=80,
         backup_deduplicated_size_bytes=20,
         backup_file_count=5,
+        backup_network_download_bytes=1234,
+        backup_network_upload_bytes=5678,
         created_at=datetime.now(timezone.utc),
         started_at=datetime.now(timezone.utc),
         finished_at=datetime.now(timezone.utc),
@@ -407,6 +409,9 @@ def test_run_json_skips_legacy_backup_parser_when_statistics_are_persisted(monke
     payload = main_module.run_json(row, include_details=False, log_file_available=False)
     assert payload["archive_name"] == row.archive_name_snapshot
     assert payload["backup_file_count"] == 5
+    assert payload["backup_network"]["download_bytes"] == 1234
+    assert payload["backup_network"]["upload_bytes"] == 5678
+    assert payload["backup_network"]["interfaces"] == []
     assert payload["log_file_available"] is False
 
 

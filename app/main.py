@@ -3257,9 +3257,21 @@ def run_json(
     backup_progress = None
     backup_item_activity = None
     backup_network = None
+    if row.action == "backup":
+        if active:
+            backup_item_activity = get_run_item_activity(row.id)
+            backup_network = get_run_network_activity(row.id)
+        if backup_network is None and (
+            row.backup_network_download_bytes is not None or row.backup_network_upload_bytes is not None
+        ):
+            backup_network = {
+                "interfaces": [],
+                "download_bytes": int(row.backup_network_download_bytes or 0),
+                "upload_bytes": int(row.backup_network_upload_bytes or 0),
+                "route_interface": "",
+                "route_ip_address": "",
+            }
     if row.action == "backup" and active:
-        backup_item_activity = get_run_item_activity(row.id)
-        backup_network = get_run_network_activity(row.id)
         progress = get_run_progress(row.id)
         if progress:
             estimated_files = row.job.source_file_count if row.job else None

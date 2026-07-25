@@ -162,6 +162,8 @@ class Run(Base):
     backup_compressed_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backup_deduplicated_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backup_file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    backup_network_download_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    backup_network_upload_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

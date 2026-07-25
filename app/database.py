@@ -84,6 +84,8 @@ def migrate_schema(target_engine=engine) -> None:
             "backup_compressed_size_bytes": "INTEGER",
             "backup_deduplicated_size_bytes": "INTEGER",
             "backup_file_count": "INTEGER",
+            "backup_network_download_bytes": "INTEGER",
+            "backup_network_upload_bytes": "INTEGER",
         },
     }
     with target_engine.begin() as connection:

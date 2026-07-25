@@ -578,9 +578,10 @@ def backup_command(job: Job) -> Command:
             "printf '%s\\n' '------------------------------------------------------------------------------'",
         ])
 
-    # The backup data path is source client -> repository. Monitor exactly the
-    # client interface selected by Linux routing for the repository host. The
-    # monitor is unprivileged and reads only standard kernel byte counters.
+    # The backup data path is source client -> repository. Monitor the route
+    # interface first and expose up to two additional active IPv4 interfaces so
+    # multi-NIC clients remain visible in the live dialog. Only the route
+    # interface contributes to the cumulative per-job traffic counters.
     network_host = _repository_network_host(job.repository)
     network_monitor = "bbm_stop_network_monitor() { :; }"
     if network_host:
@@ -596,6 +597,7 @@ bbm_stop_network_monitor() {{
 bbm_start_network_monitor() {{
   bbm_net_target={shlex.quote(network_host)}
   command -v ip >/dev/null 2>&1 || return 0
+  command -v awk >/dev/null 2>&1 || return 0
   bbm_net_ip="$bbm_net_target"
   if command -v getent >/dev/null 2>&1; then
     set -- $(getent ahosts "$bbm_net_target" 2>/dev/null)
@@ -603,25 +605,42 @@ bbm_start_network_monitor() {{
   fi
   set -- $(ip route get "$bbm_net_ip" 2>/dev/null)
   [ "$#" -gt 0 ] || return 0
-  bbm_iface=""
-  bbm_src=""
+  bbm_route_iface=""
+  bbm_route_src=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      dev) shift; [ "$#" -gt 0 ] && bbm_iface="$1" ;;
-      src) shift; [ "$#" -gt 0 ] && bbm_src="$1" ;;
+      dev) shift; [ "$#" -gt 0 ] && bbm_route_iface="$1" ;;
+      src) shift; [ "$#" -gt 0 ] && bbm_route_src="$1" ;;
     esac
     [ "$#" -gt 0 ] && shift
   done
-  [ -n "$bbm_iface" ] || return 0
-  [ -n "$bbm_src" ] || bbm_src="-"
-  bbm_rx_file="/sys/class/net/$bbm_iface/statistics/rx_bytes"
-  bbm_tx_file="/sys/class/net/$bbm_iface/statistics/tx_bytes"
-  [ -r "$bbm_rx_file" ] && [ -r "$bbm_tx_file" ] || return 0
+  [ -n "$bbm_route_iface" ] || return 0
+  bbm_route_iface=${{bbm_route_iface%%@*}}
+  [ -n "$bbm_route_src" ] || bbm_route_src="-"
+
+  bbm_interfaces="$(
+    ip -o -4 addr show up scope global 2>/dev/null |
+      awk -v route="$bbm_route_iface" -v route_ip="$bbm_route_src" '
+        BEGIN {{ count=0; if (route != "") {{ print route "\t" route_ip "\t1"; seen[route]=1; count++ }} }}
+        count < 3 {{
+          iface=$2; sub(/@.*/, "", iface);
+          split($4, addr, "/");
+          if (iface != "" && !seen[iface]) {{ print iface "\t" addr[1] "\t0"; seen[iface]=1; count++ }}
+        }}
+      '
+  )"
+  [ -n "$bbm_interfaces" ] || return 0
   (
     while :; do
-      IFS= read -r bbm_rx < "$bbm_rx_file" || exit 0
-      IFS= read -r bbm_tx < "$bbm_tx_file" || exit 0
-      printf '\036BBMNET\t%s\t%s\t%s\t%s\n' "$bbm_iface" "$bbm_src" "$bbm_rx" "$bbm_tx" >&2
+      printf '%s\n' "$bbm_interfaces" | while IFS='	' read -r bbm_iface bbm_src bbm_is_route; do
+        [ -n "$bbm_iface" ] || continue
+        bbm_rx_file="/sys/class/net/$bbm_iface/statistics/rx_bytes"
+        bbm_tx_file="/sys/class/net/$bbm_iface/statistics/tx_bytes"
+        [ -r "$bbm_rx_file" ] && [ -r "$bbm_tx_file" ] || continue
+        IFS= read -r bbm_rx < "$bbm_rx_file" || continue
+        IFS= read -r bbm_tx < "$bbm_tx_file" || continue
+        printf '\036BBMNET\t%s\t%s\t%s\t%s\t%s\n' "$bbm_iface" "$bbm_src" "$bbm_rx" "$bbm_tx" "$bbm_is_route" >&2
+      done
       sleep 1
     done
   ) &
@@ -629,6 +648,7 @@ bbm_start_network_monitor() {{
 }}
 bbm_start_network_monitor
 """.strip()
+
 
     script = f"""
 set +e

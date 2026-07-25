@@ -165,6 +165,7 @@ def test_live_dialog_exposes_manager_network_and_direct_stop_controls():
     index = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
     script = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
     style = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    assert 'id="client-network-live"' in index
     assert 'id="bbm-network-live"' in index
     assert 'id="stop-live-run"' in index
     assert 'run.bbm_network' in script

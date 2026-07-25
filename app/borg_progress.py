@@ -140,7 +140,7 @@ _ADDED_MODIFIED_LINE_RE = re.compile(
 _NETWORK_PREFIX = b"\x1eBBMNET\t"
 _NETWORK_RECORD_RE = re.compile(
     rb"^\x1eBBMNET\t(?P<interface>[^\t\r\n]+)\t(?P<ip>[^\t\r\n]+)\t"
-    rb"(?P<rx>[0-9]+)\t(?P<tx>[0-9]+)$"
+    rb"(?P<rx>[0-9]+)\t(?P<tx>[0-9]+)(?:\t(?P<route>[01]))?$"
 )
 
 
@@ -228,24 +228,56 @@ class BorgItemActivityStreamFilter:
 
 
 @dataclass(frozen=True)
-class NetworkActivity:
+class NetworkInterfaceActivity:
     interface: str
     ip_address: str
     download_bits_per_second: float | None
     upload_bits_per_second: float | None
+    route_selected: bool = False
+
+
+@dataclass(frozen=True)
+class NetworkActivity:
+    interfaces: tuple[NetworkInterfaceActivity, ...]
+    download_bytes: int = 0
+    upload_bytes: int = 0
+    route_interface: str = ""
+    route_ip_address: str = ""
 
 
 class BorgNetworkStreamFilter:
-    """Remove BBM network counter frames and turn them into live rates.
+    """Strip client network telemetry and build a bounded live snapshot.
 
-    The remote monitor writes one small record per second. The uncommon record
-    separator byte gives ordinary Borg output a zero-work fast path and avoids
-    line splitting even during very large ``--list`` streams.
+    The source client emits one tiny counter frame per monitored interface and
+    second. Up to three interfaces are kept for the live UI, with the interface
+    selected by the route to the repository ordered first. Cumulative job
+    traffic is calculated from that route interface's kernel byte counters so
+    it can be persisted when the run finishes. Ordinary Borg output retains the
+    zero-copy fast path when no telemetry marker is present.
     """
 
     def __init__(self) -> None:
         self._carry = b""
-        self._previous: tuple[str, str, int, int, float] | None = None
+        self._previous: dict[str, tuple[str, int, int, float]] = {}
+        self._baseline_route: tuple[str, int, int] | None = None
+        self._latest_interfaces: dict[str, NetworkInterfaceActivity] = {}
+        self._route_interface = ""
+        self._route_ip_address = ""
+        self._download_bytes = 0
+        self._upload_bytes = 0
+
+    def _snapshot(self) -> NetworkActivity:
+        interfaces = sorted(
+            self._latest_interfaces.values(),
+            key=lambda item: (not item.route_selected, item.interface),
+        )[:3]
+        return NetworkActivity(
+            interfaces=tuple(interfaces),
+            download_bytes=max(0, int(self._download_bytes)),
+            upload_bytes=max(0, int(self._upload_bytes)),
+            route_interface=self._route_interface,
+            route_ip_address=self._route_ip_address,
+        )
 
     def _parse(self, record: bytes) -> NetworkActivity | None:
         match = _NETWORK_RECORD_RE.match(record)
@@ -256,30 +288,48 @@ class BorgNetworkStreamFilter:
             ip_address = match.group("ip").decode("utf-8", errors="replace").strip()
             rx = int(match.group("rx"))
             tx = int(match.group("tx"))
+            route_selected = (match.group("route") or b"1") == b"1"
         except (TypeError, ValueError, OverflowError):
             return None
         now = time.monotonic()
         download = upload = None
-        previous = self._previous
+        previous = self._previous.get(interface)
         if previous is not None:
-            prev_interface, prev_ip, prev_rx, prev_tx, prev_time = previous
+            prev_ip, prev_rx, prev_tx, prev_time = previous
             delta = now - prev_time
-            if (
-                interface == prev_interface
-                and ip_address == prev_ip
-                and delta > 0
-                and rx >= prev_rx
-                and tx >= prev_tx
-            ):
+            if ip_address == prev_ip and delta > 0 and rx >= prev_rx and tx >= prev_tx:
                 download = ((rx - prev_rx) * 8.0) / delta
                 upload = ((tx - prev_tx) * 8.0) / delta
-        self._previous = (interface, ip_address, rx, tx, now)
-        return NetworkActivity(
+        self._previous[interface] = (ip_address, rx, tx, now)
+
+        if route_selected:
+            if self._baseline_route is None or self._baseline_route[0] != interface:
+                self._baseline_route = (interface, rx, tx)
+                self._download_bytes = 0
+                self._upload_bytes = 0
+            else:
+                _, base_rx, base_tx = self._baseline_route
+                if rx >= base_rx:
+                    self._download_bytes = rx - base_rx
+                if tx >= base_tx:
+                    self._upload_bytes = tx - base_tx
+            self._route_interface = interface
+            self._route_ip_address = ip_address
+
+        self._latest_interfaces[interface] = NetworkInterfaceActivity(
             interface=interface,
             ip_address=ip_address,
             download_bits_per_second=download,
             upload_bits_per_second=upload,
+            route_selected=route_selected,
         )
+        # Keep memory bounded even on unusual hosts with many interfaces.
+        ordered = sorted(
+            self._latest_interfaces.values(),
+            key=lambda item: (not item.route_selected, item.interface),
+        )[:3]
+        self._latest_interfaces = {item.interface: item for item in ordered}
+        return self._snapshot()
 
     def feed(self, data: bytes) -> tuple[bytes, NetworkActivity | None]:
         if not data:
@@ -294,9 +344,6 @@ class BorgNetworkStreamFilter:
         while True:
             marker = payload.find(_NETWORK_PREFIX, cursor)
             if marker < 0:
-                # A pipe/read boundary may split the uncommon telemetry prefix.
-                # Keep only a suffix that can still become a complete prefix;
-                # ordinary Borg output continues on the zero-copy fast path.
                 suffix_start = payload.rfind(b"\x1e", cursor)
                 if suffix_start >= 0 and _NETWORK_PREFIX.startswith(payload[suffix_start:]):
                     output.extend(payload[cursor:suffix_start])
@@ -320,11 +367,11 @@ class BorgNetworkStreamFilter:
 
     def finalize(self) -> tuple[bytes, NetworkActivity | None]:
         if not self._carry:
-            return b"", None
+            return b"", self._snapshot() if self._latest_interfaces else None
         final = self._carry
         self._carry = b""
         parsed = self._parse(final.rstrip(b"\r\n"))
-        return (b"" if parsed is not None else final), parsed
+        return (b"" if parsed is not None else final), parsed or (self._snapshot() if self._latest_interfaces else None)
 
 
 _live_activity_lock = Lock()
@@ -348,13 +395,13 @@ def set_run_network_activity(run_id: int, activity: NetworkActivity) -> None:
         _live_network_activity[int(run_id)] = (activity, time.monotonic())
 
 
-def get_run_network_activity(run_id: int, *, max_age_seconds: float = 5.0) -> dict | None:
+def get_run_network_activity(run_id: int, *, max_age_seconds: float | None = 5.0) -> dict | None:
     with _live_activity_lock:
         stored = _live_network_activity.get(int(run_id))
         if stored is None:
             return None
         activity, sampled_at = stored
-        if time.monotonic() - sampled_at > max(1.0, float(max_age_seconds)):
+        if max_age_seconds is not None and time.monotonic() - sampled_at > max(1.0, float(max_age_seconds)):
             _live_network_activity.pop(int(run_id), None)
             return None
         return asdict(activity)

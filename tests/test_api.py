@@ -2814,6 +2814,11 @@ def test_source_statistics_are_persisted_from_live_scan_and_backup(monkeypatch):
     monkeypatch.setattr(service, 'execute', fake_execute)
     monkeypatch.setattr(service, 'notify_run_completion', lambda _run_id: None)
 
+    monkeypatch.setattr(service, 'get_run_network_activity', lambda _run_id, max_age_seconds=None: {
+        'interfaces': [], 'download_bytes': 4321, 'upload_bytes': 8765,
+        'route_interface': 'eth9', 'route_ip_address': '10.0.0.99',
+    })
+
     with SessionLocal() as db:
         host = Host(
             name=f'source-host-{suffix}', address='10.0.0.99', port=22,
@@ -2868,6 +2873,8 @@ def test_source_statistics_are_persisted_from_live_scan_and_backup(monkeypatch):
         assert job.source_file_count == 19
         assert job.source_stats_origin == 'backup'
         assert run.backup_file_count == 19
+        assert run.backup_network_download_bytes == 4321
+        assert run.backup_network_upload_bytes == 8765
 
 
 def test_editing_job_source_configuration_clears_stale_source_statistics():
