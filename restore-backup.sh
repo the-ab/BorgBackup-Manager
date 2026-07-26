@@ -37,31 +37,38 @@ magic = b"BBM-BACKUP-1\n"
 max_file_bytes = int(os.environ.get("BBM_BACKUP_MAX_FILE_BYTES", "268435456"))
 max_uncompressed_bytes = int(os.environ.get("BBM_BACKUP_MAX_UNCOMPRESSED_BYTES", "1073741824"))
 max_entries = int(os.environ.get("BBM_BACKUP_MAX_ENTRIES", "5000"))
+max_cache_file_bytes = int(os.environ.get("BBM_BACKUP_CACHE_MAX_FILE_BYTES", "34359738368"))
+max_cache_uncompressed_bytes = int(os.environ.get("BBM_BACKUP_CACHE_MAX_UNCOMPRESSED_BYTES", "137438953472"))
+max_cache_entries = int(os.environ.get("BBM_BACKUP_CACHE_MAX_ENTRIES", "250000"))
 max_compression_ratio = int(os.environ.get("BBM_BACKUP_MAX_COMPRESSION_RATIO", "250"))
-
-if source.stat().st_size > max_file_bytes:
-    raise SystemExit(f"Backup-Datei überschreitet das Größenlimit von {max_file_bytes} Bytes")
+max_cache_compression_ratio = int(os.environ.get("BBM_BACKUP_CACHE_MAX_COMPRESSION_RATIO", "5000"))
 
 with source.open("rb") as handle:
     prefix = handle.read(len(magic))
 
 archive_source: Path | io.BytesIO
+include_cache = False
 if prefix == magic:
-    raw = source.read_bytes()
     try:
+        from cryptography.exceptions import InvalidTag
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
     except ImportError as exc:
         raise SystemExit("python3-cryptography fehlt") from exc
-    if len(raw) < len(magic) + 4:
-        raise SystemExit("Verschlüsselter Backup-Header ist unvollständig")
-    header_length = struct.unpack(">I", raw[len(magic):len(magic)+4])[0]
-    if header_length < 32 or header_length > 65_536:
-        raise SystemExit("Verschlüsselter Backup-Header hat eine ungültige Größe")
+    with source.open("rb") as handle:
+        if handle.read(len(magic)) != magic:
+            raise SystemExit("Verschlüsselter Backup-Header ist ungültig")
+        raw_length = handle.read(4)
+        if len(raw_length) != 4:
+            raise SystemExit("Verschlüsselter Backup-Header ist unvollständig")
+        header_length = struct.unpack(">I", raw_length)[0]
+        if header_length < 32 or header_length > 65_536:
+            raise SystemExit("Verschlüsselter Backup-Header hat eine ungültige Größe")
+        header_bytes = handle.read(header_length)
+        if len(header_bytes) != header_length:
+            raise SystemExit("Verschlüsselter Backup-Header ist unvollständig")
     header_end = len(magic) + 4 + header_length
-    if header_end > len(raw):
-        raise SystemExit("Verschlüsselter Backup-Header ist unvollständig")
-    header_bytes = raw[len(magic)+4:header_end]
     try:
         header = json.loads(header_bytes)
         if not isinstance(header, dict):
@@ -70,16 +77,59 @@ if prefix == magic:
         nonce = base64.b64decode(header["nonce"], validate=True)
     except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SystemExit("Verschlüsselter Backup-Header ist ungültig") from exc
+    if header.get("backup_type") == "cache" or header.get("content_format") == "borgbackup-manager-cache-backup":
+        raise SystemExit(
+            "Diese Datei ist ein separates Cache-Backup und kein Manager-Vollbackup. "
+            "Cache-Daten nach der BBM-Wiederherstellung über die WebUI gezielt zurückspielen."
+        )
+    include_cache = bool(header.get("borg_cache_included") or header.get("client_borg_cache_included"))
+    file_limit = max_cache_file_bytes if include_cache else max_file_bytes
+    if source.stat().st_size > file_limit:
+        raise SystemExit(f"Backup-Datei überschreitet das Größenlimit von {file_limit} Bytes")
     passphrase = os.environ.get("BBM_RESTORE_BACKUP_PASSPHRASE", "")
     key = Scrypt(salt=salt, length=32, n=2**15, r=8, p=1).derive(passphrase.encode())
-    try:
-        decrypted = AESGCM(key).decrypt(nonce, raw[header_end:], raw[:header_end])
-    except Exception as exc:
-        raise SystemExit("Backup-Passphrase ist falsch oder das Backup wurde verändert") from exc
-    if not decrypted.startswith(b"PK"):
-        raise SystemExit("Entschlüsseltes Backup ist kein gültiges ZIP-Archiv")
-    archive_source = io.BytesIO(decrypted)
+    aad = magic + raw_length + header_bytes
+    if header.get("format_version") == 2 and header.get("cipher") == "AES-256-GCM-stream":
+        tag_bytes = int(header.get("tag_bytes", 16))
+        if tag_bytes != 16:
+            raise SystemExit("Ungültige GCM-Tag-Größe im Backup")
+        size = source.stat().st_size
+        ciphertext_size = size - header_end - tag_bytes
+        if ciphertext_size <= 0:
+            raise SystemExit("Verschlüsseltes Backup ist unvollständig")
+        decrypted_path = destination / ".manager-backup-decrypted.zip"
+        with source.open("rb") as encrypted:
+            encrypted.seek(size - tag_bytes)
+            tag = encrypted.read(tag_bytes)
+            encrypted.seek(header_end)
+            decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag)).decryptor()
+            decryptor.authenticate_additional_data(aad)
+            remaining = ciphertext_size
+            try:
+                with decrypted_path.open("wb") as output:
+                    while remaining > 0:
+                        chunk = encrypted.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise SystemExit("Verschlüsseltes Backup ist unvollständig")
+                        remaining -= len(chunk)
+                        output.write(decryptor.update(chunk))
+                    output.write(decryptor.finalize())
+            except InvalidTag as exc:
+                decrypted_path.unlink(missing_ok=True)
+                raise SystemExit("Backup-Passphrase ist falsch oder das Backup wurde verändert") from exc
+        archive_source = decrypted_path
+    else:
+        raw = source.read_bytes()
+        try:
+            decrypted = AESGCM(key).decrypt(nonce, raw[header_end:], raw[:header_end])
+        except Exception as exc:
+            raise SystemExit("Backup-Passphrase ist falsch oder das Backup wurde verändert") from exc
+        if not decrypted.startswith(b"PK"):
+            raise SystemExit("Entschlüsseltes Backup ist kein gültiges ZIP-Archiv")
+        archive_source = io.BytesIO(decrypted)
 else:
+    if source.stat().st_size > max_file_bytes:
+        raise SystemExit(f"Backup-Datei überschreitet das Größenlimit von {max_file_bytes} Bytes")
     archive_source = source
 
 
@@ -100,9 +150,22 @@ def safe_relative_path(raw_path: str, label: str) -> Path:
 
 
 with zipfile.ZipFile(archive_source) as archive:
+    try:
+        manifest_info = archive.getinfo("manifest.json")
+        if manifest_info.file_size < 2 or manifest_info.file_size > 1024 * 1024:
+            raise ValueError
+        manifest = json.loads(archive.read(manifest_info))
+    except (KeyError, ValueError, json.JSONDecodeError) as exc:
+        raise SystemExit("Manifest fehlt oder ist ungültig") from exc
+    if not isinstance(manifest, dict) or manifest.get("format") != "borgbackup-manager-full-backup":
+        raise SystemExit("Datei ist kein BorgBackup-Manager-Vollbackup")
+    include_cache = bool(manifest.get("borg_cache_included") or manifest.get("client_borg_cache_included"))
+    entry_limit = max_cache_entries if include_cache else max_entries
+    uncompressed_limit = max_cache_uncompressed_bytes if include_cache else max_uncompressed_bytes
+    compression_ratio_limit = max_cache_compression_ratio if include_cache else max_compression_ratio
     entries = archive.infolist()
-    if len(entries) > max_entries:
-        raise SystemExit(f"Backup enthält mehr als {max_entries} ZIP-Einträge")
+    if len(entries) > entry_limit:
+        raise SystemExit(f"Backup enthält mehr als {entry_limit} ZIP-Einträge")
     seen: set[str] = set()
     total_uncompressed = 0
     for item in entries:
@@ -117,17 +180,19 @@ with zipfile.ZipFile(archive_source) as archive:
         if item.is_dir():
             continue
         total_uncompressed += item.file_size
-        if total_uncompressed > max_uncompressed_bytes:
-            raise SystemExit(f"Backup überschreitet entpackt das Größenlimit von {max_uncompressed_bytes} Bytes")
-        if item.file_size and item.file_size / max(item.compress_size, 1) > max_compression_ratio:
+        if total_uncompressed > uncompressed_limit:
+            raise SystemExit(f"Backup überschreitet entpackt das Größenlimit von {uncompressed_limit} Bytes")
+        if item.file_size and item.file_size / max(item.compress_size, 1) > compression_ratio_limit:
             raise SystemExit(f"ZIP-Eintrag überschreitet das Kompressionslimit: {item.filename}")
-    try:
-        manifest = json.loads(archive.read("manifest.json"))
-    except (KeyError, ValueError) as exc:
-        raise SystemExit("Manifest fehlt oder ist ungültig") from exc
-    if not isinstance(manifest, dict) or manifest.get("format") != "borgbackup-manager-full-backup":
-        raise SystemExit("Datei ist kein BorgBackup-Manager-Vollbackup")
-    archive.extractall(destination)
+    for item in entries:
+        relative = safe_relative_path(item.filename.rstrip("/"), "ZIP-Pfad")
+        normalized = relative.as_posix()
+        # Client caches are restored selectively from the authenticated .bbm via
+        # the WebUI. A bare-metal Manager restore must not copy multi-GiB client
+        # cache tar streams into the persistent Manager data directory.
+        if normalized.startswith("data/client-borg-cache/"):
+            continue
+        archive.extract(item, destination)
 
 permissions_path = destination / "permissions.json"
 if permissions_path.is_file():
@@ -135,7 +200,7 @@ if permissions_path.is_file():
         permissions = json.loads(permissions_path.read_text(encoding="utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SystemExit("permissions.json ist ungültig") from exc
-    if not isinstance(permissions, dict) or len(permissions) > max_entries:
+    if not isinstance(permissions, dict) or len(permissions) > (max_cache_entries if include_cache else max_entries):
         raise SystemExit("permissions.json hat ein ungültiges Format oder zu viele Einträge")
     for relative, mode in permissions.items():
         relative_path = safe_relative_path(relative, "Berechtigungspfad")
@@ -149,7 +214,13 @@ if not (destination / "migration.env").is_file():
 if not (destination / "data").is_dir():
     raise SystemExit("Backup enthält kein Manager-Datenverzeichnis")
 print(f"Backup v{manifest.get('app_version', '?')} vom {manifest.get('created_at', '?')} geprüft.")
-PY
+if manifest.get("client_borg_cache_included"):
+    saved = int(manifest.get("client_borg_cache_saved_count") or 0)
+    print(
+        f"Hinweis: Das Backup enthält {saved} gesicherte Client-Borg-Cache(s). "
+        "Diese werden beim Manager-Restore bewusst nicht automatisch auf Clients verteilt; "
+        "sie können danach im Bereich Cache-Backup gezielt pro Gerät/Repository wiederhergestellt werden."
+    )
 PY
 unset BBM_RESTORE_BACKUP_PASSPHRASE backup_passphrase
 
@@ -207,6 +278,10 @@ BBM_BACKUP_MAX_FILE_BYTES=$(env_value BBM_BACKUP_MAX_FILE_BYTES 268435456)
 BBM_BACKUP_MAX_UNCOMPRESSED_BYTES=$(env_value BBM_BACKUP_MAX_UNCOMPRESSED_BYTES 1073741824)
 BBM_BACKUP_MAX_ENTRIES=$(env_value BBM_BACKUP_MAX_ENTRIES 5000)
 BBM_BACKUP_MAX_COMPRESSION_RATIO=$(env_value BBM_BACKUP_MAX_COMPRESSION_RATIO 250)
+BBM_BACKUP_CACHE_MAX_FILE_BYTES=$(env_value BBM_BACKUP_CACHE_MAX_FILE_BYTES 34359738368)
+BBM_BACKUP_CACHE_MAX_UNCOMPRESSED_BYTES=$(env_value BBM_BACKUP_CACHE_MAX_UNCOMPRESSED_BYTES 137438953472)
+BBM_BACKUP_CACHE_MAX_ENTRIES=$(env_value BBM_BACKUP_CACHE_MAX_ENTRIES 250000)
+BBM_BACKUP_CACHE_MAX_COMPRESSION_RATIO=$(env_value BBM_BACKUP_CACHE_MAX_COMPRESSION_RATIO 5000)
 BBM_COMMAND_TIMEOUT=$(env_value BBM_COMMAND_TIMEOUT 86400)
 BBM_APPEARANCE=$(env_value BBM_APPEARANCE auto)
 BBM_REPOSITORY_SIZE_AFTER_RUN=$(env_value BBM_REPOSITORY_SIZE_AFTER_RUN 1)

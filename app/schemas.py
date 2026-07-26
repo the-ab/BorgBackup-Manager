@@ -926,6 +926,19 @@ class ControllerKeyRotateIn(BaseModel):
 class ManagerBackupCreateIn(BaseModel):
     label: str = Field(default="", max_length=48)
     encrypted: bool = True
+    # Kept for one release as explicit compatibility guards. Cache content is
+    # no longer accepted in manager backups; callers must use CacheBackupCreateIn.
+    include_borg_cache: bool = False
+    include_client_borg_cache: bool = False
+    compression: str = "standard"
+
+    @field_validator("compression")
+    @classmethod
+    def valid_compression(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"none", "fast", "standard", "maximum"}:
+            raise ValueError("unsupported manager backup compression")
+        return normalized
 
     @field_validator("label")
     @classmethod
@@ -952,7 +965,131 @@ class ManagerBackupCreateIn(BaseModel):
                 raise ValueError("backup passphrase must be single-line")
         elif secret or confirmation:
             raise ValueError("backup passphrase is only valid when encryption is enabled")
+        if self.include_borg_cache or self.include_client_borg_cache:
+            raise ValueError("Borg cache data must be created as a separate cache backup")
         return self
+
+
+class CacheBackupCreateIn(BaseModel):
+    label: str = Field(default="", max_length=48)
+    encrypted: bool = True
+    include_manager_borg_cache: bool = True
+    include_client_borg_cache: bool = True
+    compression: str = "standard"
+    passphrase: SecretStr | None = None
+    passphrase_confirm: SecretStr | None = None
+
+    @field_validator("compression")
+    @classmethod
+    def valid_compression(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"none", "fast", "standard", "maximum"}:
+            raise ValueError("unsupported cache backup compression")
+        return normalized
+
+    @field_validator("label")
+    @classmethod
+    def safe_label(cls, value: str) -> str:
+        value = value.strip()
+        if any(c in value for c in "\x00\r\n"):
+            raise ValueError("backup label must be single-line")
+        return value
+
+    @model_validator(mode="after")
+    def validate_cache_backup(self):
+        if not (self.include_manager_borg_cache or self.include_client_borg_cache):
+            raise ValueError("cache backup requires manager cache or client caches")
+        secret = self.passphrase.get_secret_value() if self.passphrase else None
+        confirmation = self.passphrase_confirm.get_secret_value() if self.passphrase_confirm else None
+        if self.encrypted:
+            if not secret or len(secret) < 12:
+                raise ValueError("encrypted cache backups require a passphrase with at least 12 characters")
+            if secret != confirmation:
+                raise ValueError("cache backup passphrase confirmation does not match")
+            if any(c in secret for c in "\x00\r\n"):
+                raise ValueError("backup passphrase must be single-line")
+        elif secret or confirmation:
+            raise ValueError("backup passphrase is only valid when encryption is enabled")
+        return self
+
+
+class ManagerBorgCacheCleanupIn(BaseModel):
+    entries: list[str] | None = Field(default=None, max_length=2000)
+    confirm: bool = False
+
+    @model_validator(mode="after")
+    def confirmed(self):
+        if not self.confirm:
+            raise ValueError("cache cleanup requires explicit confirmation")
+        if self.entries is not None and not self.entries:
+            raise ValueError("cache cleanup requires at least one selected entry")
+        return self
+
+
+class ClientBorgCacheScanIn(BaseModel):
+    host_ids: list[int] | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def valid_hosts(self):
+        if self.host_ids is not None:
+            if not self.host_ids:
+                raise ValueError("at least one host must be selected")
+            if any(isinstance(value, bool) or int(value) <= 0 for value in self.host_ids):
+                raise ValueError("host ids must be positive integers")
+            self.host_ids = sorted(set(int(value) for value in self.host_ids))
+        return self
+
+
+class ClientBorgCacheCleanupTarget(BaseModel):
+    host_id: int = Field(gt=0)
+    name: str = Field(min_length=1, max_length=220)
+    path: str | None = Field(default=None, max_length=4096)
+
+
+class ClientBorgCacheCleanupIn(BaseModel):
+    kind: str
+    entries: list[ClientBorgCacheCleanupTarget] = Field(min_length=1, max_length=1000)
+    confirm: bool = False
+
+    @model_validator(mode="after")
+    def valid_cleanup(self):
+        if self.kind not in {"orphan", "rollback", "security", "security_orphan", "user_cache", "reset"}:
+            raise ValueError("client cache cleanup kind must be orphan, rollback, security, security_orphan, user_cache or reset")
+        if not self.confirm:
+            raise ValueError("client cache cleanup requires explicit confirmation")
+        return self
+
+
+class ManagerClientCacheInspectIn(BaseModel):
+    passphrase: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def valid_passphrase(self):
+        secret = self.passphrase.get_secret_value() if self.passphrase else None
+        if secret is not None and (not secret or any(c in secret for c in "\x00\r\n")):
+            raise ValueError("backup passphrase must be a non-empty single-line value")
+        return self
+
+
+class ManagerCacheRestoreIn(ManagerClientCacheInspectIn):
+    confirm: bool = False
+
+    @model_validator(mode="after")
+    def confirmed_restore(self):
+        if not self.confirm:
+            raise ValueError("manager cache restore requires explicit confirmation")
+        return self
+
+
+class ManagerClientCacheRestoreIn(ManagerClientCacheInspectIn):
+    confirm: bool = False
+
+    @model_validator(mode="after")
+    def confirmed_restore(self):
+        if not self.confirm:
+            raise ValueError("client cache restore requires explicit confirmation")
+        return self
+
 
 
 class ManagerBackupRestoreIn(BaseModel):

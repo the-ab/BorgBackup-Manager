@@ -1,6 +1,6 @@
 const state = {
   currentUser: null, users: [], securityStatus: null,
-  hosts: [], hostSshActions: [], repos: [], jobs: [], schedules: [], runs: [], mounts: [], system: {}, settings: null, backups: [], runStorage: null, notifications: null, notificationDeliveries: [],
+  hosts: [], hostSshActions: [], repos: [], jobs: [], schedules: [], runs: [], mounts: [], system: {}, settings: null, backups: [], borgCacheStatus: null, clientBorgCacheStatus: null, runStorage: null, notifications: null, notificationDeliveries: [],
   liveRunId: null, liveLogOffset: 0, liveLogSession: 0, liveLogRequestPending: false, liveTimer: null, refreshTimer: null,
   archiveData: null, archiveRequestId: 0, archiveSelection: new Set(), activeBrowser: null, browserPath: '', browserSelection: new Set(),
   openJobActions: new Set(), backgroundRefresh: false,
@@ -10,6 +10,7 @@ const state = {
   syncDisplay: {message: 'Aktuell', kind: 'idle', persistent: false}, helpLanguage: '',
   sorts: {}, repositoryBrowserPath: '', diagnosticLogs: {}, activeDiagnosticLog: 'sshd',
   excludeTemplateDrafts: null, excludeTemplateSelection: -1, excludeTemplateSettingsSignature: '',
+  managerBackupTask: null, managerBackupTimer: null,
 };
 
 const SORT_DEFAULTS = {
@@ -728,7 +729,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.74`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.82`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -801,14 +802,15 @@ async function loadAll(background = false) {
     const usersRequest = admin ? api('/users') : Promise.resolve([]);
     const securityRequest = admin ? api('/users/security-status') : Promise.resolve(null);
     const backupsRequest = admin ? api('/backups') : Promise.resolve([]);
+    const managerBackupTaskRequest = admin ? api('/backups/tasks/current') : Promise.resolve({status: 'idle'});
     const mountsRequest = admin ? api('/mounts') : Promise.resolve([]);
     const hostSshActionsRequest = admin ? api('/host-ssh-actions') : Promise.resolve([]);
     const notificationSettingsRequest = admin ? api('/notifications/settings') : Promise.resolve(null);
     const notificationDeliveriesRequest = admin ? api('/notifications/deliveries?limit=100') : Promise.resolve([]);
     const protectedStorageRequest = admin ? storageRequest : Promise.resolve(null);
-    const [dashboard, hosts, repos, jobs, schedules, runs, activeRuns, system, settings, backups, mounts, hostSshActions, runStorage, users, securityStatus, notifications, notificationDeliveries] = await Promise.all([
+    const [dashboard, hosts, repos, jobs, schedules, runs, activeRuns, system, settings, backups, managerBackupTask, mounts, hostSshActions, runStorage, users, securityStatus, notifications, notificationDeliveries] = await Promise.all([
       api('/dashboard'), api('/hosts'), api('/repositories'), api('/jobs'), api('/schedules'), api(`/runs?status=${encodeURIComponent(state.runFilter)}`), api('/runs?status=active&limit=100'),
-      api('/system'), api('/settings'), backupsRequest, mountsRequest, hostSshActionsRequest, protectedStorageRequest, usersRequest, securityRequest, notificationSettingsRequest, notificationDeliveriesRequest,
+      api('/system'), api('/settings'), backupsRequest, managerBackupTaskRequest, mountsRequest, hostSshActionsRequest, protectedStorageRequest, usersRequest, securityRequest, notificationSettingsRequest, notificationDeliveriesRequest,
     ]);
     state.dashboard = dashboard;
     state.hosts = hosts;
@@ -820,6 +822,7 @@ async function loadAll(background = false) {
     state.system = system;
     state.settings = settings;
     state.backups = backups;
+    state.managerBackupTask = managerBackupTask?.status === 'idle' ? null : managerBackupTask;
     state.mounts = mounts;
     state.hostSshActions = hostSshActions;
     state.runStorage = runStorage;
@@ -839,6 +842,8 @@ async function loadAll(background = false) {
     if (!background || active !== 'settings') renderSettings();
     if (!background || active !== 'notifications') renderNotifications();
     if (!background || active !== 'backups') renderBackups();
+    renderManagerBackupTask();
+    if (state.managerBackupTask && ['queued', 'running'].includes(state.managerBackupTask.status)) scheduleManagerBackupTaskPoll();
     if (!background || active !== 'users') renderUsers();
     fillSelects(background ? active : null);
     if (!background || active !== 'archives') renderLegacyMounts();
@@ -1691,21 +1696,309 @@ async function testNotification(channel, button) {
 }
 
 function renderBackups() {
+  const managerBackups = state.backups.filter((backup) => backup.backup_type !== 'cache');
+  const cacheBackups = state.backups.filter((backup) => backup.backup_type === 'cache');
   const restoreSelect = $('#backup-restore-form')?.elements.name;
   const selected = restoreSelect?.value || '';
   if (restoreSelect) {
-    restoreSelect.innerHTML = '<option value="">Backup auswählen</option>' + state.backups.map((backup) => `<option value="${esc(backup.name)}">${backup.encrypted ? '🔒 ' : ''}${esc(backup.name)}</option>`).join('');
+    restoreSelect.innerHTML = '<option value="">Manager-Backup auswählen</option>' + managerBackups.map((backup) => `<option value="${esc(backup.name)}">${backup.encrypted ? '🔒 ' : ''}${esc(backup.name)}</option>`).join('');
     if ([...restoreSelect.options].some((option) => option.value === selected)) restoreSelect.value = selected;
   }
-  $('#backup-list').innerHTML = state.backups.length ? state.backups.map((backup) => `<div class="entity"><div class="backup-meta"><div class="entity-title"><h3>${esc(backup.name)}</h3><span class="badge ${backup.encrypted ? 'warning' : 'success'}">${backup.encrypted ? 'verschlüsselt' : 'ZIP'}</span></div><p>Version ${esc(backup.manifest?.app_version || '?')} · ${esc(formatDate(backup.modified_at))} · ${formatBytes(backup.size_bytes)}${backup.manifest?.label ? ' · ' + esc(backup.manifest.label) : ''}</p></div><div class="actions"><button class="secondary" data-backup-restore="${esc(backup.name)}">Wiederherstellen</button><button data-backup-download="${esc(backup.name)}">Download</button><button class="danger" data-backup-delete="${esc(backup.name)}">Löschen</button></div></div>`).join('') : '<div class="empty">Noch keine Manager-Backups vorhanden.</div>';
+  const clientRestoreSelect = $('#client-cache-restore-form')?.elements.name;
+  const selectedCacheBackup = clientRestoreSelect?.value || '';
+  if (clientRestoreSelect) {
+    const restorableCacheBackups = state.backups.filter((backup) => Boolean(backup.manifest?.borg_cache_included || backup.manifest?.client_borg_cache_included));
+    clientRestoreSelect.innerHTML = '<option value="">Cache-Backup auswählen</option>' + restorableCacheBackups.map((backup) => `<option value="${esc(backup.name)}">${backup.encrypted ? '🔒 ' : ''}${esc(backup.name)}</option>`).join('');
+    if ([...clientRestoreSelect.options].some((option) => option.value === selectedCacheBackup)) clientRestoreSelect.value = selectedCacheBackup;
+  }
+
+  const renderItem = (backup, cacheOnly = false) => {
+    const cacheIncluded = Boolean(backup.manifest?.borg_cache_included);
+    const clientCacheIncluded = Boolean(backup.manifest?.client_borg_cache_included);
+    const compression = backup.manifest?.compression ? ` · ${esc(backup.manifest.compression)}` : '';
+    const managerCacheLabel = cacheIncluded ? ' · Manager-Cache' : '';
+    const clientCacheLabel = clientCacheIncluded
+      ? ` · Client-Caches ${Number(backup.manifest?.client_borg_cache_saved_count || 0)}/${Number(backup.manifest?.client_borg_cache_target_count || 0)}`
+      : '';
+    const cacheLabel = managerCacheLabel + clientCacheLabel;
+    const cacheAction = (cacheIncluded || clientCacheIncluded)
+      ? `<button class="secondary" data-client-cache-open="${esc(backup.name)}">Caches</button>`
+      : '';
+    const restoreAction = cacheOnly ? '' : `<button class="secondary" data-backup-restore="${esc(backup.name)}">Wiederherstellen</button>`;
+    const typeLabel = cacheOnly ? 'Cache' : (cacheIncluded || clientCacheIncluded ? 'Manager · Legacy-Cache' : 'Manager');
+    const encryption = backup.encrypted ? 'verschlüsselt' : 'unverschlüsselt';
+    return `<div class="entity"><div class="backup-meta"><div class="entity-title"><h3>${esc(backup.name)}</h3><span class="badge ${cacheOnly ? 'warning' : 'success'}">${typeLabel}</span></div><p>${encryption} · Version ${esc(backup.manifest?.app_version || '?')} · ${esc(formatDate(backup.modified_at))} · ${formatBytes(backup.size_bytes)}${backup.manifest?.label ? ' · ' + esc(backup.manifest.label) : ''}${cacheLabel}${compression}</p></div><div class="actions">${restoreAction}${cacheAction}<button data-backup-download="${esc(backup.name)}">Download</button><button class="danger" data-backup-delete="${esc(backup.name)}">Löschen</button></div></div>`;
+  };
+
+  $('#backup-list').innerHTML = managerBackups.length
+    ? managerBackups.map((backup) => renderItem(backup, false)).join('')
+    : '<div class="empty">Noch keine Manager-Backups vorhanden.</div>';
+  $('#cache-backup-list').innerHTML = cacheBackups.length
+    ? cacheBackups.map((backup) => renderItem(backup, true)).join('')
+    : '<div class="empty">Noch keine separaten Cache-Backups vorhanden.</div>';
+  renderClientCacheScanHostOptions();
+  renderBorgCacheStatus();
   $$('[data-backup-restore]').forEach((button) => button.onclick = () => {
     const select = $('#backup-restore-form').elements.name;
     select.value = button.dataset.backupRestore;
     $('#backup-restore-form').scrollIntoView({behavior: 'smooth', block: 'start'});
     select.focus();
   });
+  $$('[data-client-cache-open]').forEach((button) => button.onclick = () => {
+    const form = $('#client-cache-restore-form');
+    const select = form?.elements.name;
+    if (!form || !select) return;
+    select.value = button.dataset.clientCacheOpen;
+    state.clientCacheInventory = null;
+    $('#client-cache-restore-list').innerHTML = '';
+    $('#client-cache-restore-status').classList.add('hidden');
+    updateCacheRestoreControls();
+    form.scrollIntoView({behavior: 'smooth', block: 'start'});
+    form.elements.passphrase.focus();
+  });
   $$('[data-backup-download]').forEach((button) => button.onclick = () => downloadBackup(button.dataset.backupDownload));
   $$('[data-backup-delete]').forEach((button) => button.onclick = () => deleteBackup(button.dataset.backupDelete));
+  updateCacheRestoreControls();
+}
+
+function renderClientCacheScanHostOptions() {
+  const mode = $('#client-cache-scan-mode');
+  const select = $('#client-cache-scan-hosts');
+  const wrap = $('#client-cache-scan-hosts-wrap');
+  if (!mode || !select || !wrap) return;
+  const previous = new Set([...select.selectedOptions].map((option) => Number(option.value)));
+  select.innerHTML = sortedHosts(state.hosts).map((host) => `<option value="${Number(host.id)}"${previous.has(Number(host.id)) ? ' selected' : ''}>${esc(host.name)} · ${esc(host.username)}@${esc(host.address)}${host.enabled ? '' : ' · deaktiviert'}</option>`).join('');
+  const selectedMode = mode.value === 'selected';
+  select.disabled = !selectedMode;
+  wrap.classList.toggle('muted', !selectedMode);
+}
+
+function managerCacheKindLabel(kind) {
+  const english = currentLanguage() === 'en';
+  const labels = english
+    ? {manager_cache_orphan: 'Orphaned manager cache', legacy_cache_orphan: 'Orphaned legacy cache', manager_security_active: 'Active Borg security state', manager_security_orphan: 'Orphaned Borg security state', manager_security_duplicate_old: 'Older security duplicate', manager_security_unknown: 'Unknown Borg security state'}
+    : {manager_cache_orphan: 'Verwaister Manager-Cache', legacy_cache_orphan: 'Verwaister Legacy-Cache', manager_security_active: 'Aktiver Borg-Sicherheitsstatus', manager_security_orphan: 'Verwaister Borg-Sicherheitsstatus', manager_security_duplicate_old: 'Älteres Security-Duplikat', manager_security_unknown: 'Unbekannter Borg-Sicherheitsstatus'};
+  return labels[kind] || kind;
+}
+
+function renderBorgCacheStatus() {
+  const status = $('#borg-cache-status');
+  const list = $('#borg-cache-orphans');
+  const cleanup = $('#cleanup-borg-cache');
+  if (!status || !list || !cleanup) return;
+  const data = state.borgCacheStatus;
+  const english = currentLanguage() === 'en';
+  if (!data) {
+    status.textContent = english ? 'Not checked yet.' : 'Noch nicht geprüft.';
+    list.innerHTML = '';
+    cleanup.disabled = true;
+    return;
+  }
+  status.textContent = english
+    ? `Manager cache ${formatBytes(data.cache_size_bytes)} · Borg security ${formatBytes(data.security_size_bytes)} · ${data.orphan_count} selectable entries (${formatBytes(data.orphan_size_bytes)}) · ${data.security_active_count || 0} active security states · ${data.security_duplicate_old_count || 0} older duplicate(s)`
+    : `Manager-Cache ${formatBytes(data.cache_size_bytes)} · Borg-Sicherheitsstatus ${formatBytes(data.security_size_bytes)} · ${data.orphan_count} bereinigbare Einträge (${formatBytes(data.orphan_size_bytes)}) · ${data.security_active_count || 0} aktive Sicherheitsstände · ${data.security_duplicate_old_count || 0} ältere Duplikate`;
+  const items = data.items || [];
+  list.innerHTML = items.length ? items.map((item) => {
+    const selectable = Boolean(item.selectable);
+    const checked = item.default_selected ? ' checked' : '';
+    const checkbox = selectable ? `<label class="check compact"><input type="checkbox" data-manager-cache-path="${esc(item.path)}"${checked}/> ${english ? 'select' : 'auswählen'}</label>` : '';
+    const active = item.kind === 'manager_security_active';
+    const warning = item.kind === 'manager_cache_orphan' || item.kind === 'legacy_cache_orphan' || item.kind === 'manager_security_orphan' || item.kind === 'manager_security_duplicate_old';
+    const badgeClass = active ? 'success' : warning ? 'warning' : 'inactive';
+    const location = item.location ? `<br/><small>${english ? 'Location' : 'Standort'}: <code>${esc(item.location)}</code></small>` : '';
+    const stamp = item.manifest_timestamp ? `<br/><small>manifest-timestamp: <code>${esc(item.manifest_timestamp)}</code></small>` : '';
+    return `<div class="entity"><div><b>${esc(item.label)}</b><p><span class="badge ${badgeClass}">${esc(managerCacheKindLabel(item.kind))}</span> · ${formatBytes(item.size_bytes)}</p><small>${esc(translateMessage(item.reason || ''))}</small>${location}${stamp}<br/><small>${esc(item.path)}</small></div>${checkbox}</div>`;
+  }).join('') : `<div class="empty">${english ? 'No manager cache or security state found.' : 'Keine Manager-Cache- oder Security-Daten gefunden.'}</div>`;
+  const updateButton = () => { cleanup.disabled = !document.querySelector('#borg-cache-orphans input[data-manager-cache-path]:checked'); };
+  $$('#borg-cache-orphans input[data-manager-cache-path]').forEach((input) => input.addEventListener('change', updateButton));
+  updateButton();
+}
+
+async function scanBorgCache() {
+  const english = currentLanguage() === 'en';
+  const release = markButtonBusy($('#scan-borg-cache'), english ? 'Checking …' : 'Wird geprüft …');
+  try {
+    state.borgCacheStatus = await api('/backups/borg-cache/status');
+    renderBorgCacheStatus();
+    toast(english ? 'Manager cache and Borg security checked' : 'Manager-Cache und Borg-Sicherheitsstatus geprüft');
+  } catch (error) { toast(error.message, true); }
+  finally { release(); }
+}
+
+async function cleanupBorgCache() {
+  const selected = $$('#borg-cache-orphans input[data-manager-cache-path]:checked').map((input) => input.dataset.managerCachePath);
+  if (!selected.length) return;
+  const data = state.borgCacheStatus;
+  const total = selected.reduce((sum, path) => sum + Number(data?.items?.find((item) => item.path === path)?.size_bytes || 0), 0);
+  const english = currentLanguage() === 'en';
+  if (!confirm(english
+    ? `Really delete ${selected.length} selected manager cache/security entries totaling ${formatBytes(total)}? Every entry is re-checked before deletion.`
+    : `${selected.length} ausgewählte Manager-Cache-/Security-Einträge mit insgesamt ${formatBytes(total)} wirklich löschen? Jeder Eintrag wird vor dem Löschen erneut geprüft.`)) return;
+  const release = markButtonBusy($('#cleanup-borg-cache'), english ? 'Cleaning …' : 'Wird bereinigt …');
+  try {
+    const result = await api('/backups/borg-cache/cleanup', {method: 'POST', body: JSON.stringify({entries: selected, confirm: true})});
+    state.borgCacheStatus = result.status;
+    renderBorgCacheStatus();
+    toast(english
+      ? `${result.removed_count} manager entries removed (${formatBytes(result.removed_bytes)})${result.skipped?.length ? ` · ${result.skipped.length} skipped` : ''}`
+      : `${result.removed_count} Manager-Einträge entfernt (${formatBytes(result.removed_bytes)})${result.skipped?.length ? ` · ${result.skipped.length} übersprungen` : ''}`);
+  } catch (error) { toast(error.message, true); }
+  finally { release(); }
+}
+
+
+function clientCacheKindLabel(kind) {
+  const labels = currentLanguage() === 'en'
+    ? {active: 'Active BBM client cache', orphan: 'Orphaned BBM client cache', rollback: 'Restore safety copy', unknown: 'Unknown BBM client cache', user_cache_active: 'Assigned legacy Borg cache (not used by BBM)', user_cache_orphan: 'Orphaned legacy Borg cache', user_cache_unknown: 'Unknown legacy Borg cache', user_cache_misc: 'Legacy Borg cache entry', security_active: 'Active Borg security state', security_orphan: 'Orphaned Borg security state', security_duplicate_old: 'Older security duplicate', security_unknown: 'Unknown Borg security state'}
+    : {active: 'Aktiver BBM-Client-Cache', orphan: 'Verwaister BBM-Client-Cache', rollback: 'Rückfall-Sicherung', unknown: 'Unbekannter BBM-Client-Cache', user_cache_active: 'Zugeordneter Legacy-Borg-Cache (nicht vom BBM verwendet)', user_cache_orphan: 'Verwaister Legacy-Borg-Cache', user_cache_unknown: 'Unbekannter Legacy-Borg-Cache', user_cache_misc: 'Legacy-Borg-Cache-Eintrag', security_active: 'Aktiver Borg-Sicherheitsstatus', security_orphan: 'Verwaister Borg-Sicherheitsstatus', security_duplicate_old: 'Älteres Security-Duplikat', security_unknown: 'Unbekannter Borg-Sicherheitsstatus'};
+  return labels[kind] || kind;
+}
+
+function clientCleanupGroup(item) {
+  if (item.kind === 'active') return 'reset';
+  if (item.kind === 'orphan') return 'orphan';
+  if (item.kind === 'rollback') return 'rollback';
+  if (item.kind === 'user_cache_active' || item.kind === 'user_cache_orphan' || item.kind === 'user_cache_unknown' || item.kind === 'user_cache_misc') return 'user_cache';
+  if (item.kind === 'security_orphan' || item.kind === 'security_unknown' || item.kind === 'security_duplicate_old') return 'security';
+  return '';
+}
+
+function renderClientBorgCacheStatus() {
+  renderClientCacheScanHostOptions();
+  const status = $('#client-borg-cache-status');
+  const list = $('#client-borg-cache-items');
+  const orphanCleanup = $('#cleanup-client-borg-cache');
+  const resetCleanup = $('#reset-client-borg-cache');
+  const userCacheCleanup = $('#cleanup-client-user-borg-cache');
+  const rollbackCleanup = $('#cleanup-client-cache-rollbacks');
+  const securityCleanup = $('#cleanup-client-borg-security');
+  if (!status || !list || !orphanCleanup || !resetCleanup || !userCacheCleanup || !rollbackCleanup || !securityCleanup) return;
+  const data = state.clientBorgCacheStatus;
+  const english = currentLanguage() === 'en';
+  if (!data) {
+    status.textContent = english ? 'Not checked yet.' : 'Noch nicht geprüft.';
+    list.innerHTML = '';
+    orphanCleanup.disabled = true;
+    resetCleanup.disabled = true;
+    userCacheCleanup.disabled = true;
+    rollbackCleanup.disabled = true;
+    securityCleanup.disabled = true;
+    return;
+  }
+  status.textContent = english
+    ? `${data.checked_device_count}/${data.device_count} devices checked · ${data.orphan_count} orphaned BBM client caches (${formatBytes(data.orphan_size_bytes)}) · ${data.user_cache_orphan_count || 0} orphaned legacy Borg caches (${formatBytes(data.user_cache_orphan_size_bytes || 0)}) · ${data.security_orphan_count || 0} orphaned security states · ${data.security_duplicate_old_count || 0} older security duplicate(s) · ${data.rollback_count} restore safety copies${data.security_unknown_count ? ` · ${data.security_unknown_count} unknown security states` : ''}${data.user_cache_unknown_count ? ` · ${data.user_cache_unknown_count} unknown legacy Borg caches` : ''}${data.user_cache_misc_count ? ` · ${data.user_cache_misc_count} other legacy entries (${formatBytes(data.user_cache_misc_size_bytes || 0)})` : ''}${data.error_device_count ? ` · ${data.error_device_count} errors` : ''}${data.skipped_device_count ? ` · ${data.skipped_device_count} disabled` : ''}`
+    : `${data.checked_device_count}/${data.device_count} Geräte geprüft · ${data.orphan_count} verwaiste BBM-Client-Caches (${formatBytes(data.orphan_size_bytes)}) · ${data.user_cache_orphan_count || 0} verwaiste Legacy-Borg-Caches (${formatBytes(data.user_cache_orphan_size_bytes || 0)}) · ${data.security_orphan_count || 0} verwaiste Sicherheitsstände · ${data.security_duplicate_old_count || 0} ältere Security-Duplikate · ${data.rollback_count} Rückfall-Sicherungen${data.security_unknown_count ? ` · ${data.security_unknown_count} unbekannte Sicherheitsstände` : ''}${data.user_cache_unknown_count ? ` · ${data.user_cache_unknown_count} unbekannte Legacy-Borg-Caches` : ''}${data.user_cache_misc_count ? ` · ${data.user_cache_misc_count} sonstige Legacy-Einträge (${formatBytes(data.user_cache_misc_size_bytes || 0)})` : ''}${data.error_device_count ? ` · ${data.error_device_count} Fehler` : ''}${data.skipped_device_count ? ` · ${data.skipped_device_count} deaktiviert` : ''}`;
+  const devices = data.devices || [];
+  list.innerHTML = devices.length ? devices.map((device) => {
+    let body = '';
+    if (device.status === 'skipped_disabled') {
+      body = `<div class="empty">${english ? 'Device disabled – not contacted.' : 'Gerät deaktiviert – nicht kontaktiert.'}</div>`;
+    } else if (device.status === 'error') {
+      body = `<div class="empty"><span class="badge failed">${english ? 'Error' : 'Fehler'}</span> ${esc(translateMessage(device.error || (english ? 'Client could not be checked.' : 'Client konnte nicht geprüft werden.')))}</div>`;
+    } else if (!device.entries?.length) {
+      body = `<div class="empty">${english ? 'No BBM client cache, legacy Borg cache, or Borg security state found.' : 'Keine BBM-Client-Caches, Legacy-Borg-Caches oder Borg-Sicherheitsstände gefunden.'}</div>`;
+    } else {
+      body = device.entries.map((item) => {
+        const group = clientCleanupGroup(item);
+        const selectable = Boolean(item.selectable && group);
+        const checked = item.default_selected ? ' checked' : '';
+        const selectLabel = group === 'reset' ? (english ? 'select for reset' : 'zum Zurücksetzen auswählen') : (english ? 'select' : 'auswählen');
+        const checkbox = selectable ? `<label class="check compact"><input type="checkbox" data-client-cleanup-group="${esc(group)}" data-client-cache-kind="${esc(item.kind)}" data-client-cache-host="${Number(device.host_id)}" data-client-cache-name="${esc(item.name)}" data-client-cache-path="${esc(item.path || '')}"${checked}/> ${selectLabel}</label>` : '';
+        const created = item.kind === 'rollback' && item.created_at ? ` · ${english ? 'created' : 'erstellt'} ${esc(item.created_at)}` : '';
+        const pathLine = item.path ? `<br/><small>${english ? 'Path' : 'Pfad'}: <code>${esc(item.path)}</code></small>` : '';
+        const location = item.entry_type === 'security' && item.location ? `<br/><small>${english ? 'Repository location' : 'Repository-Standort'}: <code>${esc(item.location)}</code></small>` : '';
+        const stamp = item.entry_type === 'security' && item.manifest_timestamp ? `<br/><small>manifest-timestamp: <code>${esc(item.manifest_timestamp)}</code></small>` : '';
+        const active = item.kind === 'active' || item.kind === 'security_active';
+        const warning = item.kind === 'orphan' || item.kind === 'security_orphan' || item.kind === 'security_duplicate_old' || item.kind === 'user_cache_orphan' || item.kind === 'user_cache_active';
+        const badgeClass = active ? 'success' : warning ? 'warning' : item.kind === 'rollback' ? 'inactive' : 'failed';
+        return `<div class="entity"><div><b>${esc(item.name)}</b><p><span class="badge ${badgeClass}">${esc(clientCacheKindLabel(item.kind))}</span> · ${formatBytes(item.size_bytes)}${created}</p><small>${esc(translateMessage(item.reason || ''))}</small>${pathLine}${location}${stamp}</div>${checkbox}</div>`;
+      }).join('');
+    }
+    const roots = device.scan_paths || {};
+    const rootParts = [];
+    if (roots.bbm_cache?.path) rootParts.push(`${english ? 'BBM client cache' : 'BBM-Client-Cache'}: <code>${esc(roots.bbm_cache.path)}</code>${roots.bbm_cache.status === 'missing' ? ` <span class="badge inactive">${english ? 'missing' : 'fehlt'}</span>` : ''}`);
+    (roots.legacy_caches || []).forEach((entry) => rootParts.push(`${english ? 'Legacy Borg cache' : 'Legacy-Borg-Cache'}: <code>${esc(entry.path)}</code>${entry.status === 'missing' ? ` <span class="badge inactive">${english ? 'missing' : 'fehlt'}</span>` : ''}`));
+    if (roots.security?.path) rootParts.push(`${english ? 'Borg security' : 'Borg-Security'}: <code>${esc(roots.security.path)}</code>${roots.security.status === 'missing' ? ` <span class="badge inactive">${english ? 'missing' : 'fehlt'}</span>` : ''}`);
+    const rootsHtml = rootParts.length ? `<div class="hint">${english ? 'Checked paths' : 'Geprüfte Pfade'}:<br/>${rootParts.join('<br/>')}</div>` : '';
+    return `<div class="entity-group"><h4>${esc(device.host_name)} <small>#${Number(device.host_id)}</small></h4>${rootsHtml}${body}</div>`;
+  }).join('') : `<div class="empty">${english ? 'No devices in this scan.' : 'Keine Geräte in dieser Prüfung.'}</div>`;
+
+  const updateButtons = () => {
+    orphanCleanup.disabled = !document.querySelector('#client-borg-cache-items input[data-client-cleanup-group="orphan"]:checked');
+    resetCleanup.disabled = !document.querySelector('#client-borg-cache-items input[data-client-cleanup-group="reset"]:checked');
+    userCacheCleanup.disabled = !document.querySelector('#client-borg-cache-items input[data-client-cleanup-group="user_cache"]:checked');
+    rollbackCleanup.disabled = !document.querySelector('#client-borg-cache-items input[data-client-cleanup-group="rollback"]:checked');
+    securityCleanup.disabled = !document.querySelector('#client-borg-cache-items input[data-client-cleanup-group="security"]:checked');
+  };
+  $$('#client-borg-cache-items input[data-client-cleanup-group]').forEach((input) => input.addEventListener('change', updateButtons));
+  updateButtons();
+}
+
+async function scanClientBorgCache() {
+  const english = currentLanguage() === 'en';
+  const mode = $('#client-cache-scan-mode')?.value || 'all';
+  let hostIds = null;
+  if (mode === 'selected') {
+    hostIds = [...($('#client-cache-scan-hosts')?.selectedOptions || [])].map((option) => Number(option.value)).filter((value) => value > 0);
+    if (!hostIds.length) {
+      toast(english ? 'Select at least one device.' : 'Mindestens ein Gerät auswählen.', true);
+      return;
+    }
+  }
+  const release = markButtonBusy($('#scan-client-borg-cache'), english ? 'Checking …' : 'Wird geprüft …');
+  try {
+    state.clientBorgCacheStatus = await api('/backups/client-cache/scan', {method: 'POST', body: JSON.stringify({host_ids: hostIds})});
+    renderClientBorgCacheStatus();
+    toast(english ? 'Selected client state checked' : 'Ausgewählter Client-Zustand geprüft');
+  } catch (error) { toast(error.message, true); }
+  finally { release(); }
+}
+
+function selectedClientCacheTargets(group) {
+  return $$(`#client-borg-cache-items input[data-client-cleanup-group="${group}"]:checked`).map((input) => ({
+    host_id: Number(input.dataset.clientCacheHost),
+    name: input.dataset.clientCacheName,
+    path: input.dataset.clientCachePath || null,
+  }));
+}
+
+async function cleanupClientBorgCache(kind) {
+  const entries = selectedClientCacheTargets(kind);
+  if (!entries.length) return;
+  const english = currentLanguage() === 'en';
+  const total = entries.reduce((sum, selected) => {
+    const device = (state.clientBorgCacheStatus?.devices || []).find((item) => Number(item.host_id) === selected.host_id);
+    const item = device?.entries?.find((entry) => entry.name === selected.name && clientCleanupGroup(entry) === kind && (!selected.path || entry.path === selected.path));
+    return sum + Number(item?.size_bytes || 0);
+  }, 0);
+  const descriptions = english
+    ? {orphan: 'orphaned BBM client cache(s)', reset: 'active BBM client cache(s)', rollback: 'restore safety copy/copies', security: 'selected Borg security state(s)', user_cache: 'selected legacy Borg cache(s)'}
+    : {orphan: 'verwaiste BBM-Client-Cache(s)', reset: 'aktive BBM-Client-Cache(s)', rollback: 'Rückfall-Sicherung(en)', security: 'ausgewählte Borg-Sicherheitsstände', user_cache: 'ausgewählte Legacy-Borg-Caches'};
+  const warning = kind === 'reset'
+    ? (english
+      ? 'WARNING: The selected BBM client cache is actively used by BBM. Resetting deletes only the local cache, not repository data or Borg security state. The next backup can take significantly longer because Borg must rebuild the cache. Reset is blocked while runs or a manager/cache backup are active.'
+      : 'WARNUNG: Der ausgewählte BBM-Client-Cache wird aktiv vom BBM verwendet. Beim Zurücksetzen wird nur der lokale Cache gelöscht, nicht das Repository und nicht der Borg-Sicherheitsstatus. Der nächste Backup-Lauf kann deutlich länger dauern, weil Borg den Cache neu aufbauen muss. Während laufender/wartender Jobs oder eines Manager-/Cache-Backups ist das Zurücksetzen gesperrt.')
+    : kind === 'security'
+    ? (english ? 'Unknown entries are deleted only because you selected them explicitly. Every security entry is re-scanned before deletion.' : 'Unbekannte Einträge werden nur gelöscht, weil sie ausdrücklich ausgewählt wurden. Jeder Security-Eintrag wird unmittelbar vor dem Löschen erneut geprüft.')
+    : kind === 'user_cache'
+      ? (english ? 'Legacy Borg caches are not used by BBM, even when they belong to a repository that is still assigned in BBM. Deleting one can affect the performance of manual/legacy Borg runs. Every selected entry is re-scanned before deletion.' : 'Legacy-Borg-Caches werden vom BBM nicht verwendet, auch wenn sie zu einem im BBM weiterhin zugeordneten Repository gehören. Das Löschen kann die Geschwindigkeit manueller/alter Borg-Aufrufe beeinflussen. Jeder ausgewählte Eintrag wird unmittelbar vor dem Löschen erneut geprüft.')
+      : kind === 'rollback'
+        ? (english ? 'These safety copies can no longer be used to roll back the previous client cache.' : 'Diese Sicherheitskopien können danach nicht mehr für einen Rücksprung auf den vorherigen Client-Cache verwendet werden.')
+        : (english ? 'The current assignment is checked again immediately before deletion.' : 'Die aktuelle Zuordnung wird unmittelbar vor dem Löschen erneut geprüft.');
+  if (!confirm(english
+    ? `Really delete ${entries.length} ${descriptions[kind]} totaling ${formatBytes(total)}? ${warning}`
+    : `${entries.length} ${descriptions[kind]} mit insgesamt ${formatBytes(total)} wirklich löschen? ${warning}`)) return;
+  const buttons = {orphan: '#cleanup-client-borg-cache', reset: '#reset-client-borg-cache', rollback: '#cleanup-client-cache-rollbacks', security: '#cleanup-client-borg-security', user_cache: '#cleanup-client-user-borg-cache'};
+  const release = markButtonBusy($(buttons[kind]), english ? 'Cleaning …' : 'Wird bereinigt …');
+  try {
+    const result = await api('/backups/client-cache/cleanup', {method: 'POST', body: JSON.stringify({kind, entries, confirm: true})});
+    state.clientBorgCacheStatus = result.status;
+    renderClientBorgCacheStatus();
+    toast(english
+      ? `${result.removed_count} selected client-state entries removed${result.skipped?.length ? ` · ${result.skipped.length} skipped` : ''}`
+      : `${result.removed_count} ausgewählte Client-Zustandseinträge entfernt${result.skipped?.length ? ` · ${result.skipped.length} übersprungen` : ''}`);
+  } catch (error) { toast(error.message, true); }
+  finally { release(); }
 }
 
 
@@ -3679,24 +3972,228 @@ $('#restore-form').onsubmit = async (event) => {
 
 toggleRestoreDestination();
 
+$('#scan-borg-cache').onclick = scanBorgCache;
+$('#cleanup-borg-cache').onclick = cleanupBorgCache;
+$('#scan-client-borg-cache').onclick = scanClientBorgCache;
+$('#cleanup-client-borg-cache').onclick = () => cleanupClientBorgCache('orphan');
+$('#reset-client-borg-cache').onclick = () => cleanupClientBorgCache('reset');
+$('#cleanup-client-user-borg-cache').onclick = () => cleanupClientBorgCache('user_cache');
+$('#cleanup-client-borg-security').onclick = () => cleanupClientBorgCache('security');
+$('#cleanup-client-cache-rollbacks').onclick = () => cleanupClientBorgCache('rollback');
+$('#client-cache-scan-mode').onchange = renderClientCacheScanHostOptions;
+
+
+function backupTaskNoun(task, english = currentLanguage() === 'en') {
+  if (task?.backup_type === 'cache') return english ? 'Cache backup' : 'Cache-Backup';
+  return english ? 'Manager backup' : 'Manager-Backup';
+}
+
+function managerBackupDisplayMessage(task) {
+  const english = currentLanguage() === 'en';
+  const noun = backupTaskNoun(task, english);
+  if (!task) return noun;
+  if (task.status === 'failed') return english ? `${noun} failed.` : `${noun} konnte nicht erstellt werden.`;
+  if (task.status === 'finished') return english ? `${noun} created successfully.` : `${noun} wurde erfolgreich erstellt.`;
+  const current = Number(task.current || 0);
+  const total = Number(task.total || 0);
+  const subject = [task.host_name, task.repository_name].filter(Boolean).join(' · ');
+  const cacheTask = task.backup_type === 'cache';
+  const labels = english ? {
+    queued: cacheTask ? 'Cache backup is queued …' : 'Manager backup is queued …',
+    prepare: cacheTask ? 'Preparing cache backup …' : 'Preparing manager backup …',
+    database: 'Creating database snapshot …',
+    manager_data: 'Packaging manager data and security settings …',
+    manager_cache: 'Saving manager Borg cache and Borg security state …',
+    finalize_archive: cacheTask ? 'Finalizing cache backup archive …' : 'Finalizing manager backup archive …',
+    encrypt: cacheTask ? 'Encrypting cache backup with AES-256-GCM …' : 'Encrypting manager backup with AES-256-GCM …',
+  } : {
+    queued: cacheTask ? 'Cache-Backup wird vorbereitet …' : 'Manager-Backup wird vorbereitet …',
+    prepare: cacheTask ? 'Cache-Backup wird vorbereitet …' : 'Manager-Backup wird vorbereitet …',
+    database: 'Datenbank-Snapshot wird erstellt …',
+    manager_data: 'Manager-Daten und Sicherheitseinstellungen werden verpackt …',
+    manager_cache: 'Manager-Borg-Cache und Borg-Sicherheitsstatus werden gesichert …',
+    finalize_archive: cacheTask ? 'Cache-Backup-Archiv wird abgeschlossen …' : 'Manager-Backup-Archiv wird abgeschlossen …',
+    encrypt: cacheTask ? 'Cache-Backup wird mit AES-256-GCM verschlüsselt …' : 'Manager-Backup wird mit AES-256-GCM verschlüsselt …',
+  };
+  if (task.stage === 'client_cache') {
+    const prefix = total > 0 ? `Client ${current}/${total}` : (english ? 'Client caches' : 'Client-Caches');
+    return `${prefix}${subject ? `: ${subject}` : ''} – ${english ? 'cache is being processed …' : 'Cache wird verarbeitet …'}`;
+  }
+  return labels[task.stage] || task.message || (english ? `Creating ${noun.toLowerCase()} …` : `${noun} wird erstellt …`);
+}
+
+function managerBackupTaskDetail(task) {
+  const english = currentLanguage() === 'en';
+  const parts = [];
+  const current = Number(task?.current || 0);
+  const total = Number(task?.total || 0);
+  if (task?.stage === 'client_cache' && total > 0) parts.push(`Client ${current}/${total}`);
+  if (Number(task?.bytes_done || 0) > 0) {
+    if (Number(task?.bytes_total || 0) > 0) parts.push(`${formatBytes(task.bytes_done)} / ${formatBytes(task.bytes_total)}`);
+    else parts.push(`${formatBytes(task.bytes_done)} ${english ? 'transferred' : 'übertragen'}`);
+  }
+  if (task?.host_name || task?.repository_name) parts.push([task.host_name, task.repository_name].filter(Boolean).join(' · '));
+  if (task?.status === 'failed' && task?.error) parts.push(task.error);
+  if (task?.status === 'finished' && task?.backup?.size_bytes) parts.push(`${english ? 'Backup size' : 'Backup-Größe'}: ${formatBytes(task.backup.size_bytes)}`);
+  return parts.join(' · ') || (english ? 'Progress is updated automatically.' : 'Der Fortschritt wird automatisch aktualisiert.');
+}
+
+function renderManagerBackupTask() {
+  const managerBox = $('#backup-create-status');
+  const cacheBox = $('#cache-backup-create-status');
+  const managerForm = $('#backup-form');
+  const cacheForm = $('#cache-backup-form');
+  if (!managerBox || !cacheBox || !managerForm || !cacheForm) return;
+  const task = state.managerBackupTask;
+  const managerSubmit = managerForm.querySelector('button[type="submit"]');
+  const cacheSubmit = cacheForm.querySelector('button[type="submit"]');
+  const active = Boolean(task && ['queued', 'running'].includes(task.status));
+  const cacheTask = task?.backup_type === 'cache';
+  const box = cacheTask ? cacheBox : managerBox;
+  const prefix = cacheTask ? 'cache-backup-create' : 'backup-create';
+
+  managerBox.classList.add('hidden');
+  cacheBox.classList.add('hidden');
+  managerBox.classList.remove('error-state');
+  cacheBox.classList.remove('error-state');
+
+  if (!task) {
+    if (managerSubmit) { managerSubmit.disabled = false; managerSubmit.classList.remove('action-busy'); managerSubmit.textContent = 'Manager-Backup erstellen'; }
+    if (cacheSubmit) { cacheSubmit.disabled = false; cacheSubmit.classList.remove('action-busy'); cacheSubmit.textContent = 'Cache-Backup erstellen'; }
+    return;
+  }
+
+  box.classList.remove('hidden');
+  box.classList.toggle('error-state', task.status === 'failed');
+  const percent = Math.max(0, Math.min(100, Number(task.percent || 0)));
+  $(`#${prefix}-status-title`).textContent = managerBackupDisplayMessage(task);
+  $(`#${prefix}-status-percent`).textContent = task.status === 'failed' ? 'Fehler' : `${Math.round(percent)} %`;
+  $(`#${prefix}-progress-bar`).value = percent;
+  $(`#${prefix}-status-detail`).textContent = managerBackupTaskDetail(task);
+  const log = $(`#${prefix}-status-log`);
+  if (log) {
+    const events = Array.isArray(task.events) ? task.events.slice(-8) : [];
+    log.innerHTML = events.map((item) => {
+      const date = serverDate(item.at);
+      const time = date ? date.toLocaleTimeString(currentLocale(), {timeZone: DISPLAY_TIME_ZONE, hour: '2-digit', minute: '2-digit', second: '2-digit'}) : '–';
+      return `<div><time>${esc(time)}</time><span>${esc(translateMessage(item.message || ''))}</span></div>`;
+    }).join('');
+    log.scrollTop = log.scrollHeight;
+  }
+
+  if (managerSubmit) {
+    managerSubmit.disabled = active;
+    managerSubmit.classList.toggle('action-busy', active && !cacheTask);
+    managerSubmit.textContent = active && !cacheTask ? 'Manager-Backup wird erstellt …' : 'Manager-Backup erstellen';
+  }
+  if (cacheSubmit) {
+    cacheSubmit.disabled = active;
+    cacheSubmit.classList.toggle('action-busy', active && cacheTask);
+    cacheSubmit.textContent = active && cacheTask ? 'Cache-Backup wird erstellt …' : 'Cache-Backup erstellen';
+  }
+  const noun = backupTaskNoun(task, false);
+  if (active) setSyncState(managerBackupDisplayMessage(task), 'pending', true);
+  else if (task.status === 'failed') setSyncState(`${noun} konnte nicht erstellt werden`, 'error');
+  else if (task.status === 'finished') setSyncState(`${noun} erstellt`, 'success');
+}
+
+function clearManagerBackupTaskPoll() {
+  if (state.managerBackupTimer) clearTimeout(state.managerBackupTimer);
+  state.managerBackupTimer = null;
+}
+
+function scheduleManagerBackupTaskPoll(delay = 800) {
+  clearManagerBackupTaskPoll();
+  if (!state.managerBackupTask || !['queued', 'running'].includes(state.managerBackupTask.status)) return;
+  state.managerBackupTimer = setTimeout(pollManagerBackupTask, delay);
+}
+
+async function pollManagerBackupTask() {
+  const taskId = state.managerBackupTask?.id;
+  if (!taskId) return;
+  try {
+    const task = await api(`/backups/tasks/${encodeURIComponent(taskId)}`);
+    state.managerBackupTask = task;
+    renderManagerBackupTask();
+    if (['queued', 'running'].includes(task.status)) {
+      scheduleManagerBackupTaskPoll(800);
+      return;
+    }
+    clearManagerBackupTaskPoll();
+    if (task.status === 'finished') {
+      const cacheTask = task.backup_type === 'cache';
+      toast(cacheTask ? 'Cache-Backup erstellt' : 'Manager-Backup erstellt');
+      const form = cacheTask ? $('#cache-backup-form') : $('#backup-form');
+      if (form) form.reset();
+      if (cacheTask) toggleCacheBackupEncryption();
+      await refreshAreas(['backups']);
+    } else if (task.status === 'failed') {
+      toast(task.error || `${backupTaskNoun(task, false)} konnte nicht erstellt werden`, true);
+    }
+  } catch (error) {
+    clearManagerBackupTaskPoll();
+    setSyncState('Backup-Status konnte nicht geladen werden', 'error');
+    toast(error.message, true);
+  }
+}
+
 $('#backup-form').onsubmit = async (event) => {
   event.preventDefault();
-  const release = markButtonBusy(event.submitter, 'Backup wird erstellt …');
-  setSyncState('Manager-Backup wird erstellt …', 'pending', true);
   const form = new FormData(event.target);
   const payload = {
     label: form.get('label') || '',
     encrypted: true,
+    compression: form.get('compression') || 'standard',
     passphrase: form.get('passphrase'),
     passphrase_confirm: form.get('passphrase_confirm'),
   };
   try {
-    await api('/backups', {method: 'POST', body: JSON.stringify(payload)});
-    toast('Manager-Backup erstellt');
-    event.target.reset();
-    await refreshAreas(['backups']);
-  } catch (error) { setSyncState('Manager-Backup konnte nicht erstellt werden', 'error'); toast(error.message, true); }
-  finally { release(); }
+    state.managerBackupTask = await api('/backups/start', {method: 'POST', body: JSON.stringify(payload)});
+    renderManagerBackupTask();
+    scheduleManagerBackupTaskPoll(250);
+  } catch (error) {
+    state.managerBackupTask = {backup_type: 'manager', status: 'failed', message: 'Manager-Backup konnte nicht gestartet werden.', error: error.message, percent: 0};
+    renderManagerBackupTask();
+    toast(error.message, true);
+  }
+};
+
+function toggleCacheBackupEncryption() {
+  const enabled = Boolean($('#cache-backup-encrypted')?.checked);
+  const fields = $('#cache-backup-passphrase-fields');
+  if (!fields) return;
+  fields.classList.toggle('hidden', !enabled);
+  fields.querySelectorAll('input').forEach((input) => {
+    input.required = enabled;
+    if (!enabled) input.value = '';
+  });
+}
+
+$('#cache-backup-encrypted').onchange = toggleCacheBackupEncryption;
+toggleCacheBackupEncryption();
+
+$('#cache-backup-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const encrypted = form.get('encrypted') === 'on';
+  const payload = {
+    label: form.get('label') || '',
+    encrypted,
+    include_manager_borg_cache: form.get('include_manager_borg_cache') === 'on',
+    include_client_borg_cache: form.get('include_client_borg_cache') === 'on',
+    compression: form.get('compression') || 'standard',
+    passphrase: encrypted ? form.get('passphrase') : null,
+    passphrase_confirm: encrypted ? form.get('passphrase_confirm') : null,
+  };
+  try {
+    state.managerBackupTask = await api('/cache-backups/start', {method: 'POST', body: JSON.stringify(payload)});
+    renderManagerBackupTask();
+    scheduleManagerBackupTaskPoll(250);
+  } catch (error) {
+    state.managerBackupTask = {backup_type: 'cache', status: 'failed', message: 'Cache-Backup konnte nicht gestartet werden.', error: error.message, percent: 0};
+    renderManagerBackupTask();
+    toast(error.message, true);
+  }
 };
 
 $('#backup-upload-form').onsubmit = async (event) => {
@@ -3705,7 +4202,7 @@ $('#backup-upload-form').onsubmit = async (event) => {
   const file = form.get('backup_file');
   const status = $('#backup-upload-status');
   if (!(file instanceof File) || !file.name || !file.size) {
-    status.textContent = 'Bitte eine nicht leere Manager-Backup-Datei auswählen.';
+    status.textContent = 'Bitte eine nicht leere Manager- oder Cache-Backup-Datei auswählen.';
     status.classList.remove('hidden'); status.classList.add('error-state');
     return;
   }
@@ -3719,7 +4216,7 @@ $('#backup-upload-form').onsubmit = async (event) => {
       body: file,
     });
     status.textContent = `Backup „${file.name}“ wurde geprüft und übernommen.`;
-    toast('Manager-Backup hochgeladen');
+    toast('Backup hochgeladen');
     event.target.reset();
     await refreshAreas(['backups']);
   } catch (error) {
@@ -3742,6 +4239,151 @@ async function waitForManagerAfterRestore() {
   status.textContent = 'Der automatische Neustart dauert ungewöhnlich lange. Containerstatus und Logs prüfen.';
   status.classList.add('error-state');
 }
+
+function renderClientCacheRestoreInventory(data) {
+  const list = $('#client-cache-restore-list');
+  const status = $('#client-cache-restore-status');
+  if (!list || !status) return;
+  if (!data?.included) {
+    status.textContent = 'Dieses Cache-Backup enthält keine Client-Borg-Caches.';
+    status.classList.remove('hidden', 'error-state');
+    list.innerHTML = '';
+    return;
+  }
+  status.textContent = `${Number(data.saved_count || 0)} Cache(s) gesichert · ${Number(data.security_saved_count || 0)} Sicherheitsstände gesichert · ${Number(data.security_missing_count || 0)} Sicherheitsstände fehlen · ${Number(data.security_unresolved_count || 0)} nicht eindeutig zugeordnet · ${Number(data.skipped_count || 0)} übersprungen`;
+  status.classList.remove('hidden', 'error-state');
+  list.innerHTML = (data.entries || []).length ? data.entries.map((item) => {
+    const saved = item.status === 'saved';
+    const label = saved ? 'gesichert' : item.status === 'missing' ? 'nicht vorhanden' : 'übersprungen';
+    const badge = saved ? 'success' : item.status === 'missing' ? 'inactive' : 'warning';
+    const size = saved && item.tar_bytes ? ` · ${formatBytes(item.tar_bytes)}` : '';
+    const reason = item.reason ? `<small>${esc(item.reason)}</small>` : '';
+    const securityLabel = item.security_status === 'saved' ? 'Security gesichert' : item.security_status === 'missing' ? 'Security fehlt' : item.security_status === 'unresolved' ? 'Security nicht eindeutig zugeordnet' : item.security_status ? 'Security übersprungen' : 'kein Security-Stand im älteren Backup';
+    const securityInfo = `<p><small>${esc(securityLabel)}${item.borg_repository_id ? ` · Borg-ID ${esc(item.borg_repository_id)}` : ''}</small></p>`;
+    const action = saved
+      ? `<button class="secondary" type="button" data-client-cache-restore="${Number(item.host_id)}:${Number(item.repository_id)}">Wiederherstellen</button>`
+      : '';
+    return `<div class="entity"><div><div class="entity-title"><h3>${esc(item.host_name)} · ${esc(item.repository_name)}</h3><span class="badge ${badge}">${label}</span></div><p><code>${esc(item.cache_path)}</code>${size}</p>${securityInfo}${reason}</div><div class="actions">${action}</div></div>`;
+  }).join('') : '<div class="empty">Keine Geräte-/Repository-Zuordnungen im Backup enthalten.</div>';
+  $$('[data-client-cache-restore]').forEach((button) => button.onclick = () => {
+    const [hostId, repositoryId] = button.dataset.clientCacheRestore.split(':').map(Number);
+    restoreClientCacheFromBackup(hostId, repositoryId, button);
+  });
+}
+
+async function restoreClientCacheFromBackup(hostId, repositoryId, button) {
+  const form = $('#client-cache-restore-form');
+  const name = form.elements.name.value;
+  const passphrase = form.elements.passphrase.value || null;
+  const item = state.clientCacheInventory?.entries?.find((entry) => Number(entry.host_id) === hostId && Number(entry.repository_id) === repositoryId);
+  const target = item ? `${item.host_name} / ${item.repository_name}` : `Gerät #${hostId} / Repository #${repositoryId}`;
+  const prompt = currentLanguage() === 'en'
+    ? `Really restore the client Borg cache for ${target}?\n\nAn existing BBM client cache is renamed first and kept as a safety copy. A saved Borg security state is restored only when the client does not already have one.`
+    : `Client-Borg-Cache für ${target} wirklich wiederherstellen?\n\nEin vorhandener BBM-Client-Cache wird vorher als Sicherheitskopie umbenannt. Ein gesicherter Borg-Sicherheitsstatus wird nur ergänzt, wenn auf dem Client noch keiner für diese Borg-Repository-ID vorhanden ist.`;
+  if (!confirm(prompt)) return;
+  const release = markButtonBusy(button, 'Client-Cache wird wiederhergestellt …');
+  const status = $('#client-cache-restore-status');
+  status.textContent = `Client-Cache für ${target} wird authentifiziert und übertragen …`;
+  status.classList.remove('hidden', 'error-state');
+  try {
+    const result = await api(`/backups/${encodeURIComponent(name)}/client-caches/${hostId}/${repositoryId}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({passphrase, confirm: true}),
+    });
+    const securityText = result.security_restore?.status === 'restored'
+      ? ' Borg-Sicherheitsstatus wurde ebenfalls wiederhergestellt.'
+      : result.security_restore?.status === 'kept_existing'
+        ? ' Vorhandener Borg-Sicherheitsstatus wurde beibehalten.'
+        : '';
+    status.textContent = (result.previous_cache
+      ? `${result.message} Vorheriger Cache: ${result.previous_cache}`
+      : result.message) + securityText;
+    toast('Client-Borg-Cache wiederhergestellt');
+  } catch (error) {
+    status.textContent = 'Client-Cache konnte nicht wiederhergestellt werden: ' + error.message;
+    status.classList.add('error-state');
+    toast(error.message, true);
+  } finally { release(); }
+}
+
+function selectedCacheBackup() {
+  const name = $('#client-cache-restore-form')?.elements.name?.value;
+  return state.backups.find((backup) => backup.name === name) || null;
+}
+
+function updateCacheRestoreControls() {
+  const form = $('#client-cache-restore-form');
+  if (!form) return;
+  const backup = selectedCacheBackup();
+  const managerButton = $('#manager-cache-restore-submit');
+  const clientButton = form.querySelector('button[type="submit"]');
+  const passphrase = form.elements.passphrase;
+  if (managerButton) managerButton.disabled = !backup?.manifest?.borg_cache_included;
+  if (clientButton) clientButton.disabled = !backup?.manifest?.client_borg_cache_included;
+  if (passphrase) {
+    passphrase.required = Boolean(backup?.encrypted);
+    passphrase.placeholder = backup?.encrypted ? 'Passphrase erforderlich' : 'Nicht erforderlich';
+  }
+}
+
+async function restoreManagerCacheFromSelectedBackup() {
+  const form = $('#client-cache-restore-form');
+  const backup = selectedCacheBackup();
+  const status = $('#client-cache-restore-status');
+  if (!form || !backup || !backup.manifest?.borg_cache_included) return;
+  const prompt = currentLanguage() === 'en'
+    ? `Really restore the manager Borg cache from ${backup.name}?\n\nThe current manager cache and Borg security state are kept as local safety copies first.`
+    : `Manager-Borg-Cache aus ${backup.name} wirklich wiederherstellen?\n\nDer aktuelle Manager-Cache und Borg-Sicherheitsstatus werden vorher als lokale Sicherheitskopien erhalten.`;
+  if (!confirm(prompt)) return;
+  const button = $('#manager-cache-restore-submit');
+  const release = markButtonBusy(button, 'Manager-Cache wird wiederhergestellt …');
+  status.textContent = 'Cache-Backup wird authentifiziert und Manager-Cache wird wiederhergestellt …';
+  status.classList.remove('hidden', 'error-state');
+  try {
+    const result = await api(`/backups/${encodeURIComponent(backup.name)}/manager-cache/restore`, {
+      method: 'POST',
+      body: JSON.stringify({passphrase: form.elements.passphrase.value || null, confirm: true}),
+    });
+    const previous = [result.previous_cache, result.previous_security].filter(Boolean).join(' · ');
+    status.textContent = previous ? `${result.message} Sicherheitskopien: ${previous}` : result.message;
+    toast('Manager-Borg-Cache wiederhergestellt');
+  } catch (error) {
+    status.textContent = 'Manager-Cache konnte nicht wiederhergestellt werden: ' + error.message;
+    status.classList.add('error-state');
+    toast(error.message, true);
+  } finally { release(); updateCacheRestoreControls(); }
+}
+
+$('#manager-cache-restore-submit').onclick = restoreManagerCacheFromSelectedBackup;
+
+$('#client-cache-restore-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const name = form.get('name');
+  const status = $('#client-cache-restore-status');
+  const release = markButtonBusy(event.submitter, 'Client-Caches werden gelesen …');
+  status.textContent = 'Backup wird authentifiziert und Client-Cache-Liste gelesen …';
+  status.classList.remove('hidden', 'error-state');
+  try {
+    state.clientCacheInventory = await api(`/backups/${encodeURIComponent(name)}/client-caches/inspect`, {
+      method: 'POST',
+      body: JSON.stringify({passphrase: form.get('passphrase') || null}),
+    });
+    renderClientCacheRestoreInventory(state.clientCacheInventory);
+  } catch (error) {
+    state.clientCacheInventory = null;
+    $('#client-cache-restore-list').innerHTML = '';
+    status.textContent = 'Client-Caches konnten nicht gelesen werden: ' + error.message;
+    status.classList.add('error-state');
+  } finally { release(); }
+};
+
+$('#client-cache-restore-form').elements.name.onchange = () => {
+  state.clientCacheInventory = null;
+  $('#client-cache-restore-list').innerHTML = '';
+  $('#client-cache-restore-status').classList.add('hidden');
+  updateCacheRestoreControls();
+};
 
 $('#backup-restore-form').onsubmit = async (event) => {
   event.preventDefault();

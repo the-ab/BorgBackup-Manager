@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.0.74
+# Installation and Operations — BorgBackup Manager 1.0.82
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.0.74.zip
+BorgBackup-Manager-1.0.82.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.74.zip
+unzip /path/BorgBackup-Manager-1.0.82.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.0.74.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.0.82.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -411,35 +411,42 @@ Use the channel test before enabling events. Select failures, warnings, successe
 
 Delivery failures are logged separately and never change the Borg result. Notification secrets are encrypted and are not returned to the browser.
 
-## 19. Manager backup and restore
+## 19. Manager backup and cache backup
 
-Open **System -> Manager Backup**.
+Since v1.0.77 manager state and Borg caches are separate backup types. Newly created manager backups never include Borg caches, keeping the recovery artifact small even when repositories or client caches are very large.
 
-### Create
+### Create manager backup
 
-Enter a passphrase of at least 12 characters and create an encrypted `.bbm` file. Download and store it separately from the manager host.
+Manager backups contain the application database, security database, master key, settings, controller/repository SSH keys, Borg keyfiles and TLS files. Repository data, full run logs, `/data/borg-cache`, `/data/borg-security` and client Borg caches are excluded from newly created manager backups.
+
+New manager backups are mandatory streaming AES-256-GCM encrypted `.bbm` files protected by a non-stored passphrase of at least twelve characters. Compression is selectable: none, Deflate 1, Deflate 6 (default), or Deflate 9. Historical manager `.zip` files and combined v1.0.75/v1.0.76 artifacts remain readable. The Web UI shows live phase/progress/event output and resumes an active status after reload.
+
+### Create separate cache backup
+
+A cache backup is a separate `borgbackup-manager-cache-v...` artifact and may include either or both of:
+
+- manager Borg cache and security state: `/data/borg-cache` and `/data/borg-security`
+- managed client caches: `$HOME/.cache/borgbackup-manager/repository-<ID>` for current device/repository assignments
+
+At least one cache group must be selected. `lock.exclusive` and `lock.roster` are excluded. Client caches are streamed directly over verified controller SSH. Disabled devices are recorded as skipped, a missing cache is allowed, and failure to reach an enabled device aborts cache creation. Symbolic links are rejected. No run may be queued or active while a cache backup is created.
+
+Cache encryption is enabled and recommended by default but may be disabled deliberately. Encrypted cache artifacts use streaming AES-256-GCM/scrypt and `.bbm`; unencrypted cache artifacts use `.zip`. Compression and passphrase are independent from the manager backup. Live progress reports the current device/repository, `Client x/y`, transferred bytes, manager-cache file/byte progress, and the encryption phase when enabled.
 
 ### Upload
 
-Upload encrypted `.bbm` or historical `.zip` backups. Files are streamed, size-limited and structurally checked. Existing filenames are never overwritten.
+Upload supported manager or cache `.bbm`/`.zip` artifacts under **System -> Manager Backup -> Upload backup**. Type, filename, limits and structure are validated, files are stored with mode `0600`, and existing names are never overwritten. Manager backups use the normal backup limits; cache artifacts use the separate `BBM_BACKUP_CACHE_*` limits.
 
-### Restore in the Web UI
+### Restore manager backup
 
-1. select the backup,
-2. provide its passphrase when required,
-3. provide a separate passphrase for the automatic safety backup,
-4. review the confirmation,
-5. start restore.
+Select a manager backup, provide its passphrase when needed, provide a separate passphrase for the automatic encrypted safety backup, confirm replacement, and start restore. The manager verifies the artifact type before replacing manager/security databases, master key, settings and SSH/TLS/repository keys. A standalone cache artifact is rejected as full manager state. Historical combined v1.0.75/v1.0.76 manager backups remain compatible.
 
-The current manager state is backed up first. Repository contents and regenerable caches are not part of a manager backup.
+### Restore cache backup
+
+Open **Cache backup restore**. Select the cache artifact and enter its passphrase only when encrypted. The manager Borg cache/security state can be restored as one explicit action. Saved client caches can be listed and restored one current device/repository assignment at a time. Existing manager or client caches are preserved under timestamped `pre-bbm-restore` names before replacement. No run may be queued or active during cache restore. Legacy combined v1.0.75/v1.0.76 artifacts remain usable here for their embedded caches.
 
 ### Server migration
 
-1. install the same or newer manager version on the new server,
-2. copy/upload the manager backup,
-3. restore it,
-4. verify `.env`, public hostname, ports, persistent mounts and firewall rules,
-5. verify devices and repositories before enabling schedules.
+Restore the manager artifact first with `restore-backup.sh`. Restore the separate cache artifact afterwards through the Web UI as needed. `restore-backup.sh` explicitly rejects a standalone cache artifact as full manager state.
 
 ## 20. Users and personal preferences
 

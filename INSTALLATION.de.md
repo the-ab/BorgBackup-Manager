@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.0.74
+# Installation und Betrieb – BorgBackup Manager 1.0.82
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.0.74.zip
+BorgBackup-Manager-1.0.82.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.74.zip
+unzip /pfad/BorgBackup-Manager-1.0.82.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -134,7 +134,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.74.zip
+unzip /pfad/BorgBackup-Manager-1.0.82.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build
@@ -630,35 +630,63 @@ Für SMTP sollte STARTTLS oder direktes TLS verwendet werden. Die Einstellung **
 
 Warnungsbenachrichtigungen übernehmen aus der strukturierten Borg-Warnungszusammenfassung zusätzlich die konkret betroffenen Dateien beziehungsweise Pfade. Bis zu zehn Einträge werden vollständig ausgegeben; weitere Einträge werden gezählt. Fehlgeschlagene Zustellungen werden im Benachrichtigungsprotokoll gespeichert, verändern aber weder den Borg-Rückgabecode noch den Status der Sicherung. Der Manager gibt den Repository- und Parallelitätsplatz frei, bevor er externe Dienste kontaktiert.
 
-## 18. Manager-Backup und Sicherheitsdaten
+## 18. Manager-Backup, Cache-Backup und Sicherheitsdaten
 
-Das Manager-Backup enthält Manager-Datenbank, Sicherheitsdatenbank, Master-Key, Einstellungen, Controller-/Repository-SSH-Schlüssel, Borg-Keyfiles und TLS-Dateien. Repository-Nutzdaten und vollständige Dateien aus `/data/run-logs` sind nicht enthalten.
+Seit v1.0.77 sind Managerdaten und Borg-Caches zwei getrennte Sicherungstypen. Neue Manager-Backups enthalten keinen Borg-Cache mehr. Dadurch wächst die für eine eigentliche BBM-Wiederherstellung benötigte Datei nicht mit den Cache-Daten mehrerer TiB-Repositories oder vieler Clients.
 
-### Backup erstellen
+### Manager-Backup erstellen
 
-Die Bezeichnung ist optional. Neue Manager-Backups werden ausschließlich als verschlüsselte `.bbm`-Dateien erzeugt. Die eigene Passphrase muss mindestens zwölf Zeichen lang sein und wird nicht gespeichert. Historische unverschlüsselte `.zip`-Backups bleiben für die Wiederherstellung lesbar, können aber nicht mehr neu erstellt werden.
+Das Manager-Backup enthält Manager-Datenbank, Sicherheitsdatenbank, Master-Key, Einstellungen, Controller-/Repository-SSH-Schlüssel, Borg-Keyfiles und TLS-Dateien. Repository-Nutzdaten, vollständige Dateien aus `/data/run-logs`, `/data/borg-cache`, `/data/borg-security` und Client-Borg-Caches sind in einem neu erstellten Manager-Backup nicht enthalten.
 
-Die `.bbm`-Datei verwendet AES-256-GCM und scrypt.
+Neue Manager-Backups werden ausschließlich als AES-256-GCM-verschlüsselte `.bbm`-Dateien erzeugt. Die eigene Passphrase muss mindestens zwölf Zeichen lang sein und wird nicht gespeichert. Die Kompression ist wählbar zwischen keine, Deflate 1, Deflate 6 (Standard) und Deflate 9. Historische unverschlüsselte `.zip`-Manager-Backups sowie kombinierte v1.0.75/v1.0.76-Backups bleiben lesbar.
+
+Während der Erstellung zeigt die WebUI Phase, Fortschrittsbalken und ein Live-Protokoll. Ein Seiten-Reload nimmt den aktiven Backup-Task wieder auf.
+
+### Separates Cache-Backup erstellen
+
+Das Cache-Backup wird als eigenständige Datei `borgbackup-manager-cache-v...` erzeugt. Es kann unabhängig auswählen:
+
+- **Manager-Borg-Cache und Borg-Sicherheitsstatus:** `/data/borg-cache` und `/data/borg-security`
+- **Borg-Caches der Clients:** `$HOME/.cache/borgbackup-manager/repository-<ID>` für aktuell über Backup-Jobs zugeordnete Geräte
+
+Mindestens eine der beiden Gruppen muss ausgewählt sein. `lock.exclusive` und `lock.roster` werden ausgelassen. Client-Caches werden per geprüftem Controller-SSH direkt als TAR-Datenstrom in die Cache-Datei geschrieben. Deaktivierte Geräte werden protokolliert übersprungen; ein nicht vorhandener Cache ist zulässig; ein Verbindungs- oder Übertragungsfehler eines aktivierten Geräts bricht die Erstellung ab. Symbolische Links werden nicht übernommen. Während eines Cache-Backups dürfen keine Ausführungen laufen oder warten.
+
+Die Cache-Verschlüsselung ist standardmäßig eingeschaltet und empfohlen, aber nicht verpflichtend. Verschlüsselte Cache-Backups verwenden streamendes AES-256-GCM/scrypt und die Endung `.bbm`; bewusst unverschlüsselte Cache-Backups werden als `.zip` gespeichert. Die Cache-Passphrase wird nicht gespeichert. Die Kompressionsstufe wird unabhängig vom Manager-Backup gewählt.
+
+Die Live-Anzeige nennt beim Client-Cache das aktuelle Gerät/Repository, `Client x/y` und die übertragenen Bytes; beim Manager-Cache werden verarbeitete Dateien und Bytes angezeigt. Bei verschlüsselten Cache-Backups folgt als eigener Schritt der Verschlüsselungsfortschritt.
+
+Unter **Borg-Cache verwalten** können Manager- und Client-Caches bei Bedarf manuell gescannt werden. Der Client-Scan prüft ausschließlich `$HOME/.cache/borgbackup-manager/` auf aktiven Geräten. Nicht mehr über einen Backup-Job zugeordnete `repository-<ID>`-Caches werden als verwaist markiert; durch Client-Cache-Restores entstandene `repository-<ID>.pre-bbm-restore-<Zeit>`-Rückfall-Sicherungen erscheinen in einer eigenen Kategorie. Beide Gruppen können getrennt ausgewählt und nach ausdrücklicher Bestätigung bereinigt werden. Vor dem Löschen verwaister Caches wird die Zuordnung erneut geprüft; deaktivierte und nicht erreichbare Geräte werden nicht verändert.
 
 ### Backup hochladen
 
 1. **System → Manager-Backup** öffnen.
-2. Unter **Manager-Backup hochladen** eine vorhandene `.bbm`-Datei oder ein historisches `.zip`-Manager-Backup auswählen.
+2. Unter **Backup hochladen** ein BBM-Manager- oder Cache-Backup auswählen.
 3. **Backup hochladen** wählen.
-4. Nach erfolgreicher serverseitiger Prüfung erscheint die Datei unter **Vorhandene Backups** und in der Wiederherstellungsauswahl.
+4. Nach erfolgreicher Prüfung erscheint die Datei in der passenden Liste **Manager-Backups** oder **Cache-Backups**.
 
-Der Upload akzeptiert ausschließlich Manager-Backup-Dateinamen im vom BorgBackup Manager erzeugten Format. Dateigröße und Struktur werden geprüft, vorhandene Dateien werden nicht überschrieben und die gespeicherte Datei erhält Modus `0600`. Das konfigurierte Eingabelimit ist `BBM_BACKUP_MAX_FILE_BYTES` und beträgt standardmäßig 256 MiB. Für verschlüsselte Backups ist beim Upload keine Passphrase erforderlich; die kryptografische Authentifizierung erfolgt vor der Wiederherstellung.
+Dateityp, Dateiname, Größe und Struktur werden geprüft, vorhandene Dateien werden nicht überschrieben und die gespeicherte Datei erhält Modus `0600`. Manager-Backups verwenden `BBM_BACKUP_MAX_FILE_BYTES` (standardmäßig 256 MiB). Für Cache-Backups gelten die separaten Grenzen `BBM_BACKUP_CACHE_MAX_FILE_BYTES` (32 GiB), `BBM_BACKUP_CACHE_MAX_UNCOMPRESSED_BYTES` (128 GiB), `BBM_BACKUP_CACHE_MAX_ENTRIES` (250000) und `BBM_BACKUP_CACHE_MAX_COMPRESSION_RATIO` (5000). Bei verschlüsselten Dateien wird die vollständige kryptografische Authentifizierung vor der Wiederherstellung mit der Passphrase durchgeführt.
 
-### Wiederherstellung in der WebUI
+### Manager-Backup in der WebUI wiederherstellen
 
 1. Alle laufenden und wartenden Jobs beenden.
-2. Backup auswählen.
+2. Ein **Manager-Backup** auswählen.
 3. bei `.bbm` die Backup-Passphrase eingeben.
 4. eine separate, mindestens zwölf Zeichen lange Passphrase für das verschlüsselte Sicherheitsbackup eingeben und bestätigen.
 5. Ersetzungsbestätigung aktivieren.
 6. Wiederherstellung starten.
 
-Der Manager prüft das Backup, erstellt ein verschlüsseltes lokales Sicherheitsbackup und ersetzt anschließend Manager- und Sicherheitsdatenbank, Master-Key, Einstellungen sowie SSH-/TLS-/Repository-Schlüssel. Der Container startet neu; bestehende Browser-Sitzungen müssen sich danach neu anmelden.
+Der Manager prüft den Sicherungstyp, erstellt ein verschlüsseltes lokales Sicherheitsbackup und ersetzt anschließend Manager- und Sicherheitsdatenbank, Master-Key, Einstellungen sowie SSH-/TLS-/Repository-Schlüssel. Ein separates Cache-Backup kann nicht als Managerzustand wiederhergestellt werden. Historische kombinierte v1.0.75/v1.0.76-Manager-Backups bleiben vollständig kompatibel. Der Container startet neu; bestehende Browser-Sitzungen müssen sich danach neu anmelden.
+
+### Cache-Backup gezielt wiederherstellen
+
+1. **System → Manager-Backup → Cache-Backup wiederherstellen** öffnen.
+2. Ein Cache-Backup auswählen; bei verschlüsselten Dateien die Passphrase eingeben.
+3. Falls enthalten, **Manager-Cache wiederherstellen** wählen oder **Client-Caches anzeigen**.
+4. Beim gewünschten Client-Gerät/Repository **Wiederherstellen** wählen und die Sicherheitsabfrage bestätigen.
+
+Die Wiederherstellung ist nur ohne laufende oder wartende Ausführungen möglich. Beim Manager-Cache werden vorhandene `/data/borg-cache`-/`/data/borg-security`-Stände vor dem Austausch als zeitgestempelte `pre-bbm-restore`-Sicherheitskopien erhalten. Bei Client-Caches müssen Gerät und Repository weiterhin gemeinsam einem aktuellen Backup-Job zugeordnet sein und das Gerät muss aktiviert sein. Ein vorhandener Zielcache wird als `repository-<ID>.pre-bbm-restore-<Zeit>` erhalten. Unerwartete TAR-Pfade, symbolische Links und alte Lockartefakte werden nicht aktiviert.
+
+Alte kombinierte Backups aus v1.0.75/v1.0.76 können in diesem Bereich weiterhin für die darin enthaltenen Manager-/Client-Caches verwendet werden.
 
 ### Serverwechsel
 

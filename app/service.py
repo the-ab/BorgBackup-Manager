@@ -10,9 +10,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
+from collections.abc import Callable
 
 from sqlalchemy import select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import Session, joinedload
 
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
 from app.borg_progress import (
@@ -901,7 +902,10 @@ async def refresh_repository_statistics(repository_id: int) -> dict[str, int | N
     )
 
 
-async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_after: bool = True) -> None:
+async def _execute_run_inner(
+    run_id: int, command: Command, *, refresh_size_after: bool = True,
+    terminal_db_hook: Callable[[Session, Run, str], None] | None = None,
+) -> None:
     with SessionLocal() as db:
         run = db.get(Run, run_id)
         if not run:
@@ -1262,6 +1266,8 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
                     job.source_file_count = statistics.get("file_count")
                     job.source_stats_checked_at = datetime.now(timezone.utc)
                     job.source_stats_origin = "backup" if action == "backup" else "scan"
+            if terminal_db_hook is not None:
+                terminal_db_hook(db, run, status)
             run.finished_at = datetime.now(timezone.utc)
             db.commit()
 
@@ -1277,7 +1283,10 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
                 pass
 
 
-async def execute_run(run_id: int, command: Command, *, refresh_size_after: bool = True) -> None:
+async def execute_run(
+    run_id: int, command: Command, *, refresh_size_after: bool = True,
+    terminal_db_hook: Callable[[Session, Run, str], None] | None = None,
+) -> None:
     """Execute one persisted run and track its live queue ownership.
 
     The process-wide live set allows the database-backed queue planner to
@@ -1289,7 +1298,9 @@ async def execute_run(run_id: int, command: Command, *, refresh_size_after: bool
     with _active_run_lock:
         _executing_run_ids.add(run_id)
     try:
-        await _execute_run_inner(run_id, command, refresh_size_after=refresh_size_after)
+        await _execute_run_inner(
+            run_id, command, refresh_size_after=refresh_size_after, terminal_db_hook=terminal_db_hook,
+        )
     finally:
         clear_run_progress(run_id)
         clear_run_live_activity(run_id)
@@ -1504,31 +1515,37 @@ async def bootstrap_host_repository(
 
 
 async def execute_repository_validation(run_id: int, repository_id: int, command: Command) -> None:
-    """Execute a queued connection test and persist repository readiness."""
-    await execute_run(run_id, command, refresh_size_after=False)
-    with SessionLocal() as db:
-        run = db.get(Run, run_id)
+    """Execute a queued connection test and publish readiness atomically.
+
+    The repository readiness update is committed in the same transaction that
+    publishes the terminal run status. Otherwise the browser can observe a
+    successful test for a few milliseconds while the repository still appears
+    unvalidated and reject an immediately following archive request.
+    """
+
+    def persist_validation_state(db: Session, run: Run, status: str) -> None:
         repository = db.get(Repository, repository_id)
-        if not run or not repository:
+        if not repository or status == "cancelled":
             return
-        if run.status == "cancelled":
-            return
-        if run.status in {"success", "warning"}:
+        if status in {"success", "warning"}:
             repository.initialized = True
             repository.validation_error = None
             repository.validation_details = None
             repository.validated_at = datetime.now(timezone.utc)
-        else:
-            raw_output = run.output or ""
-            raw_error = "\n".join(
-                part for part in (run.error or "", run.log_output or "") if part
-            )
-            summary, details = compact_repository_diagnostic(raw_output, raw_error, 2)
-            if not repository.storage_path:
-                repository.initialized = False
-            repository.validation_error = summary
-            repository.validation_details = details
-        db.commit()
+            return
+        raw_output = run.output or ""
+        raw_error = "\n".join(
+            part for part in (run.error or "", run.log_output or "") if part
+        )
+        summary, details = compact_repository_diagnostic(raw_output, raw_error, 2)
+        if not repository.storage_path:
+            repository.initialized = False
+        repository.validation_error = summary
+        repository.validation_details = details
+
+    await execute_run(
+        run_id, command, refresh_size_after=False, terminal_db_hook=persist_validation_state,
+    )
 
 
 def queue_host_ssh_action(action_id: int) -> int:

@@ -1,5 +1,148 @@
 # Release Notes
 
+## v1.0.82 – 26.07.2026
+
+### Legacy-Borg-Cache korrekt einordnen und BBM-Client-Cache gezielt zurücksetzen
+
+- Ein Legacy-Borg-Cache unter `$HOME/.cache/borg/<Borg-Repository-ID>` wird nicht mehr als „aktiv“ im Sinne von „vom BBM verwendet“ markiert, nur weil dieselbe Borg-Repository-ID einem aktuellen BBM-Repository zugeordnet ist. Die Anzeige lautet jetzt **„Zugeordneter Legacy-Borg-Cache (nicht vom BBM verwendet)“**.
+- Zugeordnete Legacy-Borg-Caches bleiben standardmäßig unangetastet, können aber ausdrücklich ausgewählt und über **Legacy-Borg-Cache bereinigen** gelöscht werden. Dies beeinflusst den BBM-Client-Cache nicht; bei weiterhin manuell ausgeführten Borg-Aufrufen kann deren nächster Lauf jedoch langsamer sein.
+- Aktive BBM-Client-Caches können über die neue separate Aktion **BBM-Client-Cache zurücksetzen** ausgewählt werden. Dabei wird ausschließlich `$HOME/.cache/borgbackup-manager/repository-<ID>` entfernt; Repository-Daten und Borg-Sicherheitsstatus bleiben erhalten.
+- Vor einem Reset erscheint eine deutliche Warnung, dass der nächste Backup-Lauf wegen des Neuaufbaus des Borg-Caches deutlich länger dauern kann.
+- Der Server blockiert einen BBM-Client-Cache-Reset bei laufenden oder wartenden Ausführungen sowie während eines laufenden Manager-/Cache-Backups. Unmittelbar vor dem Löschen wird der Client erneut geprüft und der Cache muss weiterhin aktiv dem ausgewählten Repository zugeordnet sein.
+
+## v1.0.81 – 26.07.2026
+
+### Client-Cache-Pfade sichtbar und Legacy-Borg-Cache zuverlässiger erkannt
+
+- Die Client-Prüfung bezeichnet `$HOME/.cache/borgbackup-manager/` jetzt eindeutig als **BBM-Client-Cache** und `$HOME/.cache/borg/` als **Legacy-Borg-Cache** aus früheren beziehungsweise manuellen Borg-Aufrufen.
+- Bei jedem gefundenen BBM-Client-Cache, Legacy-Borg-Cache und Borg-Sicherheitsstatus wird der vollständige tatsächliche Pfad angezeigt. Zusätzlich zeigt jedes Gerät die beim Scan tatsächlich geprüften Basisverzeichnisse.
+- Legacy-Borg-Caches werden nicht mehr nur über einen einzigen aktuell abgeleiteten Cachepfad gesucht. Geprüft werden dedupliziert `BORG_CACHE_DIR`, der XDG-Cachepfad, `$HOME/.cache/borg` und der Cachepfad des Home-Verzeichnisses aus der Benutzer-Datenbank des Clients. Bei einer Root-SSH-Verbindung wird dadurch `/root/.cache/borg` ausdrücklich geprüft, auch wenn die aktuelle Umgebung abweicht.
+- Der Scan verwendet Protokollversion V5 und überträgt absolute Cache-/Security-Pfade codiert an den Manager. Dadurch lassen sich gleichnamige Einträge aus unterschiedlichen Legacy-Cache-Basen eindeutig unterscheiden.
+- Die Legacy-Borg-Cache-Bereinigung verwendet den beim Scan ermittelten vollständigen Pfad, führt unmittelbar vorher erneut einen Scan durch und akzeptiert nur direkte Kinder einer der erlaubten Legacy-Cache-Wurzeln. `CACHEDIR.TAG`, symbolische Links und Pfade außerhalb dieser Wurzeln bleiben geschützt.
+
+## v1.0.80 – 26.07.2026
+
+### Normalen Borg-Cache vollständig und korrekt prüfen
+
+- `CACHEDIR.TAG` unter `$HOME/.cache/borg` wird jetzt korrekt als Standard-Metadatei des Cache-Verzeichnisses behandelt und nicht mehr fälschlich als „Unbekannter normaler Borg-Cache“ angezeigt.
+- Die Client-Prüfung verwendet für den normalen Borg-Cache jetzt eine Top-Level-Suche, die auch versteckte Einträge (`.*`) erfasst. Dadurch bleiben alte temporäre oder Legacy-Cache-Verzeichnisse nicht mehr unsichtbar.
+- Nicht standardmäßige reguläre Dateien und Verzeichnisse innerhalb von `$HOME/.cache/borg` beziehungsweise `BORG_CACHE_DIR` werden mit ihrer tatsächlichen Größe als „Legacy-/sonstiger normaler Borg-Cache-Eintrag“ angezeigt.
+- Solche Legacy-/sonstigen Einträge können ausdrücklich manuell zur Bereinigung ausgewählt werden, werden aber niemals automatisch vorausgewählt. Symbolische Links und andere nicht reguläre Objekte bleiben geschützt.
+- Die Bereinigung validiert unmittelbar vor dem Löschen erneut den aktuellen Client-Zustand. `CACHEDIR.TAG` kann über die Cache-Bereinigung grundsätzlich nicht gelöscht werden.
+- Die Prüfung bleibt kompatibel mit den Scan-Protokollen älterer Releases; der neue Client-Scan verwendet Protokollversion V4.
+
+## v1.0.79 – 26.07.2026
+
+### Erweiterte Borg-Cache- und Security-Prüfung
+
+- Client-Prüfungen können jetzt wahlweise alle Geräte oder eine Mehrfachauswahl bestimmter Geräte prüfen; nicht ausgewählte Geräte werden nicht per SSH kontaktiert.
+- Zusätzlich zum BBM-eigenen `$HOME/.cache/borgbackup-manager/` wird der normale Borg-Cache `$HOME/.cache/borg/` beziehungsweise `BORG_CACHE_DIR` geprüft und kann gezielt bereinigt werden.
+- Borg-Security-Einträge zeigen jetzt `location` und `manifest-timestamp`. Mehrere Security-Verzeichnisse mit demselben gespeicherten Repository-Standort werden bei vergleichbaren Zeitstempeln als neuerer beziehungsweise eindeutig älterer Stand gekennzeichnet.
+- Eine Borg-ID, die über einen aktuell zugeordneten BBM-Cache bestätigt ist, bleibt auch bei einem abweichenden `manifest-timestamp` vor automatischer Löschung geschützt.
+- Unbekannte reguläre Borg-Security- und normale Borg-Cache-Verzeichnisse können manuell ausgewählt und gelöscht werden; sie werden aus Sicherheitsgründen niemals vorausgewählt.
+- Verwaiste BBM-Client-Caches, normale Borg-Caches, Borg-Security und Restore-Rückfall-Sicherungen besitzen getrennte Bereinigungsaktionen. Vor jeder Client-Löschung erfolgt ein frischer Scan.
+- Die managerseitige Prüfung umfasst jetzt ausdrücklich `/data/borg-security` einschließlich `location`, `manifest-timestamp` und Duplikatbewertung. Manager-Cache-/Security-Einträge werden selektiv statt pauschal gelöscht.
+
+
+## v1.0.78 – 26.07.2026
+
+### Client-Borg-Sicherheitsstatus mitsichern und verwalten
+
+- Client-Cache-Backups sichern jetzt zusätzlich je BBM-Geräte-/Repository-Zuordnung den repositorybezogenen Borg-Sicherheitsstatus aus `$HOME/.config/borg/security/<Borg-Repository-ID>`. Bei als `root` betriebenen Clients entspricht dies `/root/.config/borg/security/...`.
+- Die Zuordnung erfolgt über die echte 64-stellige Borg-Repository-ID aus der privaten Client-Cache-Konfiguration. Fehlt der Client-Cache, wird nur bei genau einem eindeutigen `location`-Treffer zugeordnet; mehrdeutiger Zustand wird als nicht auflösbar protokolliert und nicht blind gesichert.
+- Beim gezielten Client-Cache-Restore wird ein gesicherter Borg-Sicherheitsstatus nur ergänzt, wenn für diese Borg-Repository-ID auf dem Client noch kein aktueller Security-Ordner existiert. Vorhandener Sicherheitsstatus wird bewusst beibehalten und niemals durch einen möglicherweise älteren Backup-Stand überschrieben.
+- Die Client-Zustandsprüfung untersucht jetzt zusätzlich Borg-Security-Verzeichnisse. Eindeutig aktive Einträge bleiben geschützt, eindeutig BBM-zugehörige aber nicht mehr zugeordnete Einträge können als verwaist ausgewählt werden; unbekannte oder manuell verwendete Borg-Security-Verzeichnisse bleiben unangetastet.
+- Verwaister Borg-Sicherheitsstatus besitzt eine eigene Auswahl und einen eigenen Bereinigungsbutton. Unmittelbar vor dem Löschen wird jeder Eintrag erneut geprüft und muss weiterhin eindeutig verwaist sein.
+
+### Client-Cache-Prüfung und Rückfall-Bereinigung
+
+- Unter **System → Manager-Backup → Borg-Cache verwalten** können jetzt zusätzlich die BBM-eigenen Client-Caches auf aktiven Geräten geprüft werden.
+- Geprüft wird ausschließlich `$HOME/.cache/borgbackup-manager/`; normale Borg-Caches außerhalb dieses BBM-Verzeichnisses werden nicht berührt.
+- `repository-<ID>`-Caches mit bestehender Geräte-/Backup-Job-/Repository-Zuordnung werden als aktiv erkannt und geschützt. Nur eindeutig nicht mehr zugeordnete Caches werden als verwaist angeboten.
+- Vor jeder Löschung eines verwaisten Client-Caches wird die aktuelle Zuordnung erneut serverseitig geprüft. Ist der Cache inzwischen wieder einem Job zugeordnet, wird er übersprungen.
+- Durch Client-Cache-Restores erzeugte `repository-<ID>.pre-bbm-restore-<Zeit>`-Rückfall-Sicherungen werden in einer eigenen Kategorie mit Größe und Erstellzeit angezeigt.
+- Verwaiste Client-Caches und Rückfall-Sicherungen besitzen getrennte Auswahlfelder, getrennte Bereinigungsbuttons und jeweils eine ausdrückliche Sicherheitsbestätigung.
+- Deaktivierte Clients werden nicht kontaktiert. Nicht erreichbare Clients werden als Fehler angezeigt und nicht verändert.
+- Symbolische Links, unbekannte Einträge und nicht reguläre Cache-Verzeichnisse werden nur angezeigt beziehungsweise übersprungen und niemals automatisch gelöscht.
+
+## v1.0.77 – 26.07.2026
+
+### Manager-Backup und Cache-Backup vollständig getrennt
+
+- Neue Manager-Backups enthalten ausschließlich BBM-Daten für die eigentliche Manager-Wiederherstellung: Datenbanken, Einstellungen, Master-Key, SSH-/Repository-Schlüssel, Borg-Keyfiles und TLS-Daten. Borg-Caches werden nicht mehr in neue Manager-Backups eingebettet.
+- Borg-Caches werden als eigener Backup-Typ `borgbackup-manager-cache-v...` erstellt. Manager-Borg-Cache/Borg-Sicherheitsstatus und Client-Borg-Caches können dabei getrennt ausgewählt werden.
+- Cache-Backups besitzen eigene Dateinamen, Listen, Größenlimits und Restore-Aktionen. Dadurch bleibt das Manager-Backup unabhängig von der Cache-Größe klein.
+- Manager-Backups bleiben immer verschlüsselte `.bbm`-Dateien. Cache-Backups sind standardmäßig ebenfalls verschlüsselt und verwenden dann `.bbm`; die Cache-Verschlüsselung kann bewusst deaktiviert werden, wodurch eine `.zip`-Datei erzeugt wird.
+- Historische kombinierte Backups aus v1.0.75/v1.0.76 bleiben kompatibel. Sie können weiterhin vollständig als Manager-Backup sowie gezielt für darin enthaltene Manager-/Client-Caches verwendet werden.
+- `restore-backup.sh` erkennt eigenständige Cache-Backups und weist sie als Quelle für einen vollständigen Manager-Restore ausdrücklich zurück.
+
+### Separate Cache-Wiederherstellung
+
+- Der managerseitige Borg-Cache `/data/borg-cache` und Borg-Sicherheitsstatus `/data/borg-security` können aus einem Cache-Backup gezielt zurückgespielt werden. Vorhandene Stände werden zuvor als zeitgestempelte `pre-bbm-restore`-Sicherheitskopie erhalten.
+- Client-Caches werden weiterhin ausschließlich pro aktueller Geräte-/Repository-Zuordnung wiederhergestellt. Vorhandene `repository-<ID>`-Caches werden auf dem Client vor dem Austausch gesichert.
+- Ein separates Cache-Backup kann nicht versehentlich als vollständiger Managerzustand eingespielt werden.
+
+### Sichtbarer Live-Fortschritt für beide Backup-Typen
+
+- Manager- und Cache-Backup laufen in der WebUI als serverseitiger Task mit sichtbarer Live-Statusanzeige statt als lange blockierende HTTP-Anfrage.
+- Angezeigt werden Phase, Fortschrittsbalken und ein kurzes Live-Protokoll. Manager-Backups zeigen Vorbereitung, Datenbank-Snapshot, Manager-Daten, Archivabschluss und Verschlüsselung.
+- Cache-Backups zeigen Manager-Cache-Fortschritt sowie bei Client-Caches das aktuelle Gerät/Repository, `Client x/y` und die bereits übertragene Datenmenge. Bei aktivierter Verschlüsselung folgt deren Byte-Fortschritt als eigener Schritt.
+- Ein Seiten-Reload verliert den laufenden Status nicht; die WebUI erkennt den aktiven Backup-Task und setzt die Anzeige fort.
+- Gleichzeitige Backup-Erstellungen werden serverseitig verhindert. Fehler erscheinen direkt im Statusbereich mit konkreter Ursache.
+
+### Repository-Prüfstatus atomar veröffentlicht
+
+- Der Status einer erfolgreichen externen Repository-Prüfung und die Repository-Freigabe werden jetzt in derselben Datenbanktransaktion veröffentlicht. Dadurch kann unmittelbar nach einem erfolgreichen Test keine kurze Zwischenphase mehr auftreten, in der die Ausführung bereits als erfolgreich erscheint, das Repository aber noch als ungeprüft abgewiesen wird.
+
+### Wiederherstellungsskript korrigiert
+
+- Ein doppelter Heredoc-Abschluss in `restore-backup.sh`, der den Bare-Metal-Restore nach der Python-Prüfung abbrechen konnte, wurde entfernt.
+
+## v1.0.76 – 26.07.2026
+
+### Client-Borg-Caches im Manager-Backup
+
+- Manager-Backups können jetzt zusätzlich die privaten BBM-Borg-Caches der verwalteten Quellgeräte sichern. Die Option **Borg-Caches der Clients mitsichern** ist von Manager-Cache/Borg-Sicherheitsstatus getrennt und standardmäßig deaktiviert.
+- Gesichert wird ausschließlich der repositorybezogene BBM-Cache `$HOME/.cache/borgbackup-manager/repository-<ID>` für aktuell vorhandene Geräte-/Repository-Zuordnungen. Der allgemeine Borg-Cache des Benutzers bleibt unangetastet.
+- Die Cache-Daten werden über den bestehenden Controller-SSH-Zugang mit bestätigtem Hostschlüssel als TAR-Datenstrom direkt in das verschlüsselte Manager-Backup geschrieben. Auf `/data` wird kein zusätzlicher vollständiger Client-Cache-Baum aufgebaut.
+- Deaktivierte Geräte werden dokumentiert übersprungen. Fehlt auf einem aktiven Gerät lediglich der Cache, wird dies als `nicht vorhanden` gespeichert. Ist ein aktives Gerät nicht erreichbar oder schlägt die Übertragung fehl, wird das Backup abgebrochen, statt einen unvollständigen Client-Cache-Stand als vollständig auszugeben.
+- Flüchtige `lock.exclusive`-/`lock.roster`-Artefakte sowie symbolische Links werden nicht übernommen. Client-Cache-Backups sind wie Manager-Cache-Backups nur zulässig, wenn keine Ausführung läuft oder wartet.
+
+### Gezielte Client-Cache-Wiederherstellung
+
+- Unter **System → Manager-Backup → Client-Borg-Cache wiederherstellen** kann das authentifizierte Client-Cache-Inhaltsverzeichnis eines Backups eingelesen werden.
+- Wiederhergestellt wird immer nur eine ausdrücklich ausgewählte Geräte-/Repository-Zuordnung. Die Zuordnung muss auch im aktuellen Manager noch als Backup-Job existieren und das Zielgerät muss aktiviert sein.
+- Ein bereits vorhandener `repository-<ID>`-Cache wird vor dem Austausch auf dem Client als `repository-<ID>.pre-bbm-restore-<Zeit>` erhalten. Erst danach wird der gesicherte Cache aktiviert.
+- Der Restore akzeptiert nur den erwarteten repositorybezogenen Top-Level-Pfad, übernimmt keine Archiv-Besitzer/-Rechte und weist symbolische Links ab. Alte Lockartefakte werden vor der Aktivierung zusätzlich entfernt.
+- Ein vollständiger Manager-Restore spielt Client-Caches bewusst nicht automatisch auf Geräte zurück. Die Client-Cache-TARs bleiben Bestandteil der ursprünglichen `.bbm`-Datei und werden anschließend bei Bedarf gezielt verteilt.
+
+## v1.0.75 – 26.07.2026
+
+### Optionaler Borg-Cache im Manager-Backup
+
+- Manager-Backups können optional den managerseitigen Borg-Cache unter `/data/borg-cache` und Borgs Repository-Sicherheitsstatus unter `/data/borg-security` enthalten.
+- Die Option ist standardmäßig deaktiviert, damit normale Manager-Backups klein bleiben.
+- Cache-Backups sind nur ohne laufende oder wartende Ausführungen zulässig.
+- Flüchtige Borg-Locks (`lock.exclusive`, `lock.roster`) werden bewusst nicht mitgesichert.
+- Bei einer Wiederherstellung werden Cache und Borg-Sicherheitsstatus nur ersetzt, wenn sie im ausgewählten Backup enthalten sind.
+
+### Kompression und große Backups
+
+- Neue Manager-Backups unterstützen die Kompressionsstufen `none`, Deflate 1, Deflate 6 (Standard) und Deflate 9.
+- Kompression erfolgt vor der Verschlüsselung und kann insbesondere große Cache-Backups deutlich verkleinern.
+- Neue `.bbm`-Backups verwenden streamendes AES-256-GCM statt die komplette Datei im Arbeitsspeicher zu verschlüsseln.
+- Bestehende ältere `.bbm`-Backups bleiben vollständig lesbar und wiederherstellbar.
+- Für Cache-Backups gelten separate Sicherheitsgrenzen: standardmäßig 32 GiB Backup-Dateigröße, 128 GiB entpackte Daten und 250000 Einträge.
+- `restore-backup.sh` unterstützt das neue Streaming-Format und die separaten Cache-Grenzen ebenfalls.
+
+### Borg-Cache prüfen und bereinigen
+
+- Unter **System → Manager-Backup** gibt es den neuen Bereich **Borg-Cache verwalten**.
+- Die Prüfung läuft nur auf Knopfdruck und ermittelt Größe von Manager-Cache und Borg-Sicherheitsstatus.
+- Erkannt werden nicht mehr zugeordnete `repository-<ID>`-Caches, ältere 64-stellige Borg-Cache-Verzeichnisse und Borg-Security-Verzeichnisse.
+- Vor einer Bereinigung wird die Zuordnung serverseitig erneut geprüft; gelöscht werden ausschließlich weiterhin eindeutig verwaiste Einträge.
+- Aktive Repository-Caches und zugeordnete Borg-Sicherheitsdaten bleiben unangetastet.
+
 ## v1.0.74 – 26.07.2026
 
 ### Externe Repositorys: Cache-Lock zwischen Backup, Prune und Compact behoben

@@ -12,6 +12,7 @@ import shutil
 import socket
 import subprocess
 import tarfile
+import threading
 import unicodedata
 import zipfile
 from contextlib import asynccontextmanager
@@ -34,6 +35,7 @@ from app.archive_cache import invalidate_archive_cache, load_archive_cache, stor
 from app.archive_metadata import annotate_archive_devices, infer_archive_device, sort_archives_newest_first
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
 from app.borg_progress import get_run_item_activity, get_run_network_activity, get_run_progress
+from app.manager_backup_progress import begin_task as begin_manager_backup_task, current_task as current_manager_backup_task, fail_task as fail_manager_backup_task, finish_task as finish_manager_backup_task, get_task as get_manager_backup_task, update_task as update_manager_backup_task
 from app.borg_warnings import (
     parse_borg_warnings,
     unresolved_warning_summary,
@@ -45,6 +47,7 @@ from app.borg_stats import load_borg_json_document, merge_archive_statistics, pa
 from app.config import (
     BACKUP_DIR,
     BACKUP_MAX_FILE_BYTES,
+    BACKUP_CACHE_MAX_FILE_BYTES,
     DATA_DIR,
     EXPORT_DIR,
     RUN_LOG_DIR,
@@ -62,9 +65,13 @@ from app.config import (
 from app.backups import (
     apply_prepared_restore,
     backup_path,
+    client_borg_cache_inventory,
+    create_cache_backup,
     create_full_backup,
     list_full_backups,
     prepare_full_backup_restore,
+    restore_client_borg_cache_from_backup,
+    restore_manager_borg_cache_from_backup,
     store_uploaded_backup,
 )
 from app.database import Base, SessionLocal, engine, migrate_schema
@@ -126,7 +133,14 @@ from app.schemas import (
     LoginIn,
     PasswordChangeIn,
     ManagerBackupCreateIn,
+    CacheBackupCreateIn,
+    ClientBorgCacheCleanupIn,
+    ClientBorgCacheScanIn,
     ManagerBackupRestoreIn,
+    ManagerBorgCacheCleanupIn,
+    ManagerCacheRestoreIn,
+    ManagerClientCacheInspectIn,
+    ManagerClientCacheRestoreIn,
     RepositoryIn,
     RepositoryImportIn,
     RepositoryOut,
@@ -3579,13 +3593,269 @@ def backups() -> list[dict]:
     return list_full_backups()
 
 
+@app.get("/api/backups/borg-cache/status", dependencies=admin_protected)
+def borg_cache_status() -> dict:
+    from app.manager_cache import manager_borg_cache_status
+    return manager_borg_cache_status()
+
+
+@app.post("/api/backups/borg-cache/cleanup", dependencies=admin_protected)
+def cleanup_borg_cache(data: ManagerBorgCacheCleanupIn) -> dict:
+    from app.manager_cache import cleanup_orphaned_manager_borg_data
+    return cleanup_orphaned_manager_borg_data(data.entries)
+
+
+@app.get("/api/backups/client-cache/status", dependencies=admin_protected)
+def client_borg_cache_status() -> dict:
+    from app.client_cache import scan_client_borg_caches
+    return scan_client_borg_caches()
+
+
+@app.post("/api/backups/client-cache/scan", dependencies=admin_protected)
+def scan_selected_client_borg_cache(data: ClientBorgCacheScanIn) -> dict:
+    from app.client_cache import scan_client_borg_caches
+    return scan_client_borg_caches(data.host_ids)
+
+
+@app.post("/api/backups/client-cache/cleanup", dependencies=admin_protected)
+def cleanup_client_borg_cache(data: ClientBorgCacheCleanupIn) -> dict:
+    from app.client_cache import cleanup_client_borg_caches
+    entries = [item.model_dump() for item in data.entries]
+    return cleanup_client_borg_caches(data.kind, entries)
+
+
+def _validate_cache_backup_idle() -> None:
+    with SessionLocal() as db:
+        active = db.scalar(select(func.count()).select_from(Run).where(Run.status.in_(["queued", "running"]))) or 0
+    if active:
+        raise HTTPException(409, "Cache-Backups können nur ohne laufende oder wartende Ausführungen erstellt werden")
+
+
+def _manager_backup_task_worker(
+    task_id: str, *, label: str, passphrase: str, compression: str,
+) -> None:
+    try:
+        update_manager_backup_task(task_id, status="running", stage="prepare", message="Manager-Backup wird vorbereitet …", percent=1.0)
+
+        def progress(payload: dict) -> None:
+            update_manager_backup_task(task_id, status="running", **payload)
+
+        path = create_full_backup(
+            APP_VERSION, label, passphrase, compression=compression, progress=progress,
+        )
+        backup = next(item for item in list_full_backups() if item["name"] == path.name)
+        finish_manager_backup_task(task_id, backup=backup)
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Manager backup task %s failed", task_id)
+        fail_manager_backup_task(task_id, str(exc))
+
+
+def _cache_backup_task_worker(
+    task_id: str, *, label: str, passphrase: str | None, encrypted: bool,
+    include_manager_borg_cache: bool, include_client_borg_cache: bool, compression: str,
+) -> None:
+    try:
+        update_manager_backup_task(task_id, status="running", stage="prepare", message="Cache-Backup wird vorbereitet …", percent=1.0)
+
+        def progress(payload: dict) -> None:
+            update_manager_backup_task(task_id, status="running", **payload)
+
+        path = create_cache_backup(
+            APP_VERSION,
+            label,
+            passphrase,
+            encrypted=encrypted,
+            include_manager_borg_cache=include_manager_borg_cache,
+            include_client_borg_cache=include_client_borg_cache,
+            compression=compression,
+            progress=progress,
+        )
+        backup = next(item for item in list_full_backups() if item["name"] == path.name)
+        finish_manager_backup_task(task_id, backup=backup)
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Cache backup task %s failed", task_id)
+        fail_manager_backup_task(task_id, str(exc))
+
+
 @app.post("/api/backups", status_code=201, dependencies=admin_protected)
 def create_backup(data: ManagerBackupCreateIn) -> dict:
+    """Synchronous manager-only backup endpoint for API compatibility."""
     try:
+        if current_manager_backup_task(include_last=False):
+            raise HTTPException(409, "Es wird bereits ein Backup erstellt")
         passphrase = data.passphrase.get_secret_value() if data.passphrase else None
-        path = create_full_backup(APP_VERSION, data.label, passphrase)
+        path = create_full_backup(APP_VERSION, data.label, passphrase, compression=data.compression)
         return next(item for item in list_full_backups() if item["name"] == path.name)
     except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/backups/start", status_code=202, dependencies=admin_protected)
+def start_backup(data: ManagerBackupCreateIn) -> dict:
+    passphrase = data.passphrase.get_secret_value() if data.passphrase else None
+    if not passphrase:
+        raise HTTPException(400, "Neue Manager-Backups müssen verschlüsselt werden")
+    task_id = secrets.token_hex(12)
+    try:
+        task = begin_manager_backup_task(task_id, label=data.label.strip() or "Manuell", backup_type="manager")
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    thread = threading.Thread(
+        target=_manager_backup_task_worker,
+        kwargs={
+            "task_id": task_id,
+            "label": data.label,
+            "passphrase": passphrase,
+            "compression": data.compression,
+        },
+        name=f"bbm-manager-backup-{task_id[:8]}", daemon=True,
+    )
+    thread.start()
+    return task
+
+
+@app.post("/api/cache-backups", status_code=201, dependencies=admin_protected)
+def create_cache_backup_sync(data: CacheBackupCreateIn) -> dict:
+    """Synchronous cache-only backup endpoint."""
+    try:
+        if current_manager_backup_task(include_last=False):
+            raise HTTPException(409, "Es wird bereits ein Backup erstellt")
+        _validate_cache_backup_idle()
+        passphrase = data.passphrase.get_secret_value() if data.passphrase else None
+        path = create_cache_backup(
+            APP_VERSION,
+            data.label,
+            passphrase,
+            encrypted=data.encrypted,
+            include_manager_borg_cache=data.include_manager_borg_cache,
+            include_client_borg_cache=data.include_client_borg_cache,
+            compression=data.compression,
+        )
+        return next(item for item in list_full_backups() if item["name"] == path.name)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/cache-backups/start", status_code=202, dependencies=admin_protected)
+def start_cache_backup(data: CacheBackupCreateIn) -> dict:
+    _validate_cache_backup_idle()
+    passphrase = data.passphrase.get_secret_value() if data.passphrase else None
+    task_id = secrets.token_hex(12)
+    try:
+        task = begin_manager_backup_task(
+            task_id,
+            label=data.label.strip() or "Manuell",
+            backup_type="cache",
+            include_borg_cache=data.include_manager_borg_cache,
+            include_client_borg_cache=data.include_client_borg_cache,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    thread = threading.Thread(
+        target=_cache_backup_task_worker,
+        kwargs={
+            "task_id": task_id,
+            "label": data.label,
+            "passphrase": passphrase,
+            "encrypted": data.encrypted,
+            "include_manager_borg_cache": data.include_manager_borg_cache,
+            "include_client_borg_cache": data.include_client_borg_cache,
+            "compression": data.compression,
+        },
+        name=f"bbm-cache-backup-{task_id[:8]}", daemon=True,
+    )
+    thread.start()
+    return task
+
+
+@app.get("/api/backups/tasks/current", dependencies=admin_protected)
+def get_current_backup_task() -> dict:
+    return current_manager_backup_task(include_last=False) or {"status": "idle"}
+
+
+@app.get("/api/backups/tasks/{task_id}", dependencies=admin_protected)
+def get_backup_task(task_id: str) -> dict:
+    task = get_manager_backup_task(task_id)
+    if not task:
+        raise HTTPException(404, "Manager-Backup-Task nicht gefunden")
+    return task
+
+
+@app.post("/api/backups/{name}/client-caches/inspect", dependencies=admin_protected)
+def inspect_manager_backup_client_caches(name: str, data: ManagerClientCacheInspectIn) -> dict:
+    try:
+        source = backup_path(name)
+        passphrase = data.passphrase.get_secret_value() if data.passphrase else None
+        return client_borg_cache_inventory(source, passphrase)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "Backup not found") from exc
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/backups/{name}/client-caches/{host_id}/{repository_id}/restore", dependencies=admin_protected)
+def restore_manager_backup_client_cache(
+    name: str, host_id: int, repository_id: int, data: ManagerClientCacheRestoreIn
+) -> dict:
+    with SessionLocal() as db:
+        active = db.scalar(
+            select(func.count()).select_from(Run).where(Run.status.in_(["queued", "running"]))
+        ) or 0
+        if active:
+            raise HTTPException(409, "Client-Cache kann nur ohne laufende oder wartende Ausführungen wiederhergestellt werden")
+        host = db.get(Host, host_id)
+        repository = db.get(Repository, repository_id)
+        assigned = db.scalar(
+            select(Job.id).where(Job.host_id == host_id, Job.repository_id == repository_id).limit(1)
+        )
+        if not host:
+            raise HTTPException(404, "Gerät nicht gefunden")
+        if not repository:
+            raise HTTPException(404, "Repository nicht gefunden")
+        if not assigned:
+            raise HTTPException(409, "Gerät und Repository sind keinem aktuellen Backup-Job gemeinsam zugeordnet")
+        if not host.enabled:
+            raise HTTPException(409, "Gerät ist deaktiviert; vor der Client-Cache-Wiederherstellung aktivieren")
+        # Only scalar fields are used after the session is closed.
+        host_name = host.name
+        repository_name = repository.name
+    try:
+        source = backup_path(name)
+        passphrase = data.passphrase.get_secret_value() if data.passphrase else None
+        result = restore_client_borg_cache_from_backup(
+            source, passphrase, host, repository_id
+        )
+        result["message"] = (
+            f"Client-Borg-Cache für Gerät „{host_name}“ und Repository „{repository_name}“ wurde wiederhergestellt."
+        )
+        if result.get("security_restore", {}).get("status") == "restored":
+            result["message"] += " Fehlender Borg-Sicherheitsstatus wurde ebenfalls wiederhergestellt."
+        elif result.get("security_restore", {}).get("status") == "kept_existing":
+            result["message"] += " Vorhandener Borg-Sicherheitsstatus wurde aus Sicherheitsgründen beibehalten."
+        return result
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "Backup not found") from exc
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/backups/{name}/manager-cache/restore", dependencies=admin_protected)
+def restore_manager_cache_backup(name: str, data: ManagerCacheRestoreIn) -> dict:
+    with SessionLocal() as db:
+        active = db.scalar(
+            select(func.count()).select_from(Run).where(Run.status.in_(["queued", "running"]))
+        ) or 0
+    if active:
+        raise HTTPException(409, "Manager-Cache kann nur ohne laufende oder wartende Ausführungen wiederhergestellt werden")
+    try:
+        source = backup_path(name)
+        passphrase = data.passphrase.get_secret_value() if data.passphrase else None
+        result = restore_manager_borg_cache_from_backup(source, passphrase)
+        result["message"] = "Manager-Borg-Cache und Borg-Sicherheitsstatus wurden wiederhergestellt."
+        return result
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "Backup not found") from exc
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
@@ -3598,8 +3868,8 @@ async def upload_manager_backup(
     content_length = request.headers.get("content-length")
     if content_length:
         try:
-            if int(content_length) > BACKUP_MAX_FILE_BYTES:
-                raise HTTPException(413, f"Backup-Datei überschreitet die zulässige Größe von {BACKUP_MAX_FILE_BYTES} Bytes")
+            if int(content_length) > max(BACKUP_MAX_FILE_BYTES, BACKUP_CACHE_MAX_FILE_BYTES):
+                raise HTTPException(413, f"Backup-Datei überschreitet die zulässige Upload-Größe von {max(BACKUP_MAX_FILE_BYTES, BACKUP_CACHE_MAX_FILE_BYTES)} Bytes")
         except ValueError as exc:
             raise HTTPException(400, "Ungültige Content-Length") from exc
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -3610,8 +3880,8 @@ async def upload_manager_backup(
             os.chmod(temporary, 0o600)
             async for chunk in request.stream():
                 written += len(chunk)
-                if written > BACKUP_MAX_FILE_BYTES:
-                    raise HTTPException(413, f"Backup-Datei überschreitet die zulässige Größe von {BACKUP_MAX_FILE_BYTES} Bytes")
+                if written > max(BACKUP_MAX_FILE_BYTES, BACKUP_CACHE_MAX_FILE_BYTES):
+                    raise HTTPException(413, f"Backup-Datei überschreitet die zulässige Upload-Größe von {max(BACKUP_MAX_FILE_BYTES, BACKUP_CACHE_MAX_FILE_BYTES)} Bytes")
                 handle.write(chunk)
             handle.flush()
             os.fsync(handle.fileno())

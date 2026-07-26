@@ -6,26 +6,26 @@
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
-<link href="/static/favicon.svg?v=1.0.74" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.0.74"></script>
-<link href="/static/style.css?v=1.0.74" rel="stylesheet"/>
+<link href="/static/favicon.svg?v=1.0.82" rel="icon" type="image/svg+xml"/>
+<script src="/static/theme-init.js?v=1.0.82"></script>
+<link href="/static/style.css?v=1.0.82" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
 <form class="login-card" id="login-form">
-<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.0.74"/>
+<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.0.82"/>
 <p class="eyebrow">BorgBackup Manager</p>
 <h1>Zentrale für deine Backups.</h1>
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.0.74</b></p>
+<p class="login-version">Version <b id="login-version">v1.0.82</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
 <div class="app-shell hidden" id="app">
 <aside>
-<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.0.74"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
+<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.0.82"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
 <nav id="main-navigation">
 <span class="nav-label">Betrieb</span>
 <button class="active" data-view="dashboard">Übersicht</button>
@@ -281,19 +281,46 @@
 <section class="view" id="view-backups">
 <div class="notice warning"><strong>Sensibler Inhalt:</strong> Ein Manager-Backup enthält Manager-Datenbank, Sicherheitsdatenbank, Master-Key sowie SSH-, TLS- und Borg-Schlüssel. Sicher verwahren. Repository-Nutzdaten sind nicht enthalten.</div>
 <div class="backup-manager-grid">
-<form class="panel" id="backup-form"><div class="panel-head"><div><h2>Manager-Backup erstellen</h2><span>Datenbank, Einstellungen, SSH-/TLS- und Repository-Schlüssel.</span></div></div>
+<form class="panel" id="backup-form"><div class="panel-head"><div><h2>Manager-Backup erstellen</h2><span>Nur BBM-Daten: Datenbank, Einstellungen und Sicherheitsdaten – ohne Borg-Caches.</span></div></div>
 <label>Bezeichnung <span>(optional)</span><input maxlength="48" name="label" placeholder="z. B. vor-update"/></label>
-<div class="notice success"><strong>Verschlüsselung ist verpflichtend:</strong> Neue Manager-Backups werden ausschließlich als verschlüsselte <code>.bbm</code>-Dateien erstellt.</div>
+<label>Kompression<select name="compression"><option value="fast">Schnell – Deflate 1</option><option selected="" value="standard">Standard – Deflate 6</option><option value="maximum">Maximum – Deflate 9</option><option value="none">Keine Kompression</option></select></label>
+<div class="notice success"><strong>Verschlüsselung ist verpflichtend:</strong> Manager-Backups enthalten Master-Key und sicherheitsrelevante BBM-Daten und werden ausschließlich als verschlüsselte <code>.bbm</code>-Dateien erstellt.</div>
 <div class="row" id="backup-passphrase-fields"><label>Backup-Passphrase<input autocomplete="new-password" minlength="12" name="passphrase" required="" type="password"/></label><label>Passphrase wiederholen<input autocomplete="new-password" minlength="12" name="passphrase_confirm" required="" type="password"/></label></div>
-<div class="form-actions"><button type="submit">Backup erstellen</button></div>
-<p class="hint">Verschlüsselte Backups erhalten die Endung <code>.bbm</code>. Die Passphrase muss mindestens 12 Zeichen lang sein und wird nicht gespeichert.</p>
+<div class="form-actions"><button type="submit">Manager-Backup erstellen</button></div>
+<div class="backup-create-progress persistent-info hidden" id="backup-create-status" aria-live="polite">
+<div class="backup-create-progress-head"><strong id="backup-create-status-title">Manager-Backup wird vorbereitet …</strong><span id="backup-create-status-percent">0 %</span></div>
+<progress id="backup-create-progress-bar" max="100" value="0"></progress>
+<div class="backup-create-progress-detail" id="backup-create-status-detail">Status wird geladen …</div>
+<div class="backup-create-progress-log" id="backup-create-status-log"></div>
+</div>
+<p class="hint">Borg-Caches werden bewusst nicht mehr in diese Datei aufgenommen. Dadurch bleibt das eigentliche BBM-Backup klein und schnell wiederherstellbar.</p>
 </form>
-<form class="panel" id="backup-upload-form"><div class="panel-head"><div><h2>Manager-Backup hochladen</h2><span>Vorhandene .bbm- oder historische .zip-Datei sicher übernehmen.</span></div></div>
+<form class="panel" id="cache-backup-form"><div class="panel-head"><div><h2>Cache-Backup erstellen</h2><span>Manager-Borg-Cache sowie Client-Borg-Caches und deren Borg-Sicherheitsstatus als separate Backup-Datei sichern.</span></div></div>
+<label>Bezeichnung <span>(optional)</span><input maxlength="48" name="label" placeholder="z. B. cache-vor-neuinstallation"/></label>
+<label>Kompression<select name="compression"><option value="fast">Schnell – Deflate 1</option><option selected="" value="standard">Standard – Deflate 6</option><option value="maximum">Maximum – Deflate 9</option><option value="none">Keine Kompression</option></select></label>
+<label class="check"><input checked="" name="include_manager_borg_cache" type="checkbox"/> Manager-Borg-Cache und Borg-Sicherheitsstatus sichern</label>
+<label class="check"><input checked="" name="include_client_borg_cache" type="checkbox"/> Borg-Caches und Borg-Sicherheitsstatus der Clients sichern</label>
+<label class="check"><input checked="" id="cache-backup-encrypted" name="encrypted" type="checkbox"/> Cache-Backup verschlüsseln <span>(empfohlen)</span></label>
+<div class="notice warning"><strong>Cache-Metadaten sind sensibel:</strong> Borg-Caches und Borg-Sicherheitsstatus enthalten Metadaten zu gesicherten Dateien und Repositorys. Verschlüsselung ist deshalb standardmäßig aktiviert, kann für Cache-Backups aber bewusst abgeschaltet werden.</div>
+<div class="row" id="cache-backup-passphrase-fields"><label>Cache-Backup-Passphrase<input autocomplete="new-password" minlength="12" name="passphrase" required="" type="password"/></label><label>Passphrase wiederholen<input autocomplete="new-password" minlength="12" name="passphrase_confirm" required="" type="password"/></label></div>
+<div class="form-actions"><button type="submit">Cache-Backup erstellen</button></div>
+<div class="backup-create-progress persistent-info hidden" id="cache-backup-create-status" aria-live="polite">
+<div class="backup-create-progress-head"><strong id="cache-backup-create-status-title">Cache-Backup wird vorbereitet …</strong><span id="cache-backup-create-status-percent">0 %</span></div>
+<progress id="cache-backup-create-progress-bar" max="100" value="0"></progress>
+<div class="backup-create-progress-detail" id="cache-backup-create-status-detail">Status wird geladen …</div>
+<div class="backup-create-progress-log" id="cache-backup-create-status-log"></div>
+</div>
+<p class="hint">Client-Caches und der zugehörige Borg-Sicherheitsstatus werden je Gerät/Repository direkt per SSH in die separate Cache-Datei gestreamt. Deaktivierte Geräte werden übersprungen; ein nicht erreichbares aktives Gerät bricht das Cache-Backup ab. Cache-Backups sind nur ohne laufende oder wartende Ausführungen möglich.</p>
+</form>
+<form class="panel" id="backup-upload-form"><div class="panel-head"><div><h2>Backup hochladen</h2><span>Vorhandenes Manager- oder Cache-Backup sicher übernehmen.</span></div></div>
 <label>Backup-Datei<input accept=".bbm,.zip,application/zip,application/octet-stream" name="backup_file" required="" type="file"/></label>
 <div class="persistent-info hidden" id="backup-upload-status"></div>
 <div class="form-actions"><button type="submit">Backup hochladen</button></div>
-<p class="hint">Dateiname, Größe und Format werden serverseitig geprüft. Vorhandene Dateien werden niemals überschrieben. Verschlüsselte Backups werden beim Hochladen strukturell geprüft und erst bei der Wiederherstellung mit der Passphrase authentifiziert.</p>
+<p class="hint">Dateiname, Größe und Format werden serverseitig geprüft. Vorhandene Dateien werden niemals überschrieben. Manager- und Cache-Backup-Typ, Dateiname, Größe und Format werden serverseitig geprüft. Vorhandene Dateien werden niemals überschrieben. Verschlüsselte Backups werden erst bei der Wiederherstellung vollständig mit der Passphrase authentifiziert.</p>
 </form>
+<div class="panel backup-cache-panel"><div class="panel-head responsive-head"><div><h2>Borg-Cache verwalten</h2><span>Manager- und Client-Caches ausschließlich auf Knopfdruck prüfen und gezielt bereinigen.</span></div></div>
+<h3>Manager-Cache und Borg-Sicherheitsstatus</h3><div class="form-actions"><button class="secondary" id="scan-borg-cache" type="button">Manager-Zustand prüfen</button><button class="danger" disabled="" id="cleanup-borg-cache" type="button">Ausgewählte Manager-Daten bereinigen</button></div><div class="persistent-info" id="borg-cache-status">Noch nicht geprüft.</div><div id="borg-cache-orphans"></div><p class="hint">Geprüft werden <code>/data/borg-cache</code> und <code>/data/borg-security</code>. Beim Borg-Sicherheitsstatus werden Standort und <code>manifest-timestamp</code> berücksichtigt. Aktive Einträge bleiben geschützt; eindeutig ältere Duplikate können gezielt ausgewählt werden.</p>
+<hr/><h3>Client-Caches und Borg-Sicherheitsstatus</h3><div class="form-grid compact-grid"><label>Prüfumfang<select id="client-cache-scan-mode"><option value="all">Alle Geräte</option><option value="selected">Ausgewählte Geräte</option></select></label><label id="client-cache-scan-hosts-wrap">Geräte<select id="client-cache-scan-hosts" multiple="" size="5"></select><small>Mehrfachauswahl mit Strg/⌘ oder Umschalt.</small></label></div><div class="form-actions"><button class="secondary" id="scan-client-borg-cache" type="button">Client-Zustand prüfen</button><button class="danger" disabled="" id="cleanup-client-borg-cache" type="button">Verwaiste BBM-Client-Caches bereinigen</button><button class="danger ghost" disabled="" id="reset-client-borg-cache" type="button">BBM-Client-Cache zurücksetzen</button><button class="danger" disabled="" id="cleanup-client-user-borg-cache" type="button">Legacy-Borg-Cache bereinigen</button><button class="danger" disabled="" id="cleanup-client-borg-security" type="button">Ausgewählten Borg-Sicherheitsstatus bereinigen</button><button class="danger ghost" disabled="" id="cleanup-client-cache-rollbacks" type="button">Rückfall-Sicherungen bereinigen</button></div><div class="persistent-info" id="client-borg-cache-status">Noch nicht geprüft.</div><div id="client-borg-cache-items"></div><p class="hint">Geprüft werden der <b>BBM-Client-Cache</b> <code>$HOME/.cache/borgbackup-manager/</code> und getrennt davon der <b>Legacy-Borg-Cache</b> <code>$HOME/.cache/borg/</code>. Ein Legacy-Borg-Cache kann derselben Repository-ID wie ein aktiver BBM-Client-Cache zugeordnet sein, wird vom BBM aber nicht verwendet und kann deshalb bewusst manuell gelöscht werden. Aktive BBM-Client-Caches lassen sich separat zurücksetzen; dabei bleiben Repository-Daten und Borg-Sicherheitsstatus erhalten, der nächste Backup-Lauf kann wegen des Cache-Neuaufbaus jedoch deutlich länger dauern. Das Zurücksetzen ist während laufender/wartender Jobs oder eines Manager-/Cache-Backups gesperrt. Zusätzlich werden abweichende frühere Cache-Basen aus <code>BORG_CACHE_DIR</code>, <code>XDG_CACHE_HOME</code> und dem Home-Verzeichnis des SSH-Benutzers berücksichtigt und Borgs Sicherheitsstatus unter <code>$HOME/.config/borg/security/</code> beziehungsweise <code>BORG_SECURITY_DIR</code>. Unbekannte Legacy-Borg-Caches und unbekannte reguläre Security-Verzeichnisse sind manuell löschbar, werden aber nie vorausgewählt. Rückfall-Sicherungen bleiben eine eigene Bereinigungskategorie.</p></div>
 <form class="panel backup-restore-panel" id="backup-restore-form"><div class="panel-head"><div><h2>Manager-Backup wiederherstellen</h2><span>Stellt Manager-Daten wieder her und startet den Container automatisch neu.</span></div></div>
 <label>Backup<select name="name" required=""><option value="">Backup auswählen</option></select></label>
 <label>Backup-Passphrase <span>(nur für das ausgewählte verschlüsselte Backup)</span><input autocomplete="current-password" name="passphrase" type="password"/></label>
@@ -303,8 +330,17 @@
 <div class="form-actions"><button class="danger" type="submit">Wiederherstellung starten</button></div>
 <p class="hint">Vorher wird automatisch ein lokal gespeichertes und mit der gesonderten Sicherheits-Passphrase verschlüsseltes Backup erstellt. Nach dem Einspielen werden Benutzerkonten, Sitzungen und der zum Backup gehörende Master-Key übernommen; bestehende Browser-Sitzungen müssen sich anschließend neu anmelden.</p>
 </form>
+<form class="panel backup-client-cache-restore-panel" id="client-cache-restore-form"><div class="panel-head"><div><h2>Cache-Backup wiederherstellen</h2><span>Manager-Cache oder einzelne Client-Caches einschließlich fehlendem Borg-Sicherheitsstatus gezielt aus einer separaten Cache-Datei zurückspielen.</span></div></div>
+<label>Cache-Backup<select name="name" required=""><option value="">Cache-Backup auswählen</option></select></label>
+<label>Backup-Passphrase <span>(nur bei verschlüsseltem Cache-Backup)</span><input autocomplete="current-password" name="passphrase" type="password"/></label>
+<div class="form-actions"><button class="secondary" disabled="" id="manager-cache-restore-submit" type="button">Manager-Cache wiederherstellen</button><button type="submit">Client-Caches anzeigen</button></div>
+<div class="persistent-info hidden" id="client-cache-restore-status"></div>
+<div id="client-cache-restore-list"></div>
+<p class="hint">Ein vorhandener Manager-Cache beziehungsweise Client-Cache wird vor dem Einspielen als lokale Sicherheitskopie erhalten. Ein bereits vorhandener Borg-Sicherheitsstatus des Clients wird aus Sicherheitsgründen nicht durch einen älteren Backup-Stand überschrieben. Auch ältere kombinierte Backups aus v1.0.75/v1.0.76 können hier weiterhin für Cache-Restores verwendet werden. Die Wiederherstellung ist nur ohne laufende oder wartende Ausführungen möglich.</p>
+</form>
 </div>
-<div class="panel"><div class="panel-head"><div><h2>Vorhandene Backups</h2><span id="backup-path"></span></div></div><div class="bounded-list" id="backup-list"></div></div>
+<div class="panel"><div class="panel-head"><div><h2>Manager-Backups</h2><span id="backup-path"></span></div></div><div class="bounded-list" id="backup-list"></div></div>
+<div class="panel"><div class="panel-head"><div><h2>Cache-Backups</h2><span>Separat von den BBM-Daten gespeichert.</span></div></div><div class="bounded-list" id="cache-backup-list"></div></div>
 </section>
 <section class="view" id="view-users">
 <div class="users-layout">
@@ -475,6 +511,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.0.74"></script><script src="/static/app.js?v=1.0.74"></script>
+<script src="/static/i18n.js?v=1.0.82"></script><script src="/static/app.js?v=1.0.82"></script>
 </body>
 </html>

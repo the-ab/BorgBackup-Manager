@@ -1,5 +1,147 @@
 # Release Notes
 
+## v1.0.82 – 26.07.2026
+
+### Correct legacy-cache classification and explicit BBM client-cache reset
+
+- A legacy Borg cache under `$HOME/.cache/borg/<Borg-repository-ID>` is no longer labelled “active” in the sense of “used by BBM” merely because the same Borg repository ID is assigned to a current BBM repository. It is now shown as **“Assigned legacy Borg cache (not used by BBM)”**.
+- Assigned legacy Borg caches remain untouched by default but can be selected explicitly and removed with **Clean legacy Borg cache**. This does not affect the BBM client cache; any remaining manual Borg workflow may need to rebuild its own cache on the next run.
+- Active BBM client caches can now be selected through the separate **Reset BBM client cache** action. Only `$HOME/.cache/borgbackup-manager/repository-<ID>` is removed; repository data and Borg security state are preserved.
+- Reset shows a prominent warning that the next backup can take significantly longer while Borg rebuilds its local cache.
+- The server blocks BBM client-cache reset while runs are queued/running or while a manager/cache backup is active. Immediately before deletion the client is scanned again and the cache must still be actively assigned to the selected repository.
+
+## v1.0.81 – 26.07.2026
+
+### Visible client cache paths and more reliable legacy Borg-cache discovery
+
+- `$HOME/.cache/borgbackup-manager/` is now named **BBM client cache**, while `$HOME/.cache/borg/` is named **legacy Borg cache** for earlier or manual Borg runs.
+- Every discovered BBM client cache, legacy Borg cache and Borg security entry shows its complete actual path. Each device also shows the cache/security base directories that were actually inspected.
+- Legacy Borg caches are no longer searched through only one currently derived cache directory. The scan deduplicates and checks `BORG_CACHE_DIR`, the XDG cache path, `$HOME/.cache/borg`, and the cache path derived from the client's account database home directory. A root SSH session therefore explicitly checks `/root/.cache/borg` even when the current environment differs.
+- Scan protocol V5 transfers absolute cache/security paths in encoded form so same-named entries from different legacy roots remain unambiguous.
+- Legacy-cache cleanup uses the exact path reported by the scan, performs a fresh scan immediately before deletion, and accepts only direct children of approved legacy cache roots. `CACHEDIR.TAG`, symbolic links and paths outside those roots remain protected.
+
+## v1.0.80 – 26.07.2026
+
+### Complete and correct normal Borg-cache inspection
+
+- `CACHEDIR.TAG` below `$HOME/.cache/borg` is now treated as the standard cache-directory metadata file and is no longer displayed incorrectly as an “Unknown normal Borg cache”.
+- Normal Borg-cache inspection now uses a top-level search that also includes hidden entries (`.*`), so old temporary or legacy cache directories can no longer remain invisible.
+- Non-standard regular files and directories inside `$HOME/.cache/borg` or `BORG_CACHE_DIR` are shown with their actual size as “Legacy/other normal Borg cache entry”.
+- These legacy/other entries can be selected explicitly for cleanup but are never preselected. Symbolic links and other non-regular objects remain protected.
+- Cleanup revalidates the current client state immediately before deletion. `CACHEDIR.TAG` can never be removed through the cache-cleanup operation.
+- The parser remains compatible with older scan protocols; new client scans use protocol version V4.
+
+## v1.0.79 – 26.07.2026
+
+### Extended Borg cache and security inspection
+
+- Client scans can now target either all devices or a multi-selection of specific devices; devices outside the selection are not contacted over SSH.
+- In addition to BBM's private `$HOME/.cache/borgbackup-manager/`, the normal Borg cache `$HOME/.cache/borg/` or `BORG_CACHE_DIR` is inspected and can be cleaned selectively.
+- Borg security entries now expose `location` and `manifest-timestamp`. Multiple security directories recording the same repository location are classified as newer or clearly older when their timestamps can be compared.
+- A Borg ID confirmed by an actively assigned BBM cache remains protected even when another security state for the same location has a newer `manifest-timestamp`.
+- Unknown regular Borg security and normal Borg cache directories can be selected manually for deletion, but are never preselected.
+- Orphaned BBM client caches, normal Borg caches, Borg security state and restore safety copies use separate cleanup actions. Every client deletion performs a fresh scan first.
+- Manager-side inspection now explicitly covers `/data/borg-security`, including `location`, `manifest-timestamp` and duplicate evaluation. Manager cache/security entries are removed selectively rather than as one blanket cleanup.
+
+
+## v1.0.78 – 26.07.2026
+
+### Client Borg security state included and managed
+
+- Client cache backups now also save the repository-specific Borg security state from `$HOME/.config/borg/security/<Borg-Repository-ID>` for each BBM-managed device/repository assignment. For root-operated clients this resolves to `/root/.config/borg/security/...`.
+- BBM maps the security directory using the real 64-hex Borg repository ID stored in the private client-cache config. If the client cache is missing, an exact `location` match is used only when it is unique; ambiguous state is recorded as unresolved and not backed up blindly.
+- Targeted client-cache restore restores a saved Borg security state only when that repository ID has no current security directory on the client. Existing security state is deliberately preserved and is never overwritten by an older backup copy.
+- Client-state inspection now also scans Borg security directories. Clearly assigned state is protected, clearly BBM-associated but no-longer-assigned state can be selected as orphaned, and unknown/manual Borg security directories remain read-only/untouched.
+- Orphaned Borg security state has its own selection and cleanup button. Every selected entry is rescanned immediately before deletion and must still be unambiguously orphaned.
+
+### Client cache inspection and restore-safety cleanup
+
+- **System → Manager Backup → Manage Borg cache** can now also inspect BBM-private client caches on enabled devices.
+- Inspection is restricted to `$HOME/.cache/borgbackup-manager/`; ordinary Borg caches outside this BBM directory are never touched.
+- `repository-<ID>` caches with a current device/backup-job/repository assignment are recognized as active and protected. Only clearly unassigned caches are offered as orphaned.
+- Immediately before deleting an orphaned client cache, BBM re-checks the current assignment server-side. A cache that has become assigned again is skipped.
+- `repository-<ID>.pre-bbm-restore-<time>` safety copies created by client-cache restore are listed in a separate category with size and creation time.
+- Orphaned client caches and restore safety copies have separate selections, separate cleanup buttons and separate explicit confirmations.
+- Disabled clients are not contacted. Unreachable clients are reported as errors and are not modified.
+- Symbolic links, unknown entries and non-directory cache objects are shown or skipped and are never removed automatically.
+
+## v1.0.77 – 26.07.2026
+
+### Manager backup and cache backup fully separated
+
+- Newly created manager backups now contain only BBM state required for manager recovery: databases, settings, master key, SSH/repository keys, Borg keyfiles and TLS data. Borg caches are no longer embedded in new manager backups.
+- Borg caches use a dedicated `borgbackup-manager-cache-v...` backup type. Manager Borg cache/security state and client Borg caches can be selected independently.
+- Cache backups have their own filenames, lists, size limits and restore actions, keeping the manager backup small regardless of cache size.
+- Manager backups remain mandatory encrypted `.bbm` files. Cache backups are encrypted by default and then use `.bbm`; cache encryption can deliberately be disabled, producing a `.zip` artifact.
+- Historical combined v1.0.75/v1.0.76 backups remain compatible for complete manager restore and for targeted restoration of their embedded manager/client caches.
+- `restore-backup.sh` detects standalone cache artifacts and explicitly rejects them as full manager-restore sources.
+
+### Separate cache restore
+
+- Manager Borg cache `/data/borg-cache` and Borg security state `/data/borg-security` can be restored explicitly from a cache artifact. Existing state is preserved under timestamped `pre-bbm-restore` safety names first.
+- Client caches continue to restore only per current device/repository assignment, preserving any existing `repository-<ID>` cache on the client before replacement.
+- A standalone cache artifact cannot accidentally be restored as complete manager state.
+
+### Visible live progress for both backup types
+
+- Manager and cache backup creation now runs as a server-side task with visible Web UI status rather than appearing as a long blocked request.
+- The UI shows phase, progress bar and a concise event log. Manager backups report preparation, database snapshot, manager data, archive finalization and encryption.
+- Cache backups report manager-cache progress and, for client caches, the current device/repository, `Client x/y` and transferred bytes. When encryption is enabled its byte progress is shown as a separate phase.
+- Reloading the page resumes the active backup status. Concurrent backup creation is prevented server-side and failures display the concrete cause in the status panel.
+
+### Atomic repository validation status
+
+- Successful external repository-test status and repository readiness are now committed in the same database transaction. This removes a short race where the run could already appear successful while an immediately following archive request still saw the repository as unvalidated.
+
+### Restore script fix
+
+- Removed a duplicate heredoc terminator in `restore-backup.sh` that could abort bare-metal restore after its Python validation phase.
+
+## v1.0.76 – 2026-07-26
+
+### Client Borg caches in manager backups
+
+- Manager backups can now additionally include the private BBM Borg caches from managed source devices. **Include client Borg caches** is separate from the manager-cache/Borg-security option and is disabled by default.
+- Only the repository-scoped BBM cache `$HOME/.cache/borgbackup-manager/repository-<ID>` is collected for current device/repository assignments. The user's general Borg cache is never touched.
+- Cache data is streamed as TAR directly into the encrypted manager backup over the existing controller SSH connection with verified host keys. No second complete client-cache tree is staged under `/data`.
+- Disabled devices are recorded as skipped. A genuinely missing cache on an active device is recorded as missing. If an active device is unreachable or transfer fails, backup creation aborts rather than presenting an incomplete client-cache set as complete.
+- Transient `lock.exclusive`/`lock.roster` artifacts and symbolic links are excluded. Client-cache backups, like manager-cache backups, require that no run is queued or active.
+
+### Selective client-cache restore
+
+- **System -> Manager Backup -> Restore client Borg cache** can authenticate a backup and display its client-cache inventory.
+- Restore always targets one explicitly selected device/repository pair. That assignment must still exist as a current backup job and the target device must be enabled.
+- An existing `repository-<ID>` cache is preserved on the client as `repository-<ID>.pre-bbm-restore-<time>` before the saved cache is activated.
+- Restore accepts only the expected repository-scoped top-level path, does not trust archive owner/permission metadata, rejects symbolic links, and removes stale lock artifacts before activation.
+- A full manager restore deliberately does not push client caches automatically. Their TAR payloads remain in the original `.bbm` file and can be distributed selectively afterwards.
+
+## v1.0.75 – 2026-07-26
+
+### Optional Borg cache in manager backups
+
+- Manager backups can optionally include the manager-side Borg cache under `/data/borg-cache` and Borg repository security state under `/data/borg-security`.
+- The option is disabled by default so normal manager backups stay small.
+- Cache-inclusive backups are allowed only while no run is queued or active.
+- Volatile Borg locks (`lock.exclusive`, `lock.roster`) are deliberately excluded.
+- Restore replaces Borg cache/security state only when those components are present in the selected backup.
+
+### Compression and large backups
+
+- New manager backups support `none`, Deflate 1, Deflate 6 (default), and Deflate 9 compression.
+- Compression runs before encryption and can significantly reduce large cache backups.
+- New `.bbm` backups use streaming AES-256-GCM instead of loading the complete payload into memory.
+- Existing older `.bbm` backups remain readable and restorable.
+- Cache backups use separate safety limits by default: 32 GiB backup file size, 128 GiB uncompressed data, and 250000 entries.
+- `restore-backup.sh` also supports the new streaming format and separate cache limits.
+
+### Borg cache inspection and cleanup
+
+- **System → Manager Backup** now contains **Manage Borg cache**.
+- The scan runs only on demand and reports manager-cache and Borg-security sizes.
+- It detects unassigned `repository-<ID>` caches, legacy 64-hex Borg cache directories, and Borg security directories.
+- Cleanup performs a fresh server-side association check and removes only entries that are still clearly orphaned.
+- Active repository caches and associated Borg security state remain untouched.
+
 ## v1.0.74 – 2026-07-26
 
 ### External repositories: cache-lock handoff between backup, prune and compact fixed

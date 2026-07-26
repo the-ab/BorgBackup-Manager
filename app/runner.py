@@ -908,6 +908,629 @@ def prune_command(job: Job) -> Command:
     return _repository_operation(job, ["sh", "-c", "\n".join(script_lines)])
 
 
+def client_borg_cache_export_command(host: Host, repository_id: int) -> Command:
+    """Stream one BBM-private repository cache from a managed source device.
+
+    The remote side emits a tiny text protocol first and then an uncompressed
+    tar stream. Keeping compression in the outer Manager backup avoids wasting
+    client CPU and lets the Manager choose the requested ZIP compression level.
+    """
+    if isinstance(repository_id, bool) or int(repository_id) <= 0:
+        raise ValueError("Repository-ID für Client-Cache ist ungültig")
+    repository_id = int(repository_id)
+    script = r'''\
+set -eu
+repository_id="$1"
+case "$repository_id" in *[!0-9]*|'') printf '%s\n' 'BBM_CLIENT_CACHE_ERROR'; exit 86 ;; esac
+cache_base="${XDG_CACHE_HOME:-$HOME/.cache}/borgbackup-manager"
+cache_name="repository-$repository_id"
+cache_dir="$cache_base/$cache_name"
+printf '%s\n' 'BBM_CLIENT_CACHE_V1'
+if [ ! -d "$cache_dir" ]; then
+  printf '%s\n' 'MISSING'
+  exit 0
+fi
+if find "$cache_dir" -type l -print -quit 2>/dev/null | grep -q .; then
+  printf '%s\n' 'ERROR'
+  printf '%s\n' 'Client-Cache enthält einen symbolischen Link und wird aus Sicherheitsgründen nicht gesichert.' >&2
+  exit 91
+fi
+printf '%s\n' 'PRESENT'
+cd -- "$cache_base"
+# Cache locks are process-local and must never be revived by a restore.
+exec tar --exclude='*/lock.exclusive' --exclude='*/lock.exclusive/*' --exclude='*/lock.roster' -cf - -- "$cache_name"
+'''.strip()
+    command = _ssh_argv(host, ["sh", "-c", script, "--", str(repository_id)], {})
+    command.timeout_seconds = COMMAND_TIMEOUT
+    command.preview = (
+        f"ssh -i [temporärer Controller-Schlüssel] {host.username}@{host.address} -- "
+        f"Client-Borg-Cache repository-{repository_id} streamen"
+    )
+    return command
+
+
+def client_borg_security_export_command(host: Host, repository_id: int, repository_location: str) -> Command:
+    """Stream the Borg security state associated with one BBM client repository.
+
+    Borg 1.x names security directories by the real 64-hex repository ID, not
+    by BBM's numeric repository record. Prefer the repository ID stored in the
+    BBM-private cache config and use an exact security-location match only as a
+    conservative fallback when the cache itself is missing.
+    """
+    if isinstance(repository_id, bool) or int(repository_id) <= 0:
+        raise ValueError("Repository-ID für Client-Sicherheitsstatus ist ungültig")
+    repository_id = int(repository_id)
+    if not repository_location or any(ch in repository_location for ch in "\x00\r\n"):
+        raise ValueError("Repository-Standort für Client-Sicherheitsstatus ist ungültig")
+    script = r'''\
+set -eu
+repository_id="$1"
+repository_location="$2"
+case "$repository_id" in *[!0-9]*|'') printf '%s\n' 'BBM_CLIENT_SECURITY_ERROR'; exit 86 ;; esac
+cache_base="${XDG_CACHE_HOME:-$HOME/.cache}/borgbackup-manager"
+cache_config="$cache_base/repository-$repository_id/config"
+config_base="${BORG_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/borg}"
+security_base="${BORG_SECURITY_DIR:-$config_base/security}"
+repo_id=""
+if [ -f "$cache_config" ] && [ ! -L "$cache_config" ]; then
+  repo_id=$(awk '
+    BEGIN { in_cache=0 }
+    /^[[:space:]]*\[/ { in_cache=($0 ~ /^[[:space:]]*\[cache\][[:space:]]*$/); next }
+    in_cache && /^[[:space:]]*repository[[:space:]]*=/ {
+      sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[[:space:]]/, ""); print tolower($0); exit
+    }
+  ' "$cache_config" 2>/dev/null || true)
+fi
+case "$repo_id" in *[!0-9a-f]*|'') repo_id="" ;; esac
+[ -z "$repo_id" ] || [ "${#repo_id}" -eq 64 ] || repo_id=""
+if [ -z "$repo_id" ] && [ -d "$security_base" ]; then
+  matches=0
+  matched=""
+  for path in "$security_base"/*; do
+    [ -d "$path" ] && [ ! -L "$path" ] || continue
+    name=${path##*/}
+    case "$name" in *[!0-9a-f]*|'') continue ;; esac
+    [ "${#name}" -eq 64 ] || continue
+    [ -f "$path/location" ] && [ ! -L "$path/location" ] || continue
+    location=$(cat -- "$path/location" 2>/dev/null || true)
+    if [ "$location" = "$repository_location" ]; then
+      matches=$((matches + 1)); matched="$name"
+    fi
+  done
+  [ "$matches" -eq 1 ] && repo_id="$matched"
+fi
+printf '%s\n' 'BBM_CLIENT_SECURITY_V1'
+if [ -z "$repo_id" ]; then
+  if [ -d "$security_base" ]; then printf '%s\n' 'UNRESOLVED'; else printf '%s\n' 'MISSING'; fi
+  printf '%s\n' '-'
+  exit 0
+fi
+target="$security_base/$repo_id"
+if [ ! -d "$target" ]; then
+  printf '%s\n' 'MISSING'
+  printf '%s\n' "$repo_id"
+  exit 0
+fi
+if [ -L "$target" ] || find "$target" -type l -print -quit 2>/dev/null | grep -q .; then
+  printf '%s\n' 'ERROR'
+  printf '%s\n' "$repo_id"
+  printf '%s\n' 'Client-Borg-Sicherheitsstatus enthält einen symbolischen Link und wird nicht gesichert.' >&2
+  exit 91
+fi
+printf '%s\n' 'PRESENT'
+printf '%s\n' "$repo_id"
+cd -- "$security_base"
+exec tar -cf - -- "$repo_id"
+'''.strip()
+    command = _ssh_argv(host, ["sh", "-c", script, "--", str(repository_id), repository_location], {})
+    command.timeout_seconds = COMMAND_TIMEOUT
+    command.preview = (
+        f"ssh -i [temporärer Controller-Schlüssel] {host.username}@{host.address} -- "
+        f"Client-Borg-Sicherheitsstatus für Repository {repository_id} streamen"
+    )
+    return command
+
+
+def client_borg_security_restore_command(host: Host, borg_repository_id: str) -> Command:
+    """Restore missing Borg security state without overwriting a newer local state."""
+    import re
+    repo_id = str(borg_repository_id).strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", repo_id):
+        raise ValueError("Borg-Repository-ID für Client-Sicherheitsstatus ist ungültig")
+    script = r'''\
+set -eu
+umask 077
+repo_id="$1"
+case "$repo_id" in *[!0-9a-f]*|'') exit 86 ;; esac
+[ "${#repo_id}" -eq 64 ] || exit 86
+config_base="${BORG_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/borg}"
+security_base="${BORG_SECURITY_DIR:-$config_base/security}"
+target="$security_base/$repo_id"
+if [ -e "$target" ] || [ -L "$target" ]; then
+  printf '%s\n' 'BBM_CLIENT_SECURITY_KEPT_EXISTING'
+  exit 0
+fi
+stage="$security_base/.${repo_id}.bbm-restore.$$"
+cleanup() { rm -rf -- "$stage"; }
+trap cleanup EXIT HUP INT TERM
+mkdir -p -- "$security_base"
+chmod 700 -- "$config_base" "$security_base" 2>/dev/null || true
+rm -rf -- "$stage"
+mkdir -p -- "$stage"
+if ! tar --no-same-owner --no-same-permissions -xf - -C "$stage"; then
+  printf '%s\n' 'FEHLER: Client-Sicherheitsstatus konnte nicht entpackt werden.' >&2
+  exit 87
+fi
+incoming="$stage/$repo_id"
+if find "$stage" -mindepth 1 -maxdepth 1 ! -name "$repo_id" -print -quit | grep -q .; then
+  printf '%s\n' 'FEHLER: Client-Sicherheitsarchiv enthält unerwartete zusätzliche Pfade.' >&2
+  exit 88
+fi
+if [ ! -d "$incoming" ] || [ -L "$incoming" ]; then
+  printf '%s\n' 'FEHLER: Client-Sicherheitsarchiv enthält keinen gültigen Repository-Status.' >&2
+  exit 89
+fi
+if find "$incoming" -type l -print -quit | grep -q .; then
+  printf '%s\n' 'FEHLER: Client-Sicherheitsarchiv enthält symbolische Links.' >&2
+  exit 90
+fi
+for required in location key-type manifest-timestamp; do
+  if [ ! -f "$incoming/$required" ] || [ -L "$incoming/$required" ]; then
+    printf 'FEHLER: Client-Sicherheitsarchiv ist unvollständig: %s fehlt.\n' "$required" >&2
+    exit 91
+  fi
+done
+mv -- "$incoming" "$target"
+chmod 700 -- "$target" 2>/dev/null || true
+printf '%s\n' 'BBM_CLIENT_SECURITY_RESTORED'
+'''.strip()
+    command = _ssh_argv(host, ["sh", "-c", script, "--", repo_id], {})
+    command.timeout_seconds = COMMAND_TIMEOUT
+    command.preview = (
+        f"ssh -i [temporärer Controller-Schlüssel] {host.username}@{host.address} -- "
+        f"Client-Borg-Sicherheitsstatus {repo_id[:12]}… wiederherstellen"
+    )
+    return command
+
+def client_borg_cache_scan_command(host: Host) -> Command:
+    """List BBM-private caches, legacy Borg caches, and Borg security state."""
+    script = r'''\
+set -eu
+passwd_home=$(getent passwd "$(id -u)" 2>/dev/null | awk -F: 'NR == 1 { print $6 }' || true)
+home_dir=${HOME:-$passwd_home}
+[ -n "$home_dir" ] || home_dir="$passwd_home"
+[ -n "$home_dir" ] || home_dir=/root
+bbm_cache_base="${XDG_CACHE_HOME:-$home_dir/.cache}/borgbackup-manager"
+config_base="${BORG_CONFIG_DIR:-${XDG_CONFIG_HOME:-$home_dir/.config}/borg}"
+security_base="${BORG_SECURITY_DIR:-$config_base/security}"
+encode_path() { printf '%s' "$1" | base64 | tr -d '\n'; }
+printf '%s\n' 'BBM_CLIENT_CACHE_SCAN_V5'
+printf 'SCAN_HOME\t%s\n' "$(encode_path "$home_dir")"
+printf 'PASSWD_HOME\t%s\n' "$(encode_path "$passwd_home")"
+if [ ! -d "$bbm_cache_base" ]; then
+  printf 'BBM_BASE\tMISSING\t%s\n' "$(encode_path "$bbm_cache_base")"
+else
+  printf 'BBM_BASE\tPRESENT\t%s\n' "$(encode_path "$bbm_cache_base")"
+  for path in "$bbm_cache_base"/repository-*; do
+    [ -e "$path" ] || [ -L "$path" ] || continue
+    name=${path##*/}
+    encoded_path=$(encode_path "$path")
+    if [ -L "$path" ]; then
+      printf 'ENTRY5\t%s\t%s\t%s\n' "$name" 'SYMLINK' "$encoded_path"
+      continue
+    fi
+    if [ ! -d "$path" ]; then
+      printf 'ENTRY5\t%s\t%s\t%s\n' "$name" 'OTHER' "$encoded_path"
+      continue
+    fi
+    kib=$(du -sk -- "$path" 2>/dev/null | awk '{print $1}')
+    case "$kib" in *[!0-9]*|'') kib=0 ;; esac
+    printf 'ENTRY5\t%s\t%s\t%s\n' "$name" "$kib" "$encoded_path"
+    case "$name" in repository-[1-9][0-9]*) ;; *) continue ;; esac
+    config="$path/config"
+    [ -f "$config" ] && [ ! -L "$config" ] || continue
+    repo_id=$(awk '
+      BEGIN { in_cache=0 }
+      /^[[:space:]]*\[/ { in_cache=($0 ~ /^[[:space:]]*\[cache\][[:space:]]*$/); next }
+      in_cache && /^[[:space:]]*repository[[:space:]]*=/ {
+        sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[[:space:]]/, ""); print tolower($0); exit
+      }
+    ' "$config" 2>/dev/null || true)
+    case "$repo_id" in *[!0-9a-f]*|'') continue ;; esac
+    [ "${#repo_id}" -eq 64 ] || continue
+    printf 'CACHE_REPO\t%s\t%s\n' "$name" "$repo_id"
+  done
+fi
+
+legacy_candidates=''
+add_legacy_base() {
+  candidate=$1
+  [ -n "$candidate" ] || return 0
+  [ "$candidate" != "$bbm_cache_base" ] || return 0
+  case "
+$legacy_candidates
+" in *"
+$candidate
+"*) return 0 ;; esac
+  legacy_candidates="${legacy_candidates}${legacy_candidates:+
+}${candidate}"
+}
+[ -z "${BORG_CACHE_DIR:-}" ] || add_legacy_base "$BORG_CACHE_DIR"
+add_legacy_base "${XDG_CACHE_HOME:-$home_dir/.cache}/borg"
+add_legacy_base "$home_dir/.cache/borg"
+[ -z "$passwd_home" ] || add_legacy_base "$passwd_home/.cache/borg"
+
+printf '%s\n' "$legacy_candidates" | while IFS= read -r user_cache_base; do
+  [ -n "$user_cache_base" ] || continue
+  encoded_base=$(encode_path "$user_cache_base")
+  if [ ! -d "$user_cache_base" ]; then
+    printf 'USER_CACHE_BASE5\tMISSING\t%s\n' "$encoded_base"
+    continue
+  fi
+  printf 'USER_CACHE_BASE5\tPRESENT\t%s\n' "$encoded_base"
+  find "$user_cache_base" -mindepth 1 -maxdepth 1 -print 2>/dev/null | while IFS= read -r path; do
+    [ -e "$path" ] || [ -L "$path" ] || continue
+    name=${path##*/}
+    encoded_path=$(encode_path "$path")
+    case "$name" in
+      CACHEDIR.TAG|cachedir.tag)
+        kib=$(du -sk -- "$path" 2>/dev/null | awk '{print $1}')
+        case "$kib" in *[!0-9]*|'') kib=0 ;; esac
+        printf 'USER_CACHE_META5\t%s\t%s\t%s\t%s\n' "$name" "$kib" 'CACHEDIR_TAG' "$encoded_path"
+        continue
+        ;;
+    esac
+    if [ -L "$path" ]; then
+      printf 'USER_CACHE5\t%s\t%s\t%s\t%s\n' "$name" '0' 'SYMLINK' "$encoded_path"
+      continue
+    fi
+    kib=$(du -sk -- "$path" 2>/dev/null | awk '{print $1}')
+    case "$kib" in *[!0-9]*|'') kib=0 ;; esac
+    if [ -d "$path" ]; then
+      printf 'USER_CACHE5\t%s\t%s\t%s\t%s\n' "$name" "$kib" 'DIR' "$encoded_path"
+    elif [ -f "$path" ]; then
+      printf 'USER_CACHE5\t%s\t%s\t%s\t%s\n' "$name" "$kib" 'FILE' "$encoded_path"
+    else
+      printf 'USER_CACHE5\t%s\t%s\t%s\t%s\n' "$name" "$kib" 'OTHER' "$encoded_path"
+    fi
+  done
+done
+
+if [ ! -d "$security_base" ]; then
+  printf 'SECURITY_BASE5\tMISSING\t%s\n' "$(encode_path "$security_base")"
+  exit 0
+fi
+printf 'SECURITY_BASE5\tPRESENT\t%s\n' "$(encode_path "$security_base")"
+for path in "$security_base"/*; do
+  [ -e "$path" ] || [ -L "$path" ] || continue
+  name=${path##*/}
+  encoded_path=$(encode_path "$path")
+  if [ -L "$path" ]; then
+    printf 'SECURITY5\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" '0' 'SYMLINK' '-' '-' "$encoded_path"
+    continue
+  fi
+  if [ ! -d "$path" ]; then
+    printf 'SECURITY5\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" '0' 'OTHER' '-' '-' "$encoded_path"
+    continue
+  fi
+  kib=$(du -sk -- "$path" 2>/dev/null | awk '{print $1}')
+  case "$kib" in *[!0-9]*|'') kib=0 ;; esac
+  location='-'
+  if [ -f "$path/location" ] && [ ! -L "$path/location" ]; then
+    location=$(base64 < "$path/location" 2>/dev/null | tr -d '\n' || true)
+    [ -n "$location" ] || location='-'
+  fi
+  manifest_timestamp='-'
+  if [ -f "$path/manifest-timestamp" ] && [ ! -L "$path/manifest-timestamp" ]; then
+    manifest_timestamp=$(base64 < "$path/manifest-timestamp" 2>/dev/null | tr -d '\n' || true)
+    [ -n "$manifest_timestamp" ] || manifest_timestamp='-'
+  fi
+  printf 'SECURITY5\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$kib" 'DIR' "$location" "$manifest_timestamp" "$encoded_path"
+done
+'''.strip()
+    command = _ssh_argv(host, ["sh", "-c", script], {})
+    command.timeout_seconds = COMMAND_TIMEOUT
+    command.preview = (
+        f"ssh -i [temporärer Controller-Schlüssel] {host.username}@{host.address} -- "
+        "BBM-Client-Cache, Legacy-Borg-Cache und Borg-Sicherheitsstatus prüfen"
+    )
+    return command
+
+def client_borg_cache_cleanup_command(host: Host, names: list[str]) -> Command:
+    """Delete only explicitly named, syntax-validated BBM client-cache directories."""
+    if not names:
+        raise ValueError("Keine Client-Cache-Verzeichnisse zur Bereinigung angegeben")
+    if len(names) > 1000:
+        raise ValueError("Zu viele Client-Cache-Verzeichnisse zur Bereinigung angegeben")
+    import re
+    allowed = re.compile(r"^repository-[1-9][0-9]*(?:\.pre-bbm-restore-[0-9]{8}-[0-9]{6})?$")
+    cleaned: list[str] = []
+    for value in names:
+        name = str(value)
+        if not allowed.fullmatch(name):
+            raise ValueError("Ungültiger Client-Cache-Name zur Bereinigung")
+        if name not in cleaned:
+            cleaned.append(name)
+    script = r'''\
+set -eu
+cache_base="${XDG_CACHE_HOME:-$HOME/.cache}/borgbackup-manager"
+printf '%s\n' 'BBM_CLIENT_CACHE_CLEANUP_V1'
+for name in "$@"; do
+  case "$name" in
+    repository-[1-9][0-9]*|repository-[1-9][0-9]*.pre-bbm-restore-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) printf 'SKIPPED\t%s\tinvalid-name\n' "$name"; continue ;;
+  esac
+  target="$cache_base/$name"
+  if [ -L "$target" ]; then
+    printf 'SKIPPED\t%s\tsymlink\n' "$name"
+    continue
+  fi
+  if [ ! -e "$target" ]; then
+    printf 'MISSING\t%s\n' "$name"
+    continue
+  fi
+  if [ ! -d "$target" ]; then
+    printf 'SKIPPED\t%s\tnot-directory\n' "$name"
+    continue
+  fi
+  if rm -rf -- "$target"; then
+    printf 'REMOVED\t%s\n' "$name"
+  else
+    printf 'FAILED\t%s\n' "$name"
+  fi
+done
+'''.strip()
+    command = _ssh_argv(host, ["sh", "-c", script, "--", *cleaned], {})
+    command.timeout_seconds = COMMAND_TIMEOUT
+    command.preview = (
+        f"ssh -i [temporärer Controller-Schlüssel] {host.username}@{host.address} -- "
+        f"{len(cleaned)} BBM-Client-Cache-Verzeichnis(se) bereinigen"
+    )
+    return command
+
+
+def client_borg_user_cache_cleanup_command(host: Host, targets: list[str]) -> Command:
+    """Delete explicitly selected safe top-level entries from legacy Borg cache roots.
+
+    Absolute paths emitted by the V5 scanner are preferred. Older callers may
+    still pass a simple basename, which is resolved below the canonical
+    $HOME/.cache/borg root. Every target is revalidated remotely against the
+    same set of allowed legacy cache roots before deletion.
+    """
+    if not targets:
+        raise ValueError("Keine Legacy-Borg-Cache-Einträge zur Bereinigung angegeben")
+    if len(targets) > 1000:
+        raise ValueError("Zu viele Legacy-Borg-Cache-Einträge zur Bereinigung angegeben")
+    cleaned: list[str] = []
+    for value in targets:
+        target = str(value).strip()
+        basename = target.rsplit("/", 1)[-1]
+        if (
+            not target
+            or basename.lower() == "cachedir.tag"
+            or basename in {".", ".."}
+            or "\x00" in target
+            or "\r" in target
+            or "\n" in target
+            or len(target.encode("utf-8")) > 4096
+        ):
+            raise ValueError("Ungültiger Legacy-Borg-Cache-Name oder -Pfad zur Bereinigung")
+        if target not in cleaned:
+            cleaned.append(target)
+    script = r'''\
+set -eu
+passwd_home=$(getent passwd "$(id -u)" 2>/dev/null | awk -F: 'NR == 1 { print $6 }' || true)
+home_dir=${HOME:-$passwd_home}
+[ -n "$home_dir" ] || home_dir="$passwd_home"
+[ -n "$home_dir" ] || home_dir=/root
+bbm_cache_base="${XDG_CACHE_HOME:-$home_dir/.cache}/borgbackup-manager"
+legacy_candidates=''
+add_legacy_base() {
+  candidate=$1
+  [ -n "$candidate" ] || return 0
+  [ "$candidate" != "$bbm_cache_base" ] || return 0
+  case "
+$legacy_candidates
+" in *"
+$candidate
+"*) return 0 ;; esac
+  legacy_candidates="${legacy_candidates}${legacy_candidates:+
+}${candidate}"
+}
+[ -z "${BORG_CACHE_DIR:-}" ] || add_legacy_base "$BORG_CACHE_DIR"
+add_legacy_base "${XDG_CACHE_HOME:-$home_dir/.cache}/borg"
+add_legacy_base "$home_dir/.cache/borg"
+[ -z "$passwd_home" ] || add_legacy_base "$passwd_home/.cache/borg"
+printf '%s\n' 'BBM_CLIENT_USER_CACHE_CLEANUP_V3'
+for requested in "$@"; do
+  case "$requested" in
+    /*) target=$requested ;;
+    *) target="$home_dir/.cache/borg/$requested" ;;
+  esac
+  name=${target##*/}
+  parent=${target%/*}
+  case "$name" in
+    ''|.|..|CACHEDIR.TAG|cachedir.tag) printf 'SKIPPED\t%s\tinvalid-name\n' "$name"; continue ;;
+  esac
+  allowed=0
+  printf '%s\n' "$legacy_candidates" | while IFS= read -r base; do
+    [ -n "$base" ] || continue
+    if [ "$parent" = "$base" ]; then
+      printf '%s\n' ALLOWED
+      break
+    fi
+  done > /tmp/bbm-cache-allowed.$$
+  if grep -q '^ALLOWED$' /tmp/bbm-cache-allowed.$$ 2>/dev/null; then allowed=1; fi
+  rm -f /tmp/bbm-cache-allowed.$$ 2>/dev/null || true
+  if [ "$allowed" != 1 ]; then
+    printf 'SKIPPED\t%s\toutside-legacy-cache-roots\n' "$name"
+    continue
+  fi
+  if [ -L "$target" ]; then
+    printf 'SKIPPED\t%s\tsymlink\n' "$name"
+    continue
+  fi
+  if [ ! -e "$target" ]; then
+    printf 'MISSING\t%s\n' "$name"
+    continue
+  fi
+  if [ -d "$target" ]; then
+    if rm -rf -- "$target"; then
+      printf 'REMOVED\t%s\n' "$name"
+    else
+      printf 'FAILED\t%s\n' "$name"
+    fi
+  elif [ -f "$target" ]; then
+    if rm -f -- "$target"; then
+      printf 'REMOVED\t%s\n' "$name"
+    else
+      printf 'FAILED\t%s\n' "$name"
+    fi
+  else
+    printf 'SKIPPED\t%s\tnot-regular\n' "$name"
+  fi
+done
+'''.strip()
+    command = _ssh_argv(host, ["sh", "-c", script, "--", *cleaned], {})
+    command.timeout_seconds = COMMAND_TIMEOUT
+    command.preview = (
+        f"ssh -i [temporärer Controller-Schlüssel] {host.username}@{host.address} -- "
+        f"{len(cleaned)} Legacy-Borg-Cache-Einträge bereinigen"
+    )
+    return command
+
+def client_borg_security_cleanup_command(host: Host, repository_ids: list[str]) -> Command:
+    """Delete only explicitly selected 64-hex Borg security directories."""
+    import re
+    if not repository_ids:
+        raise ValueError("Keine Client-Sicherheitsstatus-Verzeichnisse zur Bereinigung angegeben")
+    if len(repository_ids) > 1000:
+        raise ValueError("Zu viele Client-Sicherheitsstatus-Verzeichnisse zur Bereinigung angegeben")
+    cleaned: list[str] = []
+    for value in repository_ids:
+        repo_id = str(value).strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", repo_id):
+            raise ValueError("Ungültige Borg-Repository-ID zur Bereinigung")
+        if repo_id not in cleaned:
+            cleaned.append(repo_id)
+    script = r'''\
+set -eu
+config_base="${BORG_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/borg}"
+security_base="${BORG_SECURITY_DIR:-$config_base/security}"
+printf '%s\n' 'BBM_CLIENT_SECURITY_CLEANUP_V1'
+for repo_id in "$@"; do
+  case "$repo_id" in *[!0-9a-f]*|'') printf 'SKIPPED\t%s\tinvalid-id\n' "$repo_id"; continue ;; esac
+  [ "${#repo_id}" -eq 64 ] || { printf 'SKIPPED\t%s\tinvalid-id\n' "$repo_id"; continue; }
+  target="$security_base/$repo_id"
+  if [ -L "$target" ]; then
+    printf 'SKIPPED\t%s\tsymlink\n' "$repo_id"
+    continue
+  fi
+  if [ ! -e "$target" ]; then
+    printf 'MISSING\t%s\n' "$repo_id"
+    continue
+  fi
+  if [ ! -d "$target" ]; then
+    printf 'SKIPPED\t%s\tnot-directory\n' "$repo_id"
+    continue
+  fi
+  if rm -rf -- "$target"; then
+    printf 'REMOVED\t%s\n' "$repo_id"
+  else
+    printf 'FAILED\t%s\n' "$repo_id"
+  fi
+done
+'''.strip()
+    command = _ssh_argv(host, ["sh", "-c", script, "--", *cleaned], {})
+    command.timeout_seconds = COMMAND_TIMEOUT
+    command.preview = (
+        f"ssh -i [temporärer Controller-Schlüssel] {host.username}@{host.address} -- "
+        f"{len(cleaned)} verwaiste Borg-Sicherheitsstatus-Verzeichnis(se) bereinigen"
+    )
+    return command
+
+def client_borg_cache_restore_command(host: Host, repository_id: int) -> Command:
+    """Restore one authenticated client-cache tar stream without touching user caches."""
+    if isinstance(repository_id, bool) or int(repository_id) <= 0:
+        raise ValueError("Repository-ID für Client-Cache ist ungültig")
+    repository_id = int(repository_id)
+    script = r'''\
+set -eu
+umask 077
+repository_id="$1"
+case "$repository_id" in *[!0-9]*|'') printf '%s\n' 'FEHLER: Ungültige Repository-ID.' >&2; exit 86 ;; esac
+cache_base="${XDG_CACHE_HOME:-$HOME/.cache}/borgbackup-manager"
+cache_name="repository-$repository_id"
+target="$cache_base/$cache_name"
+stamp=$(date +%Y%m%d-%H%M%S)
+previous="$cache_base/${cache_name}.pre-bbm-restore-$stamp"
+stage="$cache_base/.${cache_name}.bbm-restore.$$"
+previous_created=0
+cleanup_stage() { rm -rf -- "$stage"; }
+rollback() {
+  rm -rf -- "$target" 2>/dev/null || true
+  if [ "$previous_created" = "1" ] && [ -e "$previous" ]; then mv -- "$previous" "$target" 2>/dev/null || true; fi
+  cleanup_stage
+}
+trap rollback HUP INT TERM
+mkdir -p -- "$cache_base"
+chmod 700 -- "$cache_base" 2>/dev/null || true
+rm -rf -- "$stage"
+mkdir -p -- "$stage"
+if ! tar --no-same-owner --no-same-permissions -xf - -C "$stage"; then
+  cleanup_stage
+  printf '%s\n' 'FEHLER: Client-Cache-Archiv konnte nicht entpackt werden.' >&2
+  exit 87
+fi
+incoming="$stage/$cache_name"
+if find "$stage" -mindepth 1 -maxdepth 1 ! -name "$cache_name" -print -quit | grep -q .; then
+  cleanup_stage
+  printf '%s\n' 'FEHLER: Client-Cache-Archiv enthält unerwartete zusätzliche Pfade.' >&2
+  exit 88
+fi
+if [ ! -d "$incoming" ]; then
+  cleanup_stage
+  printf '%s\n' 'FEHLER: Client-Cache-Archiv enthält nicht den erwarteten Cache-Pfad.' >&2
+  exit 88
+fi
+if find "$incoming" -type l -print -quit 2>/dev/null | grep -q .; then
+  cleanup_stage
+  printf '%s\n' 'FEHLER: Client-Cache-Archiv enthält symbolische Links.' >&2
+  exit 88
+fi
+# Locks from old backups are forbidden even if an imported archive was crafted
+# outside BBM. They are local coordination artifacts, never useful cache data.
+find "$incoming" -type d -name lock.exclusive -prune -exec rm -rf -- {} + 2>/dev/null || true
+find "$incoming" -type f -name lock.roster -delete 2>/dev/null || true
+if [ -e "$target" ]; then
+  if [ -e "$previous" ]; then
+    printf '%s\n' 'FEHLER: Sicherheitskopie des vorhandenen Client-Caches existiert bereits.' >&2
+    cleanup_stage
+    exit 89
+  fi
+  mv -- "$target" "$previous"
+  previous_created=1
+fi
+if ! mv -- "$incoming" "$target"; then
+  rollback
+  printf '%s\n' 'FEHLER: Client-Cache konnte nicht aktiviert werden.' >&2
+  exit 90
+fi
+cleanup_stage
+chmod 700 -- "$target" 2>/dev/null || true
+trap - HUP INT TERM
+printf '%s\n' 'BBM_CLIENT_CACHE_RESTORED'
+if [ "$previous_created" = "1" ]; then printf 'BBM_PREVIOUS_CACHE=%s\n' "$previous"; fi
+'''.strip()
+    command = _ssh_argv(host, ["sh", "-c", script, "--", str(repository_id)], {})
+    command.timeout_seconds = COMMAND_TIMEOUT
+    command.preview = (
+        f"ssh -i [temporärer Controller-Schlüssel] {host.username}@{host.address} -- "
+        f"Client-Borg-Cache repository-{repository_id} wiederherstellen"
+    )
+    return command
+
+
 def host_ssh_action_command(host: Host, shell_command: str, timeout_seconds: int = 300) -> Command:
     """Execute one explicitly saved administrator command on a managed device.
 

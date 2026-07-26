@@ -835,6 +835,8 @@ body.compact .panel { padding: 12px; }
 .backup-manager-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .backup-manager-grid .panel { height: 100%; }
 .backup-manager-grid .backup-restore-panel { grid-column: 1 / -1; }
+.backup-manager-grid .backup-cache-panel { grid-column: 1 / -1; }
+#borg-cache-orphans .entity { margin-top: 10px; }
 
 @media (max-width: 1280px) {
   .job-form-grid.basics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -846,6 +848,7 @@ body.compact .panel { padding: 12px; }
 @media (max-width: 900px) {
   .job-form-grid.paths, .backup-manager-grid { grid-template-columns: 1fr; }
   .backup-manager-grid .backup-restore-panel { grid-column: auto; }
+  .backup-manager-grid .backup-cache-panel { grid-column: auto; }
   .compact-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 620px) {
@@ -2070,3 +2073,20 @@ body.run-dialog-open { overflow: hidden; }
   .run-dialog #log-view-output.active .log-console { min-height: 280px; max-height: 62dvh; }
   .run-dialog #log-view-technical.active { min-height: 280px; max-height: none; }
 }
+
+/* 1.0.77: visible manager-backup progress */
+.backup-create-progress { display: grid; gap: 8px; margin-top: 10px; }
+.backup-create-progress.hidden { display: none; }
+.backup-create-progress-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.backup-create-progress-head strong { font-size: .9rem; overflow-wrap: anywhere; }
+.backup-create-progress-head span { color: var(--muted); font-size: .78rem; font-weight: 800; white-space: nowrap; }
+.backup-create-progress progress { width: 100%; height: 11px; accent-color: var(--accent); }
+.backup-create-progress-detail { color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+.backup-create-progress.error-state progress { accent-color: var(--danger); }
+@media (max-width: 620px) {
+  .backup-create-progress-head { align-items: flex-start; flex-direction: column; gap: 3px; }
+}
+.backup-create-progress-log { display: grid; gap: 3px; max-height: 118px; overflow-y: auto; padding-top: 4px; border-top: 1px solid var(--line); }
+.backup-create-progress-log div { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px; color: var(--muted); font-size: .74rem; }
+.backup-create-progress-log time { font-variant-numeric: tabular-nums; color: var(--muted); }
+.backup-create-progress-log span { overflow-wrap: anywhere; }

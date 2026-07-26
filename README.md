@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.74
+# BorgBackup Manager 1.0.82
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -33,7 +33,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.0.74.zip
+BorgBackup-Manager-1.0.82.zip
 ```
 
 The documentation naming convention is:
@@ -326,13 +326,29 @@ The archive browser is structured like a file browser and uses Borg JSON metadat
 
 Restore supports archive and path selection, dry-run, original paths and an alternative destination. Extraction runs on the selected target device. Existing destination data should be protected with an application-consistent backup before restore.
 
-## Manager backups
+## Manager backups and cache backups
 
-New manager backups are encrypted `.bbm` files. The Web UI can create, download, upload, restore and delete them. Historical `.zip` backups can still be uploaded and restored.
+Since v1.0.77 BorgBackup Manager uses two separate backup types. This keeps the actual manager recovery artifact small while large Borg caches can be backed up, retained and restored independently.
 
-Uploads are streamed, size-limited and validated. Existing files are never overwritten. Before a Web UI restore, the manager requires a separate passphrase and creates an encrypted safety backup of the current state.
+**Manager backup** (`borgbackup-manager-backup-v...bbm`) contains the application and security databases, master key, settings, controller/repository SSH material, Borg keyfiles, TLS files and relevant migration metadata. Repository contents, complete run logs and Borg caches are not included in newly created manager backups. New manager backups are always streaming AES-256-GCM encrypted `.bbm` files protected by a non-stored passphrase of at least twelve characters. Historical combined v1.0.75/v1.0.76 backups and older manager `.zip` files remain readable.
 
-Manager backups contain application databases, security database and master key, SSH/TLS material, settings, notification configuration and other persistent manager state. Repository contents and regenerable Borg/archive caches are excluded.
+**Cache backup** (`borgbackup-manager-cache-v...bbm`, or `.zip` when explicitly unencrypted) is fully separate. It can include the manager Borg cache `/data/borg-cache`, Borg repository security state `/data/borg-security`, the managed source devices' private `$HOME/.cache/borgbackup-manager/repository-<ID>` caches together with their repository-specific `$HOME/.config/borg/security/<Borg-Repository-ID>` state, or both cache groups. Client caches and their Borg security state are streamed directly over verified controller SSH into the cache artifact; no second complete client-cache tree is staged under `/data`. Disabled devices are documented as skipped, a missing cache is recorded as absent, and failure to reach an enabled device aborts cache creation. Volatile Borg locks and symbolic links are excluded. Cache backup creation requires that no run is queued or active.
+
+Cache-backup encryption is **enabled and recommended by default**, but may be deliberately disabled. Encrypted cache backups use `.bbm`; unencrypted cache backups use `.zip`. This setting is independent from manager-backup encryption, which remains mandatory.
+
+Both backup types have live Web UI progress with the current phase, progress bar and recent events. Client-cache collection reports device/repository, `Client x/y` and transferred bytes. Manager-cache collection reports processed files and bytes; encrypted artifacts also show encryption progress. Reloading the page resumes the currently active backup status.
+
+Compression is selectable per backup: none, Deflate 1, Deflate 6 (default), or Deflate 9. Encryption is streaming, so large cache artifacts are not loaded completely into memory.
+
+**System -> Manager Backup -> Manage Borg cache** provides on-demand checks for manager cache/security state and client state. Client scans can target **all devices** or a **multi-selection of specific devices**. For each selected client BBM inspects its private `$HOME/.cache/borgbackup-manager/`, the normal Borg cache `$HOME/.cache/borg/` or `BORG_CACHE_DIR`, and Borg security state under `$HOME/.config/borg/security/` or `BORG_SECURITY_DIR`. Security rows include `location` and `manifest-timestamp`; multiple security directories recording the same repository location are compared when their manifest timestamps are parseable, so a clearly older non-active state can be identified without making a Borg ID confirmed by the active BBM cache deletable. Orphaned and clearly older entries may be preselected; unknown regular Borg caches and security directories can be selected manually but are never preselected. `repository-<ID>.pre-bbm-restore-<time>` restore safety copies remain separate. Every destructive client cleanup performs a fresh scan first. Manager-side `/data/borg-cache` and `/data/borg-security` use the same conservative association and `manifest-timestamp` checks and remove only explicitly selected entries.
+
+**Upload backup** accepts supported manager and cache `.bbm`/`.zip` artifacts, validates type, filename, limits and structure, never overwrites an existing file and stores it with mode `0600`.
+
+**Restore manager backup** restores only manager backups. Separate cache artifacts are not accepted as complete manager state. Historical combined v1.0.75/v1.0.76 artifacts remain compatible with full manager restore.
+
+**Restore cache backup** can restore the manager Borg cache/security state separately and can restore saved client caches one current device/repository assignment at a time. Existing manager or client caches are preserved under timestamped `pre-bbm-restore` names before replacement. A saved client Borg security state is restored only if the corresponding 64-hex repository security directory is missing; an existing state is kept rather than overwritten with an older backup copy.
+
+For a server migration, restore the manager artifact first with `restore-backup.sh`, then restore the separate cache artifact through the Web UI as needed. `restore-backup.sh` explicitly rejects a standalone cache artifact as a full manager restore source.
 
 ## Notifications
 
@@ -370,7 +386,7 @@ System diagnostics cover:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.74.zip
+unzip /path/BorgBackup-Manager-1.0.82.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
