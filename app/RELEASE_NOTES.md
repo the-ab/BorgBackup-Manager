@@ -1,5 +1,15 @@
 # Release Notes
 
+## v1.0.86 – 26.07.2026
+
+### Borg 1.4.3 live progress fixed
+
+- There is no fixed limit of three simultaneously displayed live-progress jobs. Missing progress on some parallel jobs was caused by a Borg 1.4.3 output-format difference.
+- Borg `create --progress` records in `O / C / D / N` format are now recognized with both carriage-return (`\r`) and normal newline (`\n`) delimiters, covering older Borg 1.x output and Borg 1.4.x over a pipe.
+- Progress records such as `1.80 GB O 593.79 MB C 17.60 MB D 10758 N <path>` are no longer persisted as a full file listing in the live/run log. They update only the compact in-memory live-progress state.
+- Progress records split across process/pipe chunks are buffered and reconstructed, including splits inside the path or before the `O` marker.
+- The CPU-efficient fast path for real `--list` file output remains intact: ordinary high-volume file listings continue to pass through as bytes rather than being line-split unconditionally in Python.
+
 ## v1.0.85 – 26.07.2026
 
 ### Real system health with notifications

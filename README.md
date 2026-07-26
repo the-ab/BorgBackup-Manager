@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.85
+# BorgBackup Manager 1.0.86
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -33,7 +33,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.0.85.zip
+BorgBackup-Manager-1.0.86.zip
 ```
 
 The documentation naming convention is:
@@ -388,7 +388,7 @@ System diagnostics cover:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.85.zip
+unzip /path/BorgBackup-Manager-1.0.86.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh

@@ -42,6 +42,56 @@ def test_progress_filter_strips_only_carriage_return_progress_frame():
     assert progress.files == 15600
 
 
+
+
+def test_progress_filter_strips_newline_progress_frames_from_borg_14_pipe_output():
+    filter_ = BorgProgressStreamFilter()
+    payload = (
+        b"warning before\n"
+        b"1.80 GB O 593.79 MB C 17.60 MB D 10758 N usr/share/joe/syntax/rexx.jsf\n"
+        b"1.81 GB O 594.97 MB C 17.60 MB D 11007 N usr/share/perl/5.34.0/Locale\n"
+        b"warning after\n"
+    )
+    filtered, progress = filter_.feed(payload)
+    assert filtered == b"warning before\nwarning after\n"
+    assert progress is not None
+    assert progress.files == 11007
+    assert progress.path == "usr/share/perl/5.34.0/Locale"
+
+
+def test_progress_filter_buffers_newline_progress_frame_split_across_pipe_reads():
+    filter_ = BorgProgressStreamFilter()
+    first, progress = filter_.feed(b"1.82 GB O 597.49 MB C 17.60 MB D 11791 N usr/share/perl/5.34.0/")
+    assert first == b""
+    assert progress is None
+    second, progress = filter_.feed(b"unicore/lib/Sc/Beng.pl\nwarning\n")
+    assert second == b"warning\n"
+    assert progress is not None
+    assert progress.files == 11791
+    assert progress.path == "usr/share/perl/5.34.0/unicore/lib/Sc/Beng.pl"
+
+
+def test_progress_filter_buffers_progress_prefix_split_before_o_marker():
+    filter_ = BorgProgressStreamFilter()
+    first, progress = filter_.feed(b"normal\n1.82 GB")
+    assert first == b"normal\n"
+    assert progress is None
+    second, progress = filter_.feed(b" O 598.55 MB C 17.60 MB D 12064 N usr/share/webmin/apache/images/def.gif\n")
+    assert second == b""
+    assert progress is not None
+    assert progress.files == 12064
+
+
+def test_progress_filter_finalize_preserves_non_progress_carry():
+    filter_ = BorgProgressStreamFilter()
+    filtered, progress = filter_.feed(b"2.00 GB")
+    assert filtered == b""
+    assert progress is None
+    trailing, progress = filter_.finalize()
+    assert trailing == b"2.00 GB"
+    assert progress is None
+
+
 def test_live_progress_store_is_process_local_and_clearable():
     clear_run_progress(123)
     set_run_progress(123, BorgCreateProgress(1000, 800, 50, 12, "/srv/file"))

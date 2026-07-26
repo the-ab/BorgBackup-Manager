@@ -68,47 +68,98 @@ def parse_borg_create_progress(record: bytes | str) -> BorgCreateProgress | None
 
 
 class BorgProgressStreamFilter:
-    """Strip Borg's carriage-return progress frames with minimal CPU overhead.
+    """Extract Borg create progress frames without polluting the run log.
 
-    Full ``--list`` output can contain millions of newline-delimited paths. The
-    fast path therefore does absolutely no line splitting unless a carriage
-    return is present; Borg uses that carriage return for its in-place progress
-    display. Normal high-volume file-list chunks pass through byte-for-byte.
+    Borg 1.x has used two observable delimiters for the plain-text ``--progress``
+    stream depending on version/output context: carriage returns for an in-place
+    terminal display and normal newlines when stderr is a pipe.  Full ``--list``
+    output can still contain millions of newline-delimited paths, so ordinary
+    chunks keep a bytes-only fast path and are not split line-by-line unless they
+    contain a plausible progress marker.
+
+    A small carry buffer is used only for a plausible progress record at a chunk
+    boundary.  Arbitrary file-list output is never accumulated.
     """
+
+    _MAX_CARRY = 16 * 1024
+    _PROGRESS_MARKERS = (b" O ", b" C ", b" D ", b" N")
+    _PREFIX_RE = re.compile(
+        rb"^\s*[0-9]+(?:[.,][0-9]+)?\s+(?:[kKMGTPE]?i?B)(?:\s+O(?:\s+.*)?)?$"
+    )
 
     def __init__(self) -> None:
         self.latest: BorgCreateProgress | None = None
+        self._carry = b""
+
+    @classmethod
+    def _candidate(cls, record: bytes) -> bool:
+        return all(marker in record for marker in cls._PROGRESS_MARKERS)
+
+    @classmethod
+    def _could_be_progress_prefix(cls, record: bytes) -> bool:
+        if not record or len(record) > cls._MAX_CARRY:
+            return False
+        # Once the O/C/D/N markers start appearing, keeping the tail until the
+        # next delimiter is cheap and prevents losing a frame split by a pipe
+        # read.  Before that, only accept a strict ``<number> <unit>`` prefix so
+        # normal file paths are not buffered.
+        if b" O " in record:
+            return True
+        return cls._PREFIX_RE.match(record) is not None
 
     def feed(self, data: bytes) -> tuple[bytes, BorgCreateProgress | None]:
-        if not data or b"\r" not in data:
+        if not data:
             return data, None
+
+        # Hot path for the normal high-volume --list stream.  Only inspect the
+        # final unterminated fragment for the beginning of a progress frame; the
+        # rest passes through byte-for-byte and retains object identity.
+        if not self._carry and b"\r" not in data and b" O " not in data:
+            last_lf = data.rfind(b"\n")
+            tail = data[last_lf + 1:]
+            if tail and self._could_be_progress_prefix(tail):
+                self._carry = tail
+                return data[:last_lf + 1], None
+            return data, None
+
+        payload = self._carry + data
+        self._carry = b""
         output = bytearray()
-        cursor = 0
-        search_from = 0
         newest: BorgCreateProgress | None = None
-        while True:
-            carriage = data.find(b"\r", search_from)
-            if carriage < 0:
-                break
-            previous_lf = data.rfind(b"\n", cursor, carriage)
-            previous_cr = data.rfind(b"\r", cursor, carriage)
-            record_start = max(previous_lf, previous_cr) + 1
-            progress = parse_borg_create_progress(data[record_start:carriage])
-            if progress is not None:
-                output.extend(data[cursor:record_start])
-                cursor = carriage + 1
-                self.latest = newest = progress
-            search_from = carriage + 1
-        if cursor == 0:
-            return data, None
-        output.extend(data[cursor:])
+
+        # splitlines(keepends=True) handles LF, CRLF and the CR-only progress
+        # frames emitted by older Borg/TTY-style output.
+        records = payload.splitlines(keepends=True)
+        for index, framed in enumerate(records):
+            terminated = framed.endswith((b"\n", b"\r"))
+            if terminated:
+                record = framed.rstrip(b"\r\n")
+                if self._candidate(record):
+                    progress = parse_borg_create_progress(record)
+                    if progress is not None:
+                        self.latest = newest = progress
+                        continue
+                output.extend(framed)
+                continue
+
+            # Only the final splitlines element can be unterminated.
+            if index == len(records) - 1 and self._could_be_progress_prefix(framed):
+                self._carry = framed
+            else:
+                output.extend(framed)
+
         return bytes(output), newest
 
     def finalize(self) -> tuple[bytes, BorgCreateProgress | None]:
-        # Borg emits progress frames terminated by CR. A frame split exactly at
-        # a subprocess chunk boundary may be missed once, but the next periodic
-        # frame replaces it. Never buffer ordinary file-list bytes here.
-        return b"", None
+        if not self._carry:
+            return b"", None
+        trailing = self._carry
+        self._carry = b""
+        progress = parse_borg_create_progress(trailing) if self._candidate(trailing) else None
+        if progress is not None:
+            self.latest = progress
+            return b"", progress
+        return trailing, None
 
 
 _progress_lock = Lock()

@@ -1,5 +1,15 @@
 # Release Notes
 
+## v1.0.86 – 26.07.2026
+
+### Borg 1.4.3 Live-Fortschritt korrigiert
+
+- Es gibt keine feste Begrenzung auf drei gleichzeitig angezeigte Live-Fortschritte. Die fehlende Anzeige bei einzelnen parallelen Jobs wurde durch ein Ausgabeformat-Unterschied von Borg 1.4.3 ausgelöst.
+- Borg-`create --progress`-Zeilen im Format `O / C / D / N` werden jetzt sowohl mit Wagenrücklauf (`\r`) als auch mit normalem Zeilenumbruch (`\n`) erkannt. Damit funktionieren ältere Borg-1.x-Ausgaben und Borg 1.4.x über eine Pipe gleichermaßen.
+- Fortschrittszeilen wie `1.80 GB O 593.79 MB C 17.60 MB D 10758 N <Pfad>` werden nicht mehr als vollständige Dateiliste in das Live-/Ausführungsprotokoll geschrieben. Stattdessen aktualisieren sie nur den einen kompakten Live-Fortschrittszustand.
+- Über Prozess-/Pipe-Chunkgrenzen getrennte Fortschrittszeilen werden gepuffert und korrekt zusammengesetzt. Das gilt auch, wenn die Trennung mitten im Pfad oder bereits vor dem `O`-Marker erfolgt.
+- Der CPU-schonende Fast-Path für echte `--list`-Dateiausgaben bleibt erhalten: normale große Dateilisten werden weiterhin byteweise durchgereicht und nicht pauschal zeilenweise in Python zerlegt.
+
 ## v1.0.85 – 26.07.2026
 
 ### Echter Systemstatus mit Benachrichtigungen
