@@ -180,3 +180,30 @@ def test_repository_and_mount_parallel_limit_controls_are_present():
     assert 'id="mount-parallel-editor"' in index
     assert 'mount_parallel_limits: collectMountParallelLimits()' in script
     assert 'repo.parallel_limit || 1' in script
+
+
+def test_live_dialog_keeps_stop_and_close_controls_in_fixed_slots():
+    index = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    style = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+
+    header = index.split('class="panel-head run-dialog-head"', 1)[1].split('<div class="run-dialog-body">', 1)[0]
+    assert 'class="run-dialog-head-buttons"' in header
+    assert 'id="stop-live-run-slot"' in header
+    assert 'class="run-dialog-head-live-data"' in header
+    assert header.index('id="stop-live-run-slot"') < header.index('id="close-dialog"') < header.index('id="client-network-live"')
+    assert 'class="danger run-dialog-stop-button"' in header
+    assert 'danger hidden" id="stop-live-run"' not in header
+    assert "stopLiveButton.classList.toggle('is-visible', canStop)" in script
+    assert ".run-dialog-stop-button {\n  visibility: hidden;" in style
+    assert ".run-dialog-stop-button.is-visible {\n  visibility: visible;" in style
+    assert ".run-dialog-head-buttons {\n  display: grid;" in style
+
+
+def test_mobile_live_dialog_resets_desktop_flex_basis_and_separates_run_actions():
+    style = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    mobile = style.split('/* 1.0.85: real sidebar health state and mobile live-dialog safety fixes */', 1)[1]
+    assert '@media (max-width: 720px)' in mobile
+    assert '.run-dialog-head-actions {\n    flex: 0 0 auto;\n    min-height: 0;' in mobile
+    assert '.runs-table .table-actions {\n    gap: 16px;' in mobile
+    assert '.runs-table .table-actions button {\n    min-height: 44px !important;' in mobile

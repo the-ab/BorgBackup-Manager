@@ -476,3 +476,126 @@ def test_run_json_prefers_archive_comparison_snapshot_over_access_job():
 
     payload = main_module.run_json(row, include_details=False, log_file_available=False)
     assert payload["job_name"] == "OVPN-C-VPN0 ↔ OVPN-C-VPN1"
+
+
+def test_run_retention_keeps_last_backup_and_last_success_for_existing_job(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from uuid import uuid4
+
+    import app.main as main_module
+    from app.database import Base, SessionLocal, engine
+    from app.models import Host, Job, Repository, Run
+    from app.schemas import SettingsIn
+
+    Base.metadata.create_all(engine)
+    suffix = uuid4().hex
+    old = datetime.now(timezone.utc) - timedelta(days=120)
+    with SessionLocal() as db:
+        host = Host(name=f"ret-host-{suffix}", address="127.0.0.1", port=22, username="root")
+        repository = Repository(name=f"ret-repo-{suffix}", location=f"/tmp/ret-repo-{suffix}")
+        db.add_all([host, repository]); db.flush()
+        job = Job(
+            name=f"ret-job-{suffix}", host_id=host.id, repository_id=repository.id,
+            source_paths_json='["/srv"]', exclude_patterns_json='[]', prune_options_json='{}',
+            create_options_json='{}', source_size_bytes=9999, source_file_count=77,
+            source_stats_checked_at=old, source_stats_origin="backup",
+        )
+        db.add(job); db.flush()
+        obsolete = Run(job_id=job.id, repository_id=repository.id, action="backup", status="success", created_at=old, backup_deduplicated_size_bytes=111)
+        last_success = Run(job_id=job.id, repository_id=repository.id, action="backup", status="warning", created_at=old, backup_deduplicated_size_bytes=222)
+        last_backup = Run(job_id=job.id, repository_id=repository.id, action="backup", status="failed", created_at=old)
+        db.add_all([obsolete, last_success, last_backup]); db.commit()
+        obsolete_id, last_success_id, last_backup_id, job_id = obsolete.id, last_success.id, last_backup.id, job.id
+
+    monkeypatch.setattr(main_module, "load_settings", lambda: SettingsIn(run_retention_days=90))
+    main_module.cleanup_run_history()
+
+    with SessionLocal() as db:
+        assert db.get(Run, obsolete_id) is None
+        assert db.get(Run, last_success_id) is not None
+        assert db.get(Run, last_backup_id) is not None
+        job = db.get(Job, job_id)
+        assert job.source_size_bytes == 9999
+        assert job.source_file_count == 77
+        assert job.source_stats_origin == "backup"
+
+
+def test_run_retention_does_not_protect_history_of_deleted_job(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from uuid import uuid4
+
+    import app.main as main_module
+    from app.database import Base, SessionLocal, engine
+    from app.models import Run
+    from app.schemas import SettingsIn
+
+    Base.metadata.create_all(engine)
+    old = datetime.now(timezone.utc) - timedelta(days=120)
+    with SessionLocal() as db:
+        row = Run(job_id=None, job_name_snapshot=f"deleted-{uuid4().hex}", action="backup", status="success", created_at=old, backup_deduplicated_size_bytes=123)
+        db.add(row); db.commit(); run_id = row.id
+
+    monkeypatch.setattr(main_module, "load_settings", lambda: SettingsIn(run_retention_days=90))
+    main_module.cleanup_run_history()
+    with SessionLocal() as db:
+        assert db.get(Run, run_id) is None
+
+
+def test_notification_deliveries_follow_run_retention(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from uuid import uuid4
+
+    import app.main as main_module
+    from app.database import Base, SessionLocal, engine
+    from app.models import NotificationDelivery
+    from app.schemas import SettingsIn
+
+    Base.metadata.create_all(engine)
+    old = datetime.now(timezone.utc) - timedelta(days=120)
+    marker = uuid4().hex
+    with SessionLocal() as db:
+        stale = NotificationDelivery(event_type="backup_success", channel="email", status="success", title=f"old-{marker}", created_at=old)
+        recent = NotificationDelivery(event_type="backup_success", channel="email", status="success", title=f"new-{marker}")
+        db.add_all([stale, recent]); db.commit(); stale_id, recent_id = stale.id, recent.id
+
+    monkeypatch.setattr(main_module, "load_settings", lambda: SettingsIn(run_retention_days=90))
+    main_module.cleanup_run_history()
+    with SessionLocal() as db:
+        assert db.get(NotificationDelivery, stale_id) is None
+        assert db.get(NotificationDelivery, recent_id) is not None
+
+
+def test_all_logs_cleanup_removes_protected_runs_deliveries_and_source_statistics(monkeypatch):
+    from uuid import uuid4
+
+    import app.main as main_module
+    from app.database import Base, SessionLocal, engine
+    from app.models import Host, Job, NotificationDelivery, Repository, Run
+    from app.schemas import SettingsIn
+
+    Base.metadata.create_all(engine)
+    suffix = uuid4().hex
+    with SessionLocal() as db:
+        host = Host(name=f"all-host-{suffix}", address="127.0.0.1", port=22, username="root")
+        repository = Repository(name=f"all-repo-{suffix}", location=f"/tmp/all-repo-{suffix}")
+        db.add_all([host, repository]); db.flush()
+        job = Job(
+            name=f"all-job-{suffix}", host_id=host.id, repository_id=repository.id,
+            source_paths_json='["/srv"]', exclude_patterns_json='[]', prune_options_json='{}', create_options_json='{}',
+            source_size_bytes=12345, source_file_count=12, source_stats_origin="scan",
+        )
+        db.add(job); db.flush()
+        run = Run(job_id=job.id, repository_id=repository.id, action="backup", status="success", backup_deduplicated_size_bytes=321)
+        delivery = NotificationDelivery(run_id=None, event_type="backup_success", channel="email", status="success", title=f"delivery-{suffix}")
+        db.add_all([run, delivery]); db.commit(); run_id, delivery_id, job_id = run.id, delivery.id, job.id
+
+    monkeypatch.setattr(main_module, "load_settings", lambda: SettingsIn(run_retention_days=90))
+    main_module.cleanup_run_history(all_finished=True)
+    with SessionLocal() as db:
+        assert db.get(Run, run_id) is None
+        assert db.get(NotificationDelivery, delivery_id) is None
+        job = db.get(Job, job_id)
+        assert job.source_size_bytes is None
+        assert job.source_file_count is None
+        assert job.source_stats_checked_at is None
+        assert job.source_stats_origin is None

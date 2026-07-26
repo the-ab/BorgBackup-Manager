@@ -27,7 +27,7 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Re
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 
@@ -85,13 +85,13 @@ from app.system_diagnostics import repository_access_diagnostic
 from app.debug_logging import configure_debug_logging, install_asyncio_exception_handler
 from app.notifications import (
     NotificationSettingsInput, NotificationSettingsOut, NotificationTestIn,
-    clear_deliveries, list_deliveries, notification_settings_out,
-    save_notification_settings, send_test_notification,
+    cleanup_deliveries, clear_deliveries, list_deliveries, notification_settings_out,
+    save_notification_settings, send_test_notification, notify_system_health_observation,
 )
 from app.repository_state import managed_repository_present
 from app.release import APP_RELEASE_DATE
 from app.log_filter import extract_error_output, strip_borg_item_lines
-from app.models import ArchiveMount, BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, JobIdReservation, Repository, Run
+from app.models import ArchiveMount, BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, JobIdReservation, NotificationDelivery, Repository, Run
 from app.runner import (
     archive_export_command,
     archive_info_command,
@@ -821,22 +821,72 @@ def allocate_job_id(db) -> int:
     return job_id
 
 
+def retained_run_ids_for_existing_jobs(db) -> set[int]:
+    """Return completed backup runs that must survive normal retention cleanup.
+
+    For each currently existing job we keep the newest completed backup so the
+    "last run" display remains available.  If the newest backup failed or was
+    cancelled, we additionally keep the newest successful/warning backup so the
+    last-backup size statistics remain available.  Deleted jobs are naturally
+    excluded because their historical runs have job_id=NULL.
+    """
+    existing_job_ids = select(Job.id).join(Host, Host.id == Job.host_id)
+    finished = Run.status.notin_(["queued", "running"])
+    latest_backup_ids = list(db.scalars(
+        select(func.max(Run.id))
+        .where(
+            Run.action == "backup",
+            Run.job_id.in_(existing_job_ids),
+            finished,
+        )
+        .group_by(Run.job_id)
+    ))
+    latest_successful_ids = list(db.scalars(
+        select(func.max(Run.id))
+        .where(
+            Run.action == "backup",
+            Run.job_id.in_(existing_job_ids),
+            Run.status.in_(["success", "warning"]),
+        )
+        .group_by(Run.job_id)
+    ))
+    return {int(run_id) for run_id in (*latest_backup_ids, *latest_successful_ids) if run_id is not None}
+
+
+def _clear_retained_job_statistics(db) -> None:
+    """Clear per-job source statistics for the explicit "all logs" action."""
+    for job in db.scalars(select(Job)):
+        job.source_size_bytes = None
+        job.source_file_count = None
+        job.source_stats_checked_at = None
+        job.source_stats_origin = None
+
+
 def cleanup_run_history(days: int | None = None, *, all_finished: bool = False) -> int:
     retention_days = load_settings().run_retention_days if days is None else days
     if not all_finished and retention_days <= 0:
         return 0
+    run_ids: list[int] = []
     with SessionLocal() as db:
         query = select(Run.id).where(Run.status.notin_(["queued", "running"]))
         if not all_finished:
             cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            protected_ids = retained_run_ids_for_existing_jobs(db)
             query = query.where(Run.created_at < cutoff)
+            if protected_ids:
+                query = query.where(Run.id.notin_(protected_ids))
         run_ids = list(db.scalars(query))
-        if not run_ids:
-            return 0
-        db.execute(delete(Run).where(Run.id.in_(run_ids)))
-        db.commit()
+        if run_ids:
+            db.execute(delete(Run).where(Run.id.in_(run_ids)))
+        if all_finished:
+            _clear_retained_job_statistics(db)
+        if run_ids or all_finished:
+            db.commit()
     for run_id in run_ids:
         delete_run_log(run_id)
+    # Notification deliveries are operational history and follow the same
+    # retention window. The explicit all-logs action removes them all.
+    cleanup_deliveries(retention_days, all_entries=all_finished)
     return len(run_ids)
 
 
@@ -863,6 +913,8 @@ def run_storage_info() -> dict:
             + func.coalesce(func.length(Run.log_output), 0)
         ), 0))) or 0)
         oldest = db.scalar(select(func.min(Run.created_at)))
+        notification_deliveries = int(db.scalar(select(func.count()).select_from(NotificationDelivery)) or 0)
+        oldest_notification_delivery = db.scalar(select(func.min(NotificationDelivery.created_at)))
     database_file_bytes = 0
     if engine.dialect.name == "sqlite" and engine.url.database:
         try:
@@ -874,6 +926,8 @@ def run_storage_info() -> dict:
         "active_runs": active,
         "finished_runs": max(0, total - active),
         "oldest_run": oldest,
+        "notification_deliveries": notification_deliveries,
+        "oldest_notification_delivery": oldest_notification_delivery,
         "log_file_bytes": run_log_storage_bytes(),
         "database_log_payload_bytes": database_payload,
         "database_file_bytes": database_file_bytes,
@@ -1017,6 +1071,24 @@ def recover_interrupted_runs() -> None:
         db.commit()
 
 
+async def system_health_watch_loop() -> None:
+    """Watch core health independently from APScheduler.
+
+    This loop deliberately does not run as an APScheduler job; otherwise a
+    stopped scheduler could never report its own failure.
+    """
+    await asyncio.sleep(15)
+    while True:
+        try:
+            payload, _strict_healthy = component_health_payload()
+            await asyncio.to_thread(notify_system_health_observation, payload, confirmations=2)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger(__name__).exception("System-health notification check failed")
+        await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global scheduler
@@ -1056,9 +1128,15 @@ async def lifespan(_: FastAPI):
     cleanup_run_history()
     scheduler.start()
     sync_schedules()
+    health_watch_task = asyncio.create_task(system_health_watch_loop(), name="bbm-system-health-watch")
     try:
         yield
     finally:
+        health_watch_task.cancel()
+        try:
+            await health_watch_task
+        except asyncio.CancelledError:
+            pass
         scheduler.shutdown(wait=False)
         loop.set_exception_handler(previous_exception_handler)
         _archive_cache_locks.clear()
@@ -1358,14 +1436,43 @@ def ready():
     return payload if is_ready else JSONResponse(payload, status_code=503)
 
 
+def manager_database_available() -> bool:
+    """Return whether the primary manager database accepts a trivial query."""
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
+
+
+def authentication_store_available() -> bool:
+    """Return whether the security store is readable and authentication-ready."""
+    try:
+        return bool(authentication_readiness().get("ready"))
+    except Exception:
+        return False
+
+
 def component_health_payload() -> tuple[dict, bool]:
+    database = manager_database_available()
+    authentication = authentication_store_available()
     sshd = repository_sshd_listening()
-    healthy = scheduler.running and (sshd or not HEALTH_REQUIRE_SSHD)
+    scheduler_running = bool(scheduler.running)
+    # The visible/notification status evaluates every BBM core component.
+    # HEALTH_REQUIRE_SSHD only controls whether the strict HTTP probe must fail
+    # for update/compatibility purposes; it does not hide an SSH service fault
+    # from administrators or system-health notifications.
+    operational_healthy = database and authentication and scheduler_running and sshd
+    strict_healthy = database and authentication and scheduler_running and (sshd or not HEALTH_REQUIRE_SSHD)
     return {
-        "status": "ok" if healthy else "degraded",
-        "scheduler": scheduler.running,
+        "status": "ok" if operational_healthy else "degraded",
+        "database": database,
+        "authentication": authentication,
+        "scheduler": scheduler_running,
         "repository_sshd": sshd,
-    }, healthy
+        "repository_sshd_required": bool(HEALTH_REQUIRE_SSHD),
+    }, strict_healthy
 
 
 @app.get("/api/health")
@@ -1377,23 +1484,23 @@ def health():
     response as a failed installation. Detailed diagnostics require an
     administrator session at `/api/system/health`.
     """
-    _payload, healthy = component_health_payload()
-    return {"status": "ok" if healthy else "degraded"}
+    payload, _strict_healthy = component_health_payload()
+    return {"status": payload["status"]}
 
 
 @app.get("/api/health/strict")
 def strict_health():
     """Public strict probe without internal component disclosure."""
-    _payload, healthy = component_health_payload()
-    result = {"status": "ok" if healthy else "degraded"}
-    return result if healthy else JSONResponse(result, status_code=503)
+    payload, strict_healthy = component_health_payload()
+    result = {"status": payload["status"]}
+    return result if strict_healthy else JSONResponse(result, status_code=503)
 
 
 @app.get("/api/system/health", dependencies=admin_protected)
 def detailed_system_health():
     """Administrator-only component health details."""
-    payload, healthy = component_health_payload()
-    return payload if healthy else JSONResponse(payload, status_code=503)
+    payload, strict_healthy = component_health_payload()
+    return payload if strict_healthy else JSONResponse(payload, status_code=503)
 
 
 @app.get("/api/dashboard", dependencies=protected)
@@ -3277,6 +3384,7 @@ def run_json(
     log_max_bytes: int | None = None,
     log_offset: int | None = None,
     log_file_available: bool | None = None,
+    retention_protected: bool = False,
 ) -> dict:
     file_log = None
     live_log_offset: int | None = None
@@ -3410,7 +3518,7 @@ def run_json(
         # parser over the bounded log preview.
         backup_statistics = parse_backup_statistics(combined)
     return {
-        "id": row.id, "job_id": row.job_id,
+        "id": row.id, "job_id": row.job_id, "retention_protected": bool(retention_protected),
         "job_name": (
             row.job_name_snapshot
             if row.action == "diff-archives" and row.job_name_snapshot
@@ -3552,10 +3660,12 @@ def list_runs(limit: int | None = None, offset: int = 0, status: str = "all"):
     with SessionLocal() as db:
         rows = db.scalars(query).all()
         available_logs = available_run_log_ids() if rows else set()
+        protected_ids = retained_run_ids_for_existing_jobs(db) if rows else set()
         return [
             run_json(
                 row, include_details=False,
                 log_file_available=row.id in available_logs,
+                retention_protected=row.id in protected_ids,
             )
             for row in rows
         ]
@@ -3568,9 +3678,17 @@ def run_storage():
 
 @app.post("/api/runs/cleanup", dependencies=admin_protected)
 def cleanup_runs(data: RunCleanupIn):
+    before = run_storage_info()
     removed = cleanup_run_history(all_finished=data.mode == "all_finished")
-    vacuumed = vacuum_database() if data.vacuum and removed else False
-    return {"removed": removed, "vacuumed": vacuumed, "storage": run_storage_info()}
+    storage = run_storage_info()
+    removed_deliveries = max(0, int(before.get("notification_deliveries") or 0) - int(storage.get("notification_deliveries") or 0))
+    vacuumed = vacuum_database() if data.vacuum and (removed or removed_deliveries) else False
+    return {
+        "removed": removed,
+        "notification_deliveries_removed": removed_deliveries,
+        "vacuumed": vacuumed,
+        "storage": storage,
+    }
 
 
 @app.get("/api/runs/{run_id}", dependencies=admin_protected)
@@ -3585,6 +3703,7 @@ def get_run(run_id: int, include_details: bool = True, live: bool = False, log_o
             # the complete configured multi-megabyte view on every request.
             log_max_bytes=256 * 1024 if live else None,
             log_offset=log_offset if live else None,
+            retention_protected=row.id in retained_run_ids_for_existing_jobs(db),
         )
 
 
@@ -3972,6 +4091,8 @@ def delete_execution(run_id: int):
             raise HTTPException(404, "Run not found")
         if row.status in {"queued", "running"}:
             raise HTTPException(400, "Active runs cannot be deleted")
+        if row.id in retained_run_ids_for_existing_jobs(db):
+            raise HTTPException(409, "Dieses Protokoll ist der letzte aufbewahrte Backup-Stand eines vorhandenen Jobs. Verwende 'Alle Protokolle löschen', um auch geschützte letzte Stände zu entfernen.")
         db.delete(row)
         db.commit()
     delete_run_log(run_id)

@@ -13,6 +13,7 @@ from app import notifications
 
 def _reset_notification_state() -> None:
     notifications.NOTIFICATION_SETTINGS_PATH.unlink(missing_ok=True)
+    notifications.HEALTH_NOTIFICATION_STATE_PATH.unlink(missing_ok=True)
     from app.security_store import delete_secret
     for name in (
         notifications.SMTP_PASSWORD_SECRET,
@@ -160,3 +161,80 @@ def test_warning_notification_includes_affected_path_in_english_message():
     assert message is not None
     assert "Warnings:" in message.body
     assert "Affected file/path: /srv/data/live.db" in message.body
+
+
+def test_system_health_notifications_are_transition_based(monkeypatch, tmp_path):
+    Base.metadata.create_all(engine)
+    _reset_notification_state()
+    state_path = tmp_path / "health-state.json"
+    monkeypatch.setattr(notifications, "HEALTH_NOTIFICATION_STATE_PATH", state_path)
+    notifications.save_notification_settings(notifications.NotificationSettingsInput(
+        enabled=True,
+        system_health_notifications=True,
+        webhook_enabled=True,
+        webhook_url="https://hooks.example.test/health-secret",
+    ))
+    sent = []
+    monkeypatch.setattr(notifications, "_post_json", lambda url, payload, timeout: sent.append(payload))
+    degraded = {
+        "status": "degraded", "database": True, "authentication": True,
+        "scheduler": True, "repository_sshd": False,
+    }
+    healthy = {
+        "status": "ok", "database": True, "authentication": True,
+        "scheduler": True, "repository_sshd": True,
+    }
+
+    assert notifications.notify_system_health_observation(degraded, confirmations=2) == []
+    second = notifications.notify_system_health_observation(degraded, confirmations=2)
+    assert second and second[0]["status"] == "success"
+    assert sent[-1]["event"] == "system_health_degraded"
+    assert notifications.notify_system_health_observation(degraded, confirmations=2) == []
+
+    assert notifications.notify_system_health_observation(healthy, confirmations=2) == []
+    recovered = notifications.notify_system_health_observation(healthy, confirmations=2)
+    assert recovered and recovered[0]["status"] == "success"
+    assert sent[-1]["event"] == "system_health_restored"
+    assert notifications.notify_system_health_observation(healthy, confirmations=2) == []
+
+
+def test_system_health_notification_can_send_when_delivery_log_database_fails(monkeypatch, tmp_path):
+    Base.metadata.create_all(engine)
+    _reset_notification_state()
+    monkeypatch.setattr(notifications, "HEALTH_NOTIFICATION_STATE_PATH", tmp_path / "health-state.json")
+    notifications.save_notification_settings(notifications.NotificationSettingsInput(
+        enabled=True,
+        system_health_notifications=True,
+        webhook_enabled=True,
+        webhook_url="https://hooks.example.test/health-secret",
+    ))
+    sent = []
+    monkeypatch.setattr(notifications, "_post_json", lambda url, payload, timeout: sent.append(payload))
+    monkeypatch.setattr(notifications, "_record_delivery", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("database unavailable")))
+    degraded = {
+        "status": "degraded", "database": False, "authentication": True,
+        "scheduler": True, "repository_sshd": True,
+    }
+    results = notifications.notify_system_health_observation(degraded, confirmations=1)
+    assert results == [{"channel": "webhook", "status": "success", "detail": "Benachrichtigung erfolgreich versendet"}]
+    assert sent and sent[-1]["event"] == "system_health_degraded"
+
+
+def test_system_health_notifications_can_be_disabled_independently(monkeypatch, tmp_path):
+    Base.metadata.create_all(engine)
+    _reset_notification_state()
+    monkeypatch.setattr(notifications, "HEALTH_NOTIFICATION_STATE_PATH", tmp_path / "health-state.json")
+    notifications.save_notification_settings(notifications.NotificationSettingsInput(
+        enabled=True,
+        system_health_notifications=False,
+        webhook_enabled=True,
+        webhook_url="https://hooks.example.test/health-secret",
+    ))
+    called = []
+    monkeypatch.setattr(notifications, "_post_json", lambda *_args, **_kwargs: called.append(True))
+    degraded = {
+        "status": "degraded", "database": True, "authentication": True,
+        "scheduler": False, "repository_sshd": True,
+    }
+    assert notifications.notify_system_health_observation(degraded, confirmations=1) == []
+    assert called == []

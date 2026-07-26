@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import smtplib
+import threading
 import ssl
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Literal
@@ -15,7 +17,7 @@ from urllib import parse, request
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from sqlalchemy import delete, func, select
 
-from app.config import NOTIFICATION_SETTINGS_PATH
+from app.config import HEALTH_NOTIFICATION_STATE_PATH, NOTIFICATION_SETTINGS_PATH
 from app.database import SessionLocal
 from app.log_filter import extract_error_output
 from app.models import Host, Job, NotificationDelivery, Repository, Run
@@ -26,6 +28,7 @@ NOTIFICATION_SCOPE = "system"
 SMTP_PASSWORD_SECRET = "notification.smtp_password"
 WEBHOOK_URL_SECRET = "notification.webhook_url"
 TELEGRAM_TOKEN_SECRET = "notification.telegram_token"
+LOGGER = logging.getLogger(__name__)
 
 EVENT_TYPES = (
     "backup_failed", "backup_warning", "backup_success",
@@ -44,6 +47,7 @@ EVENT_LABELS_DE = {
     "repository_failed": "Repository-Aktion fehlgeschlagen", "repository_warning": "Repository-Aktion mit Warnungen", "repository_success": "Repository-Aktion erfolgreich",
     "schedule_failed": "Zeitplanausführung fehlgeschlagen", "schedule_warning": "Zeitplanausführung mit Warnungen", "schedule_success": "Zeitplanausführung erfolgreich",
     "operation_failed": "Systemaktion fehlgeschlagen", "operation_warning": "Systemaktion mit Warnungen", "operation_success": "Systemaktion erfolgreich",
+    "system_health_degraded": "Systemstatus eingeschränkt", "system_health_restored": "Systemstatus wiederhergestellt",
     "test": "Testbenachrichtigung",
 }
 EVENT_LABELS_EN = {
@@ -52,6 +56,7 @@ EVENT_LABELS_EN = {
     "repository_failed": "Repository action failed", "repository_warning": "Repository action completed with warnings", "repository_success": "Repository action successful",
     "schedule_failed": "Scheduled run failed", "schedule_warning": "Scheduled run completed with warnings", "schedule_success": "Scheduled run successful",
     "operation_failed": "System action failed", "operation_warning": "System action completed with warnings", "operation_success": "System action successful",
+    "system_health_degraded": "System status degraded", "system_health_restored": "System status restored",
     "test": "Test notification",
 }
 
@@ -82,6 +87,7 @@ class NotificationSettingsInput(BaseModel):
     language: Literal["de", "en"] = "de"
     events: list[str] = Field(default_factory=lambda: list(DEFAULT_EVENTS), max_length=len(EVENT_TYPES))
     include_error_excerpt: bool = True
+    system_health_notifications: bool = True
     timeout_seconds: int = Field(default=10, ge=3, le=60)
 
     smtp_enabled: bool = False
@@ -139,6 +145,7 @@ class NotificationSettingsOut(BaseModel):
     language: Literal["de", "en"]
     events: list[str]
     include_error_excerpt: bool
+    system_health_notifications: bool
     timeout_seconds: int
     smtp_enabled: bool
     smtp_host: str
@@ -167,6 +174,103 @@ class NotificationMessage:
     title: str
     body: str
     run_id: int | None = None
+
+
+_HEALTH_STATE_LOCK = threading.Lock()
+
+def _load_health_notification_state() -> dict:
+    try:
+        raw = json.loads(HEALTH_NOTIFICATION_STATE_PATH.read_text(encoding="utf-8")) if HEALTH_NOTIFICATION_STATE_PATH.is_file() else {}
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+def _save_health_notification_state(state: dict) -> None:
+    HEALTH_NOTIFICATION_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = HEALTH_NOTIFICATION_STATE_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(HEALTH_NOTIFICATION_STATE_PATH)
+
+def _health_component_lines(payload: dict, language: str) -> list[str]:
+    labels = {
+        "database": ("Datenbank", "Database"),
+        "authentication": ("Authentifizierung / Security-Store", "Authentication / security store"),
+        "scheduler": ("Scheduler", "Scheduler"),
+        "repository_sshd": ("Repository-SSH-Dienst", "Repository SSH service"),
+    }
+    lines: list[str] = []
+    for key, names in labels.items():
+        value = bool(payload.get(key))
+        label = names[1] if language == "en" else names[0]
+        lines.append(f"- {label}: {'OK' if value else ('ERROR' if language == 'en' else 'FEHLER')}")
+    return lines
+
+def build_system_health_message(payload: dict, *, restored: bool = False) -> NotificationMessage:
+    settings = load_notification_settings()
+    language = settings["language"]
+    event_type = "system_health_restored" if restored else "system_health_degraded"
+    labels = EVENT_LABELS_EN if language == "en" else EVENT_LABELS_DE
+    title = f"[{settings['instance_name']}] {labels[event_type]}"
+    if restored:
+        intro = (
+            "All monitored BBM core components are available again."
+            if language == "en" else
+            "Alle überwachten BBM-Kernkomponenten sind wieder verfügbar."
+        )
+    else:
+        intro = (
+            "At least one monitored BBM core component is unavailable."
+            if language == "en" else
+            "Mindestens eine überwachte BBM-Kernkomponente ist nicht verfügbar."
+        )
+    timestamp = datetime.now(timezone.utc).isoformat()
+    lines = [intro, "", ("Components:" if language == "en" else "Komponenten:"), *_health_component_lines(payload, language), "", ("Checked: " if language == "en" else "Geprüft: ") + timestamp]
+    return NotificationMessage(event_type, "success" if restored else "error", title, "\n".join(lines), None)
+
+def notify_system_health_observation(payload: dict, *, confirmations: int = 2) -> list[dict]:
+    """Notify once per confirmed health transition, with recovery notification.
+
+    Two matching observations are required by default so a single transient SSH
+    banner or filesystem hiccup cannot generate an alert.  Delivery failures are
+    still treated as an attempted transition to avoid notification storms.
+    """
+    observed = "ok" if payload.get("status") == "ok" else "degraded"
+    required = max(1, int(confirmations))
+    now = datetime.now(timezone.utc).isoformat()
+    with _HEALTH_STATE_LOCK:
+        state = _load_health_notification_state()
+        if state.get("observed_status") == observed:
+            count = int(state.get("observed_count") or 0) + 1
+        else:
+            count = 1
+        state["observed_status"] = observed
+        state["observed_count"] = count
+        state["last_observed_at"] = now
+        state["last_components"] = {key: bool(payload.get(key)) for key in ("database", "authentication", "scheduler", "repository_sshd")}
+        _save_health_notification_state(state)
+        last_notified = state.get("last_notified_status")
+
+    settings = load_notification_settings()
+    if count < required or not settings.get("enabled") or not settings.get("system_health_notifications", True):
+        return []
+    if observed == "degraded":
+        should_send = last_notified != "degraded"
+        restored = False
+    else:
+        should_send = last_notified == "degraded"
+        restored = True
+    if not should_send:
+        return []
+
+    results = dispatch_message(build_system_health_message(payload, restored=restored))
+    if results:
+        with _HEALTH_STATE_LOCK:
+            state = _load_health_notification_state()
+            state["last_notified_status"] = observed
+            state["last_notified_at"] = datetime.now(timezone.utc).isoformat()
+            _save_health_notification_state(state)
+    return results
 
 
 def default_notification_settings() -> dict:
@@ -393,12 +497,6 @@ def _record_delivery(message: NotificationMessage, channel: str, status: str, de
             detail=detail[:4000],
         ))
         db.commit()
-        count = db.scalar(select(func.count()).select_from(NotificationDelivery)) or 0
-        if count > 1000:
-            stale_ids = list(db.scalars(select(NotificationDelivery.id).order_by(NotificationDelivery.id).limit(count - 1000)))
-            if stale_ids:
-                db.execute(delete(NotificationDelivery).where(NotificationDelivery.id.in_(stale_ids)))
-                db.commit()
 
 
 def _send_email(settings: dict, message: NotificationMessage) -> None:
@@ -499,7 +597,12 @@ def dispatch_message(message: NotificationMessage, *, channel: str | None = None
         except Exception as exc:  # delivery failures must never change a Borg run result
             detail = _safe_error(exc)
             status = "failed"
-        _record_delivery(message, name, status, detail)
+        try:
+            _record_delivery(message, name, status, detail)
+        except Exception as exc:
+            # Health alerts must still be deliverable when the primary manager
+            # database itself is the component that is unavailable.
+            LOGGER.warning("Notification was sent but its delivery log could not be stored: %s", type(exc).__name__)
         results.append({"channel": name, "status": status, "detail": detail})
     return results
 
@@ -527,9 +630,28 @@ def list_deliveries(limit: int = 100) -> list[NotificationDelivery]:
         return list(db.scalars(select(NotificationDelivery).order_by(NotificationDelivery.id.desc()).limit(max(1, min(limit, 500)))))
 
 
-def clear_deliveries() -> int:
+def cleanup_deliveries(retention_days: int, *, all_entries: bool = False) -> int:
+    """Apply the run-log retention window to notification delivery history.
+
+    Delivery records are operational logs just like completed run records.  A
+    retention value of 0 therefore means unlimited history.  The explicit
+    all-logs cleanup can still remove every delivery regardless of age.
+    """
+    days = max(0, int(retention_days))
+    if not all_entries and days <= 0:
+        return 0
     with SessionLocal() as db:
-        count = db.scalar(select(func.count()).select_from(NotificationDelivery)) or 0
-        db.execute(delete(NotificationDelivery))
+        query = select(NotificationDelivery.id)
+        if not all_entries:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            query = query.where(NotificationDelivery.created_at < cutoff)
+        delivery_ids = list(db.scalars(query))
+        if not delivery_ids:
+            return 0
+        db.execute(delete(NotificationDelivery).where(NotificationDelivery.id.in_(delivery_ids)))
         db.commit()
-        return int(count)
+        return len(delivery_ids)
+
+
+def clear_deliveries() -> int:
+    return cleanup_deliveries(0, all_entries=True)

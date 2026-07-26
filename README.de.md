@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.82
+# BorgBackup Manager 1.0.85
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -34,7 +34,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.0.82.zip
+BorgBackup-Manager-1.0.85.zip
 ```
 
 ## Sicherheit und Härtung
@@ -516,15 +516,15 @@ Laufende Aktionen können gestoppt werden. Der Manager beendet dabei nicht mehr 
 
 Neue vollständige Live-Protokolle werden ausschließlich als Dateien unter `/data/run-logs/run-ID.log` gespeichert. Während eines Laufs hält der Manager dafür einen gepufferten Log-Writer offen und schreibt Rohdatenblöcke von bis zu 256 KiB; der Dateipuffer wird spätestens nach 1 MiB beziehungsweise 750 ms geleert. Bei geschlossenem Laufdialog fragt die WebUI nur Statusdaten ab. Bei geöffnetem Live-Log überträgt der Server anhand eines Dateioffsets ausschließlich neu hinzugekommene Bytes. Initiale Logabfrage und Hintergrund-Polling sind serialisiert; verspätete Antworten können deshalb keinen Kopfblock doppelt anhängen. Fällt der Browser hinter die Ausgabe zurück oder wird die Logdatei gekürzt, wird automatisch der neueste begrenzte Ausschnitt geladen. Die aktive Browseransicht bleibt auf 768 KiB begrenzt; nach Abschluss wird die konfigurierte vollständige Kopf-/Endansicht einmal geladen. SQLite enthält nur Laufmetadaten, kleine bereinigte stdout-/Diagnosevorschauen und strukturierte Warnungszusammenfassungen. Normale Borg-Statuspfade werden weder während des Laufs noch beim Abschluss in die Datenbank geschrieben. Nur konkret betroffene Warnungspfade bleiben begrenzt strukturiert gespeichert, da Ausführungsdetails und Benachrichtigungen sie benötigen. Auch der laufende Prozess hält die Dateiliste nicht vollständig im Arbeitsspeicher. Beim Start werden ältere Rohvorschauen bei Bedarf zuerst in Logdateien gesichert, aus SQLite entfernt und die Datenbank anschließend mit `VACUUM` komprimiert.
 
-Unter **System → Einstellungen → Ausführungsprotokolle** sind konfigurierbar:
+Unter **System → Einstellungen → Ausführungs- und Benachrichtigungsprotokolle** sind konfigurierbar:
 
 - Aufbewahrungsdauer in Tagen; `0` bedeutet unbegrenzt
 - maximale Größe je Logdatei
 - maximale in der WebUI geladene Protokollmenge
-- sofortige Bereinigung abgelaufener Protokolle
-- Löschen aller abgeschlossenen Protokolle
+- sofortige Bereinigung abgelaufener Ausführungsprotokolle und Benachrichtigungszustellungen
+- vollständiges Löschen aller Protokolle
 
-Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin. Aktive und wartende Läufe werden niemals entfernt. Bei manueller Bereinigung wird SQLite zusätzlich mit `VACUUM` komprimiert. Alte Läufe aus Versionen vor 0.8.7 bleiben weiterhin lesbar: vollständige Altinhalte werden beim ersten Start in Logdateien migriert, SQLite behält nur die begrenzten Vorschauen. Anschließend gilt dieselbe Aufbewahrungsregel.
+Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin. Aktive und wartende Läufe werden niemals entfernt. Für jeden noch vorhandenen Backup-Job bleibt unabhängig von der Frist der letzte abgeschlossene Backup-Lauf erhalten. Ist dieser fehlgeschlagen oder abgebrochen, bleibt zusätzlich der letzte erfolgreiche beziehungsweise mit Warnung abgeschlossene Backup-Lauf mit seiner Größenstatistik erhalten. Die Quellenstatistik liegt direkt am vorhandenen Job und wird von der Fristbereinigung ebenfalls nicht entfernt. Wird ein Job gelöscht, entfällt dieser Schutz für dessen historische Läufe. Die Zustellungsprotokolle der Benachrichtigungen verwenden dieselbe Aufbewahrungsdauer. Nur **Alle Protokolle löschen** entfernt auch die geschützten letzten Backup-Stände, alle Benachrichtigungszustellungen und setzt die gespeicherten Quellenstatistiken vorhandener Jobs zurück. Bei manueller Bereinigung wird SQLite zusätzlich mit `VACUUM` komprimiert. Alte Läufe aus Versionen vor 0.8.7 bleiben weiterhin lesbar: vollständige Altinhalte werden beim ersten Start in Logdateien migriert, SQLite behält nur die begrenzten Vorschauen. Anschließend gilt dieselbe Aufbewahrungsregel.
 
 Passphrasenfehler werden erst nach Abschluss eines fehlgeschlagenen Borg-Laufs diagnostiziert. Vorläufige Live-Fragmente können daher keine kurzzeitig eingeblendete falsche Meldung „Passphrase abgelehnt“ mehr erzeugen.
 
@@ -651,7 +651,7 @@ Unter **System → Benachrichtigungen** konfigurieren Administratoren eine zentr
 - Discord-Webhook
 - Telegram-Bot mit Chat-ID oder Kanalname
 
-Die Ereignisauswahl umfasst fehlgeschlagene, mit Warnungen beendete und optional erfolgreiche Backups, abgebrochene Läufe, Repository-Aktionen, Zeitplanfehler sowie sonstige Manager-Ausführungen. Bei strukturierten Borg-Warnungen enthält die Nachricht zusätzlich die konkret betroffene Datei beziehungsweise den Pfad; bis zu zehn Einträge werden ausgegeben, weitere als Anzahl zusammengefasst. Erfolgsereignisse sind standardmäßig deaktiviert, damit Installationen mit vielen täglichen Backups nicht unnötig viele Meldungen erzeugen.
+Die Ereignisauswahl umfasst fehlgeschlagene, mit Warnungen beendete und optional erfolgreiche Backups, abgebrochene Läufe, Repository-Aktionen, Zeitplanfehler sowie sonstige Manager-Ausführungen. Zusätzlich kann **Systemstatus: Störung und Entwarnung** aktiviert werden (bei bestehenden und neuen Einstellungen standardmäßig aktiv): Der unabhängige Health-Watchdog prüft Datenbank, Authentifizierungs-/Security-Store, Scheduler und Repository-SSH. Eine Meldung wird erst nach zwei gleichen fehlerhaften Prüfungen versendet und bei bestätigter Erholung genau einmal aufgelöst. Bei strukturierten Borg-Warnungen enthält die Nachricht zusätzlich die konkret betroffene Datei beziehungsweise den Pfad; bis zu zehn Einträge werden ausgegeben, weitere als Anzahl zusammengefasst. Erfolgsereignisse sind standardmäßig deaktiviert, damit Installationen mit vielen täglichen Backups nicht unnötig viele Meldungen erzeugen.
 
 SMTP-Passwort, Webhook-URL und Telegram-Bot-Token liegen ausschließlich verschlüsselt in der Sicherheitsdatenbank. Die nicht geheimen Einstellungen werden unter `/data/notifications.json` gespeichert und sind Bestandteil eines Manager-Backups. Leere Geheimnisfelder behalten den bereits gespeicherten Wert; separate Löschoptionen entfernen ihn ausdrücklich.
 
@@ -702,7 +702,7 @@ Release Notes werden passend zur persönlichen Spracheinstellung auf Deutsch ode
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.82.zip
+unzip /pfad/BorgBackup-Manager-1.0.85.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh

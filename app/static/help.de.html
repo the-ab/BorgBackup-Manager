@@ -1,6 +1,6 @@
 <article class="panel help-guide" data-i18n-skip>
   <header class="help-hero">
-    <div><p class="eyebrow">Betriebshandbuch</p><h2>BorgBackup Manager vollständig bedienen</h2><p>Diese Anleitung beschreibt den vollständigen Funktionsumfang von Version 1.0.82 – von Installation und Anmeldung über Geräte, Repositories, Jobs und Zeitpläne bis zu Archivverwaltung, Wiederherstellung, Benutzerrechten und Diagnose.</p></div>
+    <div><p class="eyebrow">Betriebshandbuch</p><h2>BorgBackup Manager vollständig bedienen</h2><p>Diese Anleitung beschreibt den vollständigen Funktionsumfang von Version 1.0.85 – von Installation und Anmeldung über Geräte, Repositories, Jobs und Zeitpläne bis zu Archivverwaltung, Wiederherstellung, Benutzerrechten und Diagnose.</p></div>
     <div class="help-version">Debian 13 · Borg 1.2–1.4 · Europe/Berlin</div>
   </header>
   <nav class="help-toc" aria-label="Inhaltsübersicht">
@@ -77,6 +77,7 @@
 
     <section id="help-notifications" class="help-section"><h3>12. Benachrichtigungszentrale</h3>
     <p>Administratoren können Backup-, Repository-, Zeitplan- und sonstige Ausführungsereignisse über SMTP, generischen JSON-Webhook, Discord oder Telegram versenden. Fehler und Warnungen sind standardmäßig ausgewählt; erfolgreiche Ereignisse können optional ergänzt werden. Warnungsnachrichten enthalten zusätzlich die konkret betroffenen Dateien beziehungsweise Pfade aus der strukturierten Borg-Warnungszusammenfassung.</p>
+    <p><b>Systemstatus:</b> Die Option „Systemstatus: Störung und Entwarnung“ koppelt den echten BBM-Health-Watchdog an die aktivierten Kanäle. Datenbank, Authentifizierungs-/Security-Store, Scheduler und Repository-SSH werden unabhängig vom APScheduler überwacht. Zwei gleiche Fehlerprüfungen bestätigen eine Störung; nach zwei gesunden Prüfungen folgt einmalig die Entwarnung.</p>
     <ul><li><b>Geheimnisse:</b> SMTP-Passwort, Webhook-URL und Telegram-Token werden verschlüsselt in der Sicherheitsdatenbank gespeichert und niemals an die WebUI zurückgegeben.</li><li><b>Test:</b> Jeder aktivierte Kanal besitzt eine eigene Testfunktion.</li><li><b>Zustellungsprotokoll:</b> zeigt Erfolg oder konkrete Versandfehler, ohne den Borg-Laufstatus zu verändern.</li><li><b>Diagnoseausschnitt:</b> gefiltert und begrenzt; kann vollständig deaktiviert werden.</li><li><b>Webhook:</b> generisches JSON mit Ereignis, Schweregrad, Titel, Nachricht, Lauf-ID und Zeitstempel oder Discord-kompatibles Embed.</li></ul>
     <p>Der Versand erfolgt erst nach Freigabe der Repository- und Parallelitätswarteschlange. Ein langsamer oder nicht erreichbarer Benachrichtigungsdienst hält daher keine nachfolgenden Backups auf.</p>
   </section>
@@ -94,7 +95,7 @@
       <tr><td>Aktualisierung</td><td>Aktionen werden bis zum tatsächlichen Abschluss verfolgt. Das Intervall ist nur eine zusätzliche Hintergrundaktualisierung.</td></tr>
       <tr><td>Updateprüfung</td><td>Prüft standardmäßig alle 24 Stunden das neueste Release von <code>the-ab/BorgBackup-Manager</code> auf GitHub. Die Prüfung kann deaktiviert oder auf 1 bis 720 Stunden eingestellt werden. In der Seitenleiste steht der Status direkt unter „Dienst erreichbar“ und über der installierten Version; bei einem Update öffnet ein Klick das zugehörige GitHub-Release in einem neuen Fenster.</td></tr>
       <tr><td>Listenhöhe</td><td>Maximale Höhe begrenzter Archiv-, Such- und Backup-Listen.</td></tr>
-      <tr><td>Ausführungsprotokolle</td><td>Aufbewahrung, Dateigröße, WebUI-Anzeigegrenze, Speicherübersicht und manuelle Bereinigung.</td></tr>
+      <tr><td>Ausführungs- und Benachrichtigungsprotokolle</td><td>Gemeinsame Aufbewahrungsfrist für abgeschlossene Läufe und Benachrichtigungszustellungen. Letzter Backup-Lauf, letzter erfolgreicher/warnender Größenstand und Quellenstatistik vorhandener Jobs bleiben bei der Fristbereinigung erhalten; „Alle Protokolle löschen“ entfernt auch diese geschützten Stände.</td></tr>
       <tr><td>Speicherplatz-Sperre</td><td>Globale Aktivierung und Standardschwelle; repositorybezogene Abweichungen werden am Repository gesetzt.</td></tr>
       <tr><td>Repository-Größe</td><td>Automatische Aktualisierung nach manuellen Schreibvorgängen und einmal nach einer vollständigen Zeitplankette.</td></tr>
       <tr><td>Ausschlussvorlagen</td><td>Wiederverwendbare Musterlisten, die in Jobs kopiert werden.</td></tr>

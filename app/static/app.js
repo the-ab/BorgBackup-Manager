@@ -11,6 +11,7 @@ const state = {
   sorts: {}, repositoryBrowserPath: '', diagnosticLogs: {}, activeDiagnosticLog: 'sshd',
   excludeTemplateDrafts: null, excludeTemplateSelection: -1, excludeTemplateSettingsSignature: '',
   managerBackupTask: null, managerBackupTimer: null,
+  systemHealth: null, systemHealthTimer: null, systemHealthRequestPending: false,
 };
 
 const SORT_DEFAULTS = {
@@ -465,6 +466,7 @@ async function submitLogin(event) {
     goToView(hashView(), false);
     if (verifiedUser.must_change_password) { openPasswordDialog(true); return; }
     await loadAll();
+    scheduleSystemHealthPoll(0);
   } catch (error) {
     state.currentUser = null;
     storeReloadSessionToken('');
@@ -729,7 +731,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.82`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.85`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -772,8 +774,9 @@ function runRow(run) {
   const runTitle = admin
     ? `<button class="entity-link" ${bbmAction('showRun', run.id)}>#${run.id} · ${esc(subject)}</button>`
     : `<b>#${run.id} · ${esc(subject)}</b>`;
+  const protectedHint = run.retention_protected ? '<span class="muted retention-protected" title="Letzter relevanter Backup-Stand dieses vorhandenen Jobs; nur über Alle Protokolle löschen entfernbar.">Letzter Stand geschützt</span>' : '';
   const actions = admin
-    ? `<div class="table-actions"><button class="secondary" ${bbmAction('showRun', run.id)}>${active ? 'Live-Log' : 'Details'}</button>${active ? `<button class="danger" ${bbmAction('cancelExecution', run.id)}>Stoppen</button>` : `${run.job_id ? `<button class="secondary" ${bbmAction('retryExecution', run.id)}>Wiederholen</button>` : ''}<button class="danger ghost" ${bbmAction('deleteExecution', run.id)}>Löschen</button>`}</div>`
+    ? `<div class="table-actions"><button class="secondary" ${bbmAction('showRun', run.id)}>${active ? 'Live-Log' : 'Details'}</button>${active ? `<button class="danger" ${bbmAction('cancelExecution', run.id)}>Stoppen</button>` : `${run.job_id ? `<button class="secondary" ${bbmAction('retryExecution', run.id)}>Wiederholen</button>` : ''}${run.retention_protected ? protectedHint : `<button class="danger ghost" ${bbmAction('deleteExecution', run.id)}>Löschen</button>`}`}</div>`
     : '<span class="muted">Nur Ansicht</span>';
   return `<tr><td data-label="Status"><span class="badge ${esc(run.status)}">${esc(runStatusLabel(run.status))}</span></td><td data-label="Lauf">${runTitle}<small>${esc(run.action)}</small></td><td data-label="Zeit">${esc(formatDate(run.created_at))}</td><td data-label="Dauer">${esc(formatDuration(run.duration_seconds))}</td><td data-label="Hinweis">${run.diagnosis ? `<span class="table-note warning-text">${esc(run.diagnosis.title)}</span>` : '–'}</td><td data-label="Aktionen">${actions}</td></tr>`;
 }
@@ -1461,6 +1464,82 @@ function renderUpdateStatus(status = state.system?.update_status) {
   link.title = '';
 }
 
+
+function renderSystemHealthStatus() {
+  const control = $('#service-status');
+  if (!control) return;
+  const label = control.querySelector('.service-status-label');
+  const health = state.systemHealth || {kind: 'pending'};
+  const english = currentLanguage() === 'en';
+  const labels = {
+    pending: english ? 'Checking system status …' : 'Systemstatus wird geprüft …',
+    ok: english ? 'System status OK' : 'Systemstatus OK',
+    degraded: english ? 'System status degraded' : 'Systemstatus eingeschränkt',
+    offline: english ? 'System status unavailable' : 'Systemstatus nicht erreichbar',
+  };
+  control.classList.remove('status-pending', 'status-ok', 'status-degraded', 'status-offline');
+  control.classList.add(`status-${health.kind || 'pending'}`);
+  if (label) label.textContent = labels[health.kind] || labels.pending;
+  control.title = health.detail || (english
+    ? 'Live status of the BBM core components.'
+    : 'Live-Status der BBM-Kernkomponenten.');
+  control.setAttribute('aria-label', `${label?.textContent || labels.pending}${health.detail ? `. ${health.detail}` : ''}`);
+}
+
+function healthComponentSummary(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  const english = currentLanguage() === 'en';
+  const parts = [];
+  const add = (nameDe, nameEn, value, optional = false) => {
+    if (typeof value !== 'boolean') return;
+    const name = english ? nameEn : nameDe;
+    const stateText = value ? 'OK' : (optional ? (english ? 'optional / unavailable' : 'optional / nicht erreichbar') : (english ? 'ERROR' : 'FEHLER'));
+    parts.push(`${name}: ${stateText}`);
+  };
+  add('Datenbank', 'Database', payload.database);
+  add('Authentifizierung', 'Authentication', payload.authentication);
+  add('Scheduler', 'Scheduler', payload.scheduler);
+  add('Repository-SSH', 'Repository SSH', payload.repository_sshd);
+  return parts.join(' · ');
+}
+
+async function loadSystemHealthStatus() {
+  if (!state.currentUser || state.systemHealthRequestPending) return;
+  state.systemHealthRequestPending = true;
+  try {
+    const admin = state.currentUser.role === 'admin';
+    const path = admin ? '/api/system/health' : '/api/health/strict';
+    const response = await fetch(path, {credentials: 'same-origin', cache: 'no-store', headers: reloadAuthorizationHeaders()});
+    let payload = {};
+    try { payload = await response.json(); } catch { /* status code is still useful */ }
+    if (response.status === 401) {
+      state.systemHealth = {kind: 'offline', detail: currentLanguage() === 'en' ? 'Session is no longer valid.' : 'Sitzung ist nicht mehr gültig.'};
+      renderSystemHealthStatus();
+      return;
+    }
+    const degraded = payload.status === 'degraded' || response.status === 503;
+    const detail = admin ? healthComponentSummary(payload) : '';
+    state.systemHealth = {kind: degraded ? 'degraded' : (response.ok ? 'ok' : 'offline'), detail};
+  } catch (_error) {
+    state.systemHealth = {
+      kind: 'offline',
+      detail: currentLanguage() === 'en' ? 'The BBM health endpoint could not be reached.' : 'Der BBM-Health-Endpunkt konnte nicht erreicht werden.',
+    };
+  } finally {
+    state.systemHealthRequestPending = false;
+    renderSystemHealthStatus();
+  }
+}
+
+function scheduleSystemHealthPoll(delay = 0) {
+  clearTimeout(state.systemHealthTimer);
+  if (!state.currentUser) return;
+  state.systemHealthTimer = setTimeout(async () => {
+    await loadSystemHealthStatus();
+    scheduleSystemHealthPoll(30000);
+  }, Math.max(0, delay));
+}
+
 function renderUpdateCheckInfo() {
   const info = $('#update-check-info');
   if (!info || !state.settings) return;
@@ -1615,7 +1694,7 @@ function renderSettings() {
   const storage = state.runStorage;
   const info = $('#run-storage-info');
   if (info && storage) {
-    info.innerHTML = `<b>${storage.finished_runs} abgeschlossene Protokolle</b> · Logdateien ${formatBytes(storage.log_file_bytes)} · DB-Protokollanteil ${formatBytes(storage.database_log_payload_bytes)} · SQLite-Datei ${formatBytes(storage.database_file_bytes)}<br><span>Speicherort: <code>${esc(storage.log_directory)}</code>${storage.oldest_run ? ' · ältester Lauf ' + esc(formatDate(storage.oldest_run)) : ''}</span>`;
+    info.innerHTML = `<b>${storage.finished_runs} abgeschlossene Ausführungsprotokolle</b> · <b>${storage.notification_deliveries || 0} Benachrichtigungszustellungen</b><br><span>Logdateien ${formatBytes(storage.log_file_bytes)} · DB-Protokollanteil ${formatBytes(storage.database_log_payload_bytes)} · SQLite-Datei ${formatBytes(storage.database_file_bytes)}</span><br><span>Speicherort: <code>${esc(storage.log_directory)}</code>${storage.oldest_run ? ' · ältester Lauf ' + esc(formatDate(storage.oldest_run)) : ''}${storage.oldest_notification_delivery ? ' · älteste Zustellung ' + esc(formatDate(storage.oldest_notification_delivery)) : ''}</span>`;
   }
   renderMountParallelLimits();
   renderExcludeTemplateEditor();
@@ -1635,7 +1714,8 @@ function notificationEventLabel(eventType) {
     repository_warning: 'Repository-Aktion mit Warnungen', repository_success: 'Repository-Aktion erfolgreich',
     schedule_failed: 'Zeitplanausführung fehlgeschlagen', schedule_warning: 'Zeitplanausführung mit Warnungen',
     schedule_success: 'Zeitplanausführung erfolgreich', operation_failed: 'Sonstige Aktion fehlgeschlagen',
-    operation_warning: 'Sonstige Aktion mit Warnungen', operation_success: 'Sonstige Aktion erfolgreich', test: 'Testbenachrichtigung',
+    operation_warning: 'Sonstige Aktion mit Warnungen', operation_success: 'Sonstige Aktion erfolgreich',
+    system_health_degraded: 'Systemstatus eingeschränkt', system_health_restored: 'Systemstatus wiederhergestellt', test: 'Testbenachrichtigung',
   })[eventType] || eventType;
 }
 
@@ -1643,7 +1723,7 @@ function renderNotifications() {
   const settings = state.notifications;
   const form = $('#notification-form');
   if (!settings || !form) return;
-  for (const name of ['enabled', 'include_error_excerpt', 'smtp_enabled', 'webhook_enabled', 'telegram_enabled']) {
+  for (const name of ['enabled', 'include_error_excerpt', 'system_health_notifications', 'smtp_enabled', 'webhook_enabled', 'telegram_enabled']) {
     form.elements[name].checked = Boolean(settings[name]);
   }
   for (const name of ['instance_name', 'language', 'timeout_seconds', 'smtp_host', 'smtp_port', 'smtp_security', 'smtp_username', 'email_from', 'webhook_kind', 'telegram_chat_id']) {
@@ -1669,7 +1749,7 @@ function notificationPayload(formElement) {
   const payload = {
     enabled: form.get('enabled') === 'on', instance_name: String(form.get('instance_name') || '').trim(),
     language: form.get('language'), events: [...formElement.querySelectorAll('input[name="events"]:checked')].map((input) => input.value),
-    include_error_excerpt: form.get('include_error_excerpt') === 'on', timeout_seconds: +form.get('timeout_seconds'),
+    include_error_excerpt: form.get('include_error_excerpt') === 'on', system_health_notifications: form.get('system_health_notifications') === 'on', timeout_seconds: +form.get('timeout_seconds'),
     smtp_enabled: form.get('smtp_enabled') === 'on', smtp_host: String(form.get('smtp_host') || '').trim(), smtp_port: +form.get('smtp_port'),
     smtp_security: form.get('smtp_security'), smtp_username: String(form.get('smtp_username') || '').trim(),
     smtp_clear_password: form.get('smtp_clear_password') === 'on', email_from: String(form.get('email_from') || '').trim(),
@@ -2528,9 +2608,11 @@ function renderRunDialog(run, {appendLog = false} = {}) {
   const stopLiveButton = $('#stop-live-run');
   if (stopLiveButton) {
     const canStop = active && state.currentUser?.role === 'admin';
-    stopLiveButton.classList.toggle('hidden', !canStop);
+    stopLiveButton.classList.toggle('is-visible', canStop);
     stopLiveButton.disabled = !canStop;
     stopLiveButton.dataset.runId = canStop ? String(run.id) : '';
+    stopLiveButton.setAttribute('aria-hidden', canStop ? 'false' : 'true');
+    stopLiveButton.tabIndex = canStop ? 0 : -1;
   }
   renderWarningCauses(run.warning_summary);
   const box = $('#log-diagnosis');
@@ -2554,7 +2636,9 @@ function showTextDialog(title, text) {
   $('#log-live-state').textContent = '';
   $('#client-network-live')?.classList.add('hidden');
   $('#bbm-network-live')?.classList.add('hidden');
-  $('#stop-live-run')?.classList.add('hidden');
+  $('#stop-live-run')?.classList.remove('is-visible');
+  $('#stop-live-run')?.setAttribute('aria-hidden', 'true');
+  if ($('#stop-live-run')) { $('#stop-live-run').disabled = true; $('#stop-live-run').tabIndex = -1; }
   $('#log-diagnosis').classList.add('hidden');
   $('#log-backup-progress').classList.add('hidden');
   $('#log-backup-progress').innerHTML = '';
@@ -2628,11 +2712,12 @@ async function deleteExecution(id) {
 
 async function cleanupRunHistory(mode) {
   const all = mode === 'all_finished';
-  if (all && !confirm('Alle abgeschlossenen Ausführungsprotokolle und zugehörigen Logdateien wirklich löschen? Laufende Jobs bleiben erhalten.')) return;
+  if (all && !confirm('Alle Protokolle wirklich löschen? Dadurch werden alle abgeschlossenen Ausführungsprotokolle einschließlich der geschützten letzten Backup-Stände, alle Benachrichtigungszustellungen und die gespeicherten Quellenstatistiken der vorhandenen Jobs entfernt. Laufende oder wartende Ausführungen bleiben erhalten.')) return;
   try {
     const result = await api('/runs/cleanup', {method: 'POST', body: JSON.stringify({mode, vacuum: true})});
-    toast(`${result.removed} Protokoll(e) gelöscht`);
-    await refreshAreas(['dashboard', 'runs', 'runStorage']);
+    const deliveries = Number(result.notification_deliveries_removed || 0);
+    toast(`${result.removed} Ausführungsprotokoll(e) und ${deliveries} Benachrichtigungszustellung(en) gelöscht`);
+    await refreshAreas(['dashboard', 'runs', 'runStorage', 'notifications']);
   } catch (error) { toast(error.message, true); }
 }
 
@@ -3589,6 +3674,17 @@ document.addEventListener('keydown', (event) => {
 });
 $$('[data-log-tab]').forEach((button) => button.onclick = () => setLogTab(button.dataset.logTab));
 $$('[data-target-view]').forEach((button) => button.onclick = () => goToView(button.dataset.targetView));
+
+const serviceStatusControl = $('#service-status');
+if (serviceStatusControl) serviceStatusControl.onclick = () => {
+  if (state.currentUser?.role === 'admin') {
+    goToView('diagnostics');
+    requestAnimationFrame(() => $('#load-diagnostics')?.click());
+  } else {
+    const text = serviceStatusControl.querySelector('.service-status-label')?.textContent || '';
+    toast(text || (currentLanguage() === 'en' ? 'System status' : 'Systemstatus'), state.systemHealth?.kind === 'offline');
+  }
+};
 $('#apply-exclude-template').onclick = () => {
   const index = Number.parseInt($('#job-exclude-template').value, 10);
   const template = state.settings?.exclude_templates?.[index];
@@ -3808,6 +3904,7 @@ function applyUserPreferences(persistLanguage = true) {
   dateFormatter = createDateFormatter();
   applyTheme(state.currentUser?.appearance || 'auto', false);
   loadHelpLanguage(language);
+  renderSystemHealthStatus();
   const form = $('#preferences-form');
   if (form) {
     form.elements.language.value = language;
@@ -3884,6 +3981,9 @@ window.BBMI18n?.setLanguage?.(currentLanguage(), false);
 
 async function logout(callServer = true) {
   clearTimeout(state.refreshTimer);
+  clearTimeout(state.systemHealthTimer);
+  state.systemHealth = null;
+  renderSystemHealthStatus();
   state.currentUser = null; state.users = [];
   if (callServer) {
     try { await api('/auth/logout', {method: 'POST'}); } catch { /* Sitzung lokal trotzdem beenden. */ }
@@ -4551,6 +4651,7 @@ async function restoreBrowserSession() {
     goToView(hashView(), false);
     if (current.must_change_password) { openPasswordDialog(true); return; }
     await loadAll();
+    scheduleSystemHealthPoll(0);
   } catch (error) {
     if (!loginInProgress && !state.currentUser) {
       const detail = error instanceof ApiError && error.status === 401

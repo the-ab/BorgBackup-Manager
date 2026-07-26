@@ -45,11 +45,26 @@ def wait_for_run_terminal(client: TestClient, run_id: int, timeout: float = 3.0)
     raise AssertionError(f"run {run_id} did not finish within {timeout} seconds")
 
 
-def test_health_is_public():
+def test_health_is_public(monkeypatch):
+    monkeypatch.setattr(main_module, "repository_sshd_listening", lambda: True)
     with TestClient(app) as client:
         response = client.get("/api/health")
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
+
+
+def test_operational_health_reports_repository_sshd_failure_even_when_strict_probe_allows_it(monkeypatch):
+    monkeypatch.setattr(main_module, "HEALTH_REQUIRE_SSHD", False)
+    monkeypatch.setattr(main_module, "repository_sshd_listening", lambda: False)
+    with TestClient(app) as client:
+        compatible = client.get("/api/health")
+        strict = client.get("/api/health/strict")
+        detail = client.get("/api/system/health", headers=AUTH)
+    assert compatible.status_code == 200 and compatible.json() == {"status": "degraded"}
+    assert strict.status_code == 200 and strict.json() == {"status": "degraded"}
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "degraded"
+    assert detail.json()["repository_sshd"] is False
 
 
 def test_health_is_degraded_when_repository_sshd_is_required_but_missing(monkeypatch):
@@ -3117,3 +3132,25 @@ def test_run_json_exposes_manager_network_only_for_incremental_active_poll(monke
 
     payload = main_module.run_json(row)
     assert payload["bbm_network"] is None
+
+
+def test_individual_delete_rejects_last_retained_backup_of_existing_job():
+    from uuid import uuid4
+    from fastapi.testclient import TestClient
+    from app.database import SessionLocal
+    from app.models import Host, Job, Repository, Run
+
+    suffix = uuid4().hex
+    with SessionLocal() as db:
+        host = Host(name=f"protected-delete-host-{suffix}", address="127.0.0.1", port=22, username="root")
+        repository = Repository(name=f"protected-delete-repo-{suffix}", location=f"/tmp/protected-delete-{suffix}")
+        db.add_all([host, repository]); db.flush()
+        job = Job(name=f"protected-delete-job-{suffix}", host_id=host.id, repository_id=repository.id, source_paths_json='["/srv"]', exclude_patterns_json='[]', prune_options_json='{}', create_options_json='{}')
+        db.add(job); db.flush()
+        run = Run(job_id=job.id, repository_id=repository.id, action="backup", status="success", backup_deduplicated_size_bytes=99)
+        db.add(run); db.commit(); run_id = run.id
+
+    with TestClient(app) as client:
+        response = client.delete(f"/api/runs/{run_id}", headers=AUTH)
+    assert response.status_code == 409
+    assert "Alle Protokolle löschen" in response.json()["detail"]

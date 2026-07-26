@@ -1,6 +1,6 @@
 <article class="panel help-guide" data-i18n-skip>
   <header class="help-hero">
-    <div><p class="eyebrow">Operations manual</p><h2>Using BorgBackup Manager</h2><p>This manual covers all features in version 1.0.82, from installation and sign-in through devices, repositories, jobs and schedules to archive management, restore, user permissions and diagnostics.</p></div>
+    <div><p class="eyebrow">Operations manual</p><h2>Using BorgBackup Manager</h2><p>This manual covers all features in version 1.0.85, from installation and sign-in through devices, repositories, jobs and schedules to archive management, restore, user permissions and diagnostics.</p></div>
     <div class="help-version">Debian 13 · Borg 1.2–1.4 · Europe/Berlin</div>
   </header>
   <nav class="help-toc" aria-label="Table of contents">
@@ -77,6 +77,7 @@
 
     <section id="help-notifications" class="help-section"><h3>12. Notification center</h3>
     <p>Administrators can send backup, repository, schedule and other run events through SMTP, a generic JSON webhook, Discord or Telegram. Failures and warnings are selected by default; successful events can be enabled optionally. Warning messages include the concrete affected files or paths stored in the structured Borg warning summary.</p>
+    <p><b>System status:</b> The “System status: outage and recovery” option connects the real BBM health watchdog to the enabled channels. Database, authentication/security store, scheduler and repository SSH are monitored independently from APScheduler. Two matching failed checks confirm an outage; two healthy checks then produce one recovery notification.</p>
     <ul><li><b>Secrets:</b> SMTP password, webhook URL and Telegram token are encrypted in the security database and are never returned to the Web UI.</li><li><b>Testing:</b> every enabled channel has its own test action.</li><li><b>Delivery log:</b> records success or the concrete delivery error without changing the Borg run result.</li><li><b>Diagnostic excerpt:</b> filtered and bounded, and can be disabled completely.</li><li><b>Webhook:</b> generic JSON containing event, severity, title, message, run ID and timestamp, or a Discord-compatible embed.</li></ul>
     <p>Delivery starts only after repository and concurrency queue slots have been released. A slow or unavailable notification service therefore does not hold up subsequent backups.</p>
   </section>
@@ -94,7 +95,7 @@
       <tr><td>Refresh</td><td>Actions are tracked to actual completion. The interval is only an additional background refresh.</td></tr>
       <tr><td>Update check</td><td>Checks the latest GitHub release of <code>the-ab/BorgBackup-Manager</code> every 24 hours by default. The check can be disabled or configured from 1 to 720 hours. The sidebar status is shown directly below “Service available” and above the installed version; when an update exists, clicking it opens that GitHub release in a new window.</td></tr>
       <tr><td>List height</td><td>Maximum height of bounded archive, search and backup lists.</td></tr>
-      <tr><td>Run logs</td><td>Retention, file size, UI display limit, storage overview and manual cleanup.</td></tr>
+      <tr><td>Run and notification logs</td><td>Shared retention for completed runs and notification deliveries. The latest backup run, latest successful/warning size state and source statistics of existing jobs survive age-based cleanup; “Delete all logs” also removes these protected states.</td></tr>
       <tr><td>Storage guard</td><td>Global activation and default threshold; per-repository overrides are set on the repository.</td></tr>
       <tr><td>Repository size</td><td>Automatic update after manual write operations and once after a complete schedule chain.</td></tr>
       <tr><td>Exclusion templates</td><td>Reusable pattern lists copied into jobs.</td></tr>

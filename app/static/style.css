@@ -2090,3 +2090,163 @@ body.run-dialog-open { overflow: hidden; }
 .backup-create-progress-log div { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px; color: var(--muted); font-size: .74rem; }
 .backup-create-progress-log time { font-variant-numeric: tabular-nums; color: var(--muted); }
 .backup-create-progress-log span { overflow-wrap: anywhere; }
+
+/* 1.0.83: clearer system settings cards and shared protocol retention */
+.settings-layout { display: grid; gap: 16px; }
+.settings-layout > .settings-section {
+  margin: 0;
+  padding-top: 18px;
+  border-top: 0;
+}
+.settings-layout > .settings-section.settings-section-first { margin-top: 0; }
+.settings-layout .settings-section + .settings-section { margin-top: 0; }
+.settings-save-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 2px 0 0;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .12);
+}
+.settings-save-bar > div { display: grid; gap: 2px; min-width: 0; }
+.settings-save-bar span { color: var(--muted); font-size: .8rem; }
+.settings-save-bar button { flex: 0 0 auto; }
+@media (max-width: 720px) {
+  .settings-layout { gap: 12px; }
+  .settings-save-bar { position: static; align-items: stretch; flex-direction: column; }
+  .settings-save-bar button { width: 100%; }
+}
+
+/* 1.0.84: stable live-dialog controls separated from dynamic network telemetry */
+.run-dialog-head {
+  align-items: flex-start;
+}
+.run-dialog-title {
+  flex: 0 1 auto;
+  min-width: 12rem;
+}
+.run-dialog-head-actions {
+  display: grid;
+  flex: 1 1 38rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+.run-dialog-head-buttons {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, auto) minmax(7.5rem, auto);
+  justify-content: end;
+  gap: 8px;
+  min-height: 38px;
+}
+.run-dialog-stop-slot {
+  display: block;
+  min-width: 7.5rem;
+}
+.run-dialog-head-buttons button {
+  width: 100%;
+  min-height: 38px;
+  white-space: nowrap;
+}
+.run-dialog-stop-button {
+  visibility: hidden;
+  pointer-events: none;
+}
+.run-dialog-stop-button.is-visible {
+  visibility: visible;
+  pointer-events: auto;
+}
+.run-dialog-head-live-data {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.run-dialog-head-live-data .client-network-chip {
+  flex: 1 1 min(440px, 100%);
+  min-width: min(440px, 100%);
+}
+.run-dialog-head-live-data .bbm-network-chip {
+  flex: 0 1 190px;
+  min-width: 170px;
+}
+@media (max-width: 720px) {
+  .run-dialog-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .run-dialog-title { min-width: 0; }
+  .run-dialog-head-actions { width: 100%; }
+  .run-dialog-head-buttons {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    justify-content: stretch;
+  }
+  .run-dialog-head-live-data { justify-content: stretch; }
+  .run-dialog-head-live-data .client-network-chip,
+  .run-dialog-head-live-data .bbm-network-chip {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}
+@media (max-width: 360px) {
+  .run-dialog-head-buttons {
+    gap: 6px;
+  }
+  .run-dialog-head-buttons button {
+    padding-inline: 8px;
+    font-size: .82rem;
+  }
+}
+
+/* 1.0.85: real sidebar health state and mobile live-dialog safety fixes */
+.aside-foot .service-status-row {
+  width: 100%;
+  justify-content: flex-start;
+  color: var(--sidebar-muted);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.aside-foot .service-status-row:hover { color: #fff; }
+.service-status-row .status-dot {
+  flex: 0 0 7px;
+  background: #8a98a4;
+  box-shadow: 0 0 0 3px rgba(138,152,164,.14);
+}
+.service-status-row.status-ok .status-dot {
+  background: #50c486;
+  box-shadow: 0 0 0 3px rgba(80,196,134,.14);
+}
+.service-status-row.status-degraded .status-dot {
+  background: #e0aa48;
+  box-shadow: 0 0 0 3px rgba(224,170,72,.16);
+}
+.service-status-row.status-offline .status-dot {
+  background: #df6b63;
+  box-shadow: 0 0 0 3px rgba(223,107,99,.16);
+}
+.service-status-row.status-degraded .service-status-label { color: #f4c768; }
+.service-status-row.status-offline .service-status-label { color: #ff9c9c; }
+.service-status-row.status-ok .service-status-label { color: #75d7a5; }
+
+@media (max-width: 720px) {
+  .run-dialog-head-actions {
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+}
+@media (max-width: 620px) {
+  .runs-table .table-actions {
+    gap: 16px;
+    padding-block: 6px;
+  }
+  .runs-table .table-actions button {
+    min-height: 44px !important;
+    padding: 9px 12px !important;
+  }
+}

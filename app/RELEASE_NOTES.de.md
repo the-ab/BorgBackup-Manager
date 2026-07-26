@@ -1,5 +1,42 @@
 # Release Notes
 
+## v1.0.85 – 26.07.2026
+
+### Echter Systemstatus mit Benachrichtigungen
+
+- Die bisher statische Anzeige **Dienst erreichbar** wurde durch einen echten **Systemstatus** ersetzt. Geprüft werden Manager-Datenbank, Authentifizierungs-/Security-Store, Scheduler und der Repository-SSH-Dienst. Administratoren sehen die Komponenten direkt im Tooltip; ein Klick öffnet die Systemdiagnose.
+- Die Statusprüfung läuft in der WebUI alle 30 Sekunden. Zusätzlich überwacht ein vom APScheduler unabhängiger interner Watchdog den Zustand, damit auch ein ausgefallener Scheduler selbst erkannt werden kann.
+- Die Benachrichtigungszentrale besitzt die neue, standardmäßig aktivierte Option **Systemstatus: Störung und Entwarnung**. Erst zwei aufeinanderfolgende fehlerhafte Prüfungen lösen genau eine Störungsmeldung aus. Nach zwei wieder fehlerfreien Prüfungen folgt genau eine Entwarnung. Wiederholte Prüfungen desselben Zustands erzeugen keine Meldungsflut.
+- Systemstatus-Meldungen verwenden die bereits aktivierten E-Mail-, Webhook-/Discord- und Telegram-Kanäle. Auch wenn die Manager-Datenbank selbst ausfällt, darf ein technisch noch möglicher Versand nicht am Schreiben des Zustellungsprotokolls scheitern.
+- Der sichtbare Systemstatus bewertet Repository-SSH immer als Kernkomponente. `BBM_HEALTH_REQUIRE_SSHD` steuert weiterhin nur, ob der strenge HTTP-Probe-Statuscode wegen Repository-SSH fehlschlagen muss; ein SSH-Ausfall wird in WebUI und Benachrichtigungen nicht mehr verborgen.
+
+### Mobile Live-Ansicht und sichere Ausführungsaktionen
+
+- Der durch v1.0.84 auf Mobilgeräten verursachte große Leerraum im Kopf des Live-Dialogs ist behoben. Die feste Desktop-Flexbasis wird auf kleinen Displays vollständig zurückgesetzt, sodass der eigene Scrollbereich wieder bis Fortschritt, Netzwerk und Live-Log reicht.
+- **Job stoppen** und **Schließen** behalten im Live-Dialog weiterhin feste, voneinander getrennte Positionen.
+- In der mobilen Ausführungsprotokoll-Liste besitzen **Live-Log** und **Stoppen** jetzt größere Touch-Flächen und mehr Abstand, damit die destruktive Stop-Aktion nicht versehentlich statt des Live-Logs ausgelöst wird.
+
+
+## v1.0.83 – 26.07.2026
+
+### Letzten Jobzustand trotz Protokoll-Aufbewahrung erhalten
+
+- Die normale Aufbewahrungsfrist löscht bei noch vorhandenen Backup-Jobs nicht mehr den letzten abgeschlossenen Backup-Lauf. Ist der letzte Lauf fehlgeschlagen oder abgebrochen, bleibt zusätzlich der letzte erfolgreiche beziehungsweise mit Warnung abgeschlossene Backup-Lauf erhalten, damit **Größe letzte Sicherung** weiterhin angezeigt werden kann.
+- Die am Job gespeicherte Quellenstatistik bleibt unabhängig von der Protokollfrist erhalten. Gelöschte Jobs erhalten keinen historischen Sonderstatus; deren entkoppelte alte Läufe können nach der normalen Frist bereinigt werden.
+- Geschützte letzte Backup-Protokolle können auch nicht versehentlich einzeln gelöscht werden. In der Ausführungsliste werden sie als **Letzter Stand geschützt** gekennzeichnet.
+- Der bisherige Button **Alle abgeschlossenen löschen** heißt jetzt **Alle Protokolle löschen**. Nur diese ausdrückliche Gesamtbereinigung entfernt auch die geschützten letzten Backup-Stände und setzt die gespeicherten Quellenstatistiken vorhandener Jobs zurück. Aktive und wartende Läufe bleiben erhalten.
+
+### Benachrichtigungszustellungen an dieselbe Aufbewahrung gekoppelt
+
+- **Letzte Zustellungen** der Benachrichtigungszentrale verwenden jetzt dieselbe Aufbewahrungsdauer wie die Ausführungsprotokolle. `0 = unbegrenzt` gilt damit für beide Protokollarten.
+- Die bisherige feste Begrenzung auf 1000 Zustellungsdatensätze entfällt; die tägliche Fristbereinigung übernimmt die Begrenzung.
+- **Alle Protokolle löschen** entfernt zusätzlich sämtliche Benachrichtigungszustellungen. Die Speicherübersicht der Einstellungen zeigt deren Anzahl und den ältesten Zustellungszeitpunkt mit an.
+
+### Systemeinstellungen übersichtlicher gegliedert
+
+- Die bisherige große Einstellungsfläche ist in eigenständige Karten für Anzeige/Aktualisierung, Updateprüfung, Controller-Schlüssel, Parallelität, Protokolle, Speicherplatz-Sperre, Repository-Nachbereitung und Ausschlussvorlagen aufgeteilt.
+- Der gemeinsame Speichern-Button steht in einer separaten Abschlussleiste; auf kleinen Displays bleibt diese Leiste im normalen Dokumentfluss.
+
 ## v1.0.82 – 26.07.2026
 
 ### Legacy-Borg-Cache korrekt einordnen und BBM-Client-Cache gezielt zurücksetzen

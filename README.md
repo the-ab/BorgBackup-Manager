@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.82
+# BorgBackup Manager 1.0.85
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -33,7 +33,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.0.82.zip
+BorgBackup-Manager-1.0.85.zip
 ```
 
 The documentation naming convention is:
@@ -294,6 +294,8 @@ For remote backup cancellation, a supervised control channel first signals the r
 
 Warning causes are captured while Borg is running, before log truncation. Changed files, missing files, permission errors, I/O errors and general Borg warnings are persisted separately. If Borg returns warning status without a detail line, the UI explicitly reports that no cause was emitted. Full file-list output uses a raw-byte path: ordinary Borg item blocks are not fully decoded or split line by line. Complete status/path output is stored only in `/data/run-logs`; SQLite keeps cleaned metadata/diagnostic previews and bounded structured warning causes, not the ordinary file list. When the complete file list is disabled Borg uses `--list --filter AMCE`: A/M entries are consumed only for lightweight live counters and are not persisted in the run log, while C/E remain available for warning diagnosis. Unchanged U entries are still not requested. Independently of the full file-list option, backup runs also use Borg `--progress`. The live dialog therefore shows the processed file count, original/compressed/deduplicated data volumes and the currently processed path, plus A (added), M (modified), C (changed while being read) and E (file error) counters and the latest A/M/C/E path. When previous source statistics exist, the UI adds an explicitly approximate percentage and ETA; first runs use an indeterminate progress bar. Progress and item-status state remain process-local. The **Network** tile instead shows cumulative upload/download traffic since job start on the client interface selected by Linux routing for the repository; these two totals are persisted with the run. Because kernel interface counters are used, unrelated traffic on the same interface is included. The open live-dialog header additionally shows **Client network** with up to three active IPv4 client interfaces, each with interface name, IP address and current upload/download rate; the repository-route interface is first. These instantaneous interface rates are not persisted. A separate **BBM** indicator continues to show upload/download traffic aggregated across the manager container's non-loopback interfaces. This lightweight value is sampled only during live polling and helps identify unexpected manager-side network traffic. Administrators can also stop a queued or running job directly in the live dialog via **Stop job** without returning to the run list. With the run dialog closed, status polling reads no file-backed log. An open live dialog requests only bytes appended since its previous file offset; the initial request and background poll are serialized so stale responses cannot duplicate the header. The browser view remains bounded and the configured complete head/tail view is loaded once after completion.
 
+The shared **System → Settings → Run and notification logs** retention period applies to completed run history and notification delivery records. Age-based cleanup always preserves, for every backup job that still exists, the latest completed backup run and, when different, the latest successful/warning backup carrying the last-backup size statistics. Per-job source statistics are stored directly on the job and are retained as well. Once a job is deleted, its detached history no longer receives this exemption. **Delete all logs** is the explicit override: it removes all completed runs, all notification deliveries and resets stored source statistics for existing jobs. Active or queued runs are never deleted.
+
 ## Archives
 
 The archive overview supports:
@@ -359,7 +361,7 @@ The notification center supports:
 - Discord webhooks,
 - Telegram bots.
 
-Events can be selected independently for backup failures, warnings, successes, cancellations, schedule results, repository operations and other manager executions. Structured Borg warning notifications include the concrete affected file or path for every stored warning cause, up to ten entries plus a count of additional causes. Delivery failures never change the Borg result. Notification dispatch starts only after execution slots have been released.
+Events can be selected independently for backup failures, warnings, successes, cancellations, schedule results, repository operations and other manager executions. **System status: outage and recovery** is enabled by default and connects the active channels to an APScheduler-independent health watchdog for the database, authentication/security store, scheduler and repository SSH. A fault is announced only after two matching degraded checks and a single recovery message follows after health is confirmed again. Structured Borg warning notifications include the concrete affected file or path for every stored warning cause, up to ten entries plus a count of additional causes. Delivery failures never change the Borg result. Notification dispatch starts only after execution slots have been released.
 
 Secrets are encrypted and are not returned to the browser. A bounded delivery log records channel, event, result and sanitized error details.
 
@@ -386,7 +388,7 @@ System diagnostics cover:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.82.zip
+unzip /path/BorgBackup-Manager-1.0.85.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh

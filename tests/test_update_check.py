@@ -68,7 +68,7 @@ def test_sidebar_order_settings_and_mobile_live_dialog_are_present():
     js = (root / "app/static/app.js").read_text(encoding="utf-8")
     css = (root / "app/static/style.css").read_text(encoding="utf-8")
 
-    service = html.index('class="service-status-row"')
+    service = html.index('id="service-status"')
     update = html.index('id="update-status-link"')
     version = html.index('id="version-link"')
     assert service < update < version

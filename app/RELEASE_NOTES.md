@@ -1,5 +1,42 @@
 # Release Notes
 
+## v1.0.85 – 26.07.2026
+
+### Real system health with notifications
+
+- The former static **Service available** indicator is replaced with a real **System status**. The manager database, authentication/security store, scheduler and repository SSH service are checked. Administrators see component details in the tooltip and can open System diagnostics by clicking the status.
+- The Web UI refreshes health every 30 seconds. A separate internal watchdog runs independently from APScheduler so a stopped scheduler can itself be detected.
+- The notification center adds the default-enabled **System status: outage and recovery** option. Two consecutive degraded checks are required before exactly one outage notification is sent; two healthy checks then produce exactly one recovery notification. Repeated checks in the same state do not generate notification storms.
+- System-health notifications use the already enabled email, webhook/Discord and Telegram channels. If the manager database itself is unavailable, an otherwise possible notification delivery is no longer blocked merely because its delivery-log row cannot be written.
+- Visible system health always treats repository SSH as a core component. `BBM_HEALTH_REQUIRE_SSHD` continues to control only whether the strict HTTP probe status code must fail for repository SSH; the Web UI and notifications no longer hide that failure.
+
+### Mobile live view and safer run actions
+
+- The large empty header area introduced on mobile by v1.0.84 is fixed. The desktop flex basis is fully reset on small screens, restoring scrolling through progress, network information and the live log.
+- **Stop job** and **Close** retain their fixed, separated positions inside the live dialog.
+- In the mobile run-log list, **Live log** and **Stop** now have larger touch targets and increased spacing so the destructive stop action is less likely to be hit accidentally.
+
+
+## v1.0.83 – 26.07.2026
+
+### Preserve the latest job state across log retention
+
+- Normal age-based retention no longer removes the latest completed backup run of an existing backup job. If the newest backup failed or was cancelled, the latest successful/warning backup is retained as well so **Latest backup size** remains available.
+- Source statistics stored directly on the job remain independent of run-log retention. Deleted jobs receive no historical exemption; their detached old runs can expire normally.
+- Protected latest backup records cannot be accidentally deleted one by one and are labelled **Latest state protected** in the run list.
+- **Delete all completed** is renamed to **Delete all logs**. Only this explicit full cleanup removes the protected latest backup states and resets stored source statistics of existing jobs. Active and queued runs remain untouched.
+
+### Notification deliveries share the same retention policy
+
+- Recent notification deliveries now use the same retention period as run logs. `0 = unlimited` therefore applies to both log types.
+- The previous hard cap of 1000 delivery rows is removed; daily retention cleanup now bounds this history.
+- **Delete all logs** also removes all notification deliveries. The settings storage summary now includes the delivery count and oldest delivery timestamp.
+
+### Clearer system-settings layout
+
+- The former large settings block is separated into individual cards for display/refresh, update checks, controller key, concurrency, logs, storage guard, repository post-processing and exclusion templates.
+- The common save action is placed in a dedicated footer card; on small screens it stays in normal document flow.
+
 ## v1.0.82 – 26.07.2026
 
 ### Correct legacy-cache classification and explicit BBM client-cache reset
