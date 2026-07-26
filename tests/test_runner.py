@@ -985,3 +985,24 @@ def test_execute_byte_callback_can_filter_bounded_capture():
     assert return_code == 0
     assert stdout == ""
     assert stderr == "clean-warning"
+
+
+def test_external_manager_side_repository_commands_expose_manager_cache_scope(job, monkeypatch):
+    monkeypatch.setattr(
+        "app.runner.get_repository_secret",
+        lambda _repo, name: (
+            "PRIVATE" if name == "external_ssh_private_key" else
+            "host ssh-ed25519 AAAA" if name == "external_known_hosts" else None
+        ),
+    )
+    monkeypatch.setattr("app.runner.load_repository_environment", lambda *_args, **_kwargs: {})
+    job.repository.storage_path = None
+    command = prune_command(job)
+    assert command.manager_cache_repository_id == job.repository.id
+
+
+def test_managed_manager_side_repository_commands_keep_existing_locking(job, monkeypatch):
+    monkeypatch.setattr("app.runner.get_repository_secret", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.runner.load_repository_environment", lambda *_args, **_kwargs: {})
+    command = prune_command(job)
+    assert command.manager_cache_repository_id is None

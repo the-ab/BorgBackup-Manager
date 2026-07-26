@@ -42,6 +42,10 @@ class Command:
     # remote shell before Borg has received SIGINT and released its lock.
     stdin_controlled_cancel: bool = False
     timeout_seconds: int | None = None
+    # Manager-side Borg commands share one persistent cache per repository.
+    # The service serializes these commands separately from client-side backup
+    # jobs so metadata requests cannot race prune/compact on the same cache.
+    manager_cache_repository_id: int | None = None
 
 
 class CommandCancelled(RuntimeError):
@@ -411,6 +415,7 @@ def _manager_repository_command(repository: Repository, parts: list[str], *, ver
         stdin_data=payload,
         env=public_env or None,
         stdin_controlled_cancel=payload is not None,
+        manager_cache_repository_id=(int(repository.id) if not repository.storage_path else None),
     )
 
 

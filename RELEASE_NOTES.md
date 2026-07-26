@@ -1,5 +1,15 @@
 # Release Notes
 
+## v1.0.74 – 2026-07-26
+
+### External repositories: cache-lock handoff between backup, prune and compact fixed
+
+- Manager-side Borg operations for external repositories, such as archive/info requests, `prune` and `compact`, are now additionally serialized by a dedicated manager-cache lock per repository. Configurable backup parallelism is unaffected.
+- Before a manager-side Borg operation accesses an external repository, BBM removes only stale `lock.exclusive`/`lock.roster` artifacts from its private `/data/borg-cache/repository-<ID>` cache. Storage Box repository locks and Borg cache contents are never removed.
+- This prevents manual or scheduled prune/compact phases started immediately after a successful client backup from failing on a leftover local manager-cache lock.
+- Managed repositories retain their existing behavior.
+- When a stale external manager-cache lock is actually repaired, the run log records an informational message.
+
 ## v1.0.73 – 2026-07-25
 
 ### GitHub release checking

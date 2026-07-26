@@ -88,6 +88,53 @@ def manager_repository_cache_dir(repository: Repository) -> Path:
     return target
 
 
+
+def clear_repository_manager_cache_locks(repository: Repository) -> dict[str, int]:
+    """Remove stale Borg cache locks from BBM's private manager cache only.
+
+    Callers must serialize manager-side Borg commands for the repository before
+    invoking this helper. The repository itself, cache contents and Borg
+    security metadata are never modified. This is intended for stale
+    ``lock.exclusive`` / ``lock.roster`` artifacts left after an interrupted
+    manager-side command.
+    """
+    scoped = manager_repository_cache_dir(repository)
+    removed_dirs = 0
+    removed_files = 0
+    if not scoped.is_dir():
+        return {"lock_directories_removed": 0, "lock_files_removed": 0}
+    try:
+        entries = list(scoped.iterdir())
+    except OSError:
+        return {"lock_directories_removed": 0, "lock_files_removed": 0}
+    for entry in entries:
+        if entry.is_symlink() or not entry.is_dir():
+            continue
+        lock_dir = entry / "lock.exclusive"
+        roster = entry / "lock.roster"
+        try:
+            if lock_dir.is_symlink() or lock_dir.is_file():
+                lock_dir.unlink()
+                removed_dirs += 1
+            elif lock_dir.is_dir():
+                shutil.rmtree(lock_dir)
+                removed_dirs += 1
+        except FileNotFoundError:
+            pass
+        try:
+            if roster.is_symlink() or roster.is_file():
+                roster.unlink()
+                removed_files += 1
+            elif roster.is_dir():
+                shutil.rmtree(roster)
+                removed_files += 1
+        except FileNotFoundError:
+            pass
+    return {
+        "lock_directories_removed": removed_dirs,
+        "lock_files_removed": removed_files,
+    }
+
 def clear_repository_manager_cache(repository: Repository) -> dict[str, int | bool | str]:
     """Remove only manager-private cache data for one repository record.
 

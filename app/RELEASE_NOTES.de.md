@@ -1,5 +1,15 @@
 # Release Notes
 
+## v1.0.74 – 26.07.2026
+
+### Externe Repositorys: Cache-Lock zwischen Backup, Prune und Compact behoben
+
+- Für externe Repositorys werden managerseitige Borg-Aufrufe wie Archiv-/Info-Abfragen, `prune` und `compact` jetzt zusätzlich über einen eigenen Manager-Cache-Lock je Repository serialisiert. Die konfigurierbare Backup-Parallelität bleibt davon unberührt.
+- Vor einem managerseitigen Borg-Aufruf auf ein externes Repository werden ausschließlich verwaiste `lock.exclusive`-/`lock.roster`-Artefakte aus dem BBM-eigenen Cache `/data/borg-cache/repository-<ID>` entfernt. Repository-Locks auf der Storage Box und Borg-Cache-Inhalte werden nicht gelöscht.
+- Dadurch kann eine unmittelbar nach einem erfolgreichen Client-Backup gestartete manuelle oder geplante Prune-/Compact-Phase nicht mehr an einem noch vorhandenen lokalen Manager-Cache-Lock scheitern.
+- Verwaltete Repositorys behalten ihren bisherigen Ablauf unverändert.
+- Wird tatsächlich ein verwaister externer Manager-Cache-Lock bereinigt, erscheint ein entsprechender Hinweis im Ausführungsprotokoll.
+
 ## v1.0.73 – 25.07.2026
 
 ### GitHub-Release-Prüfung

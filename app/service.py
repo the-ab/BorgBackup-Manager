@@ -36,7 +36,7 @@ from app.repository_sizes import (
     store_repository_statistics,
 )
 from app.archive_cache import invalidate_archive_cache
-from app.repository_cache import clear_repository_manager_cache
+from app.repository_cache import clear_repository_manager_cache, clear_repository_manager_cache_locks
 from app.repository_diagnostics import compact_repository_diagnostic
 from app.repository_state import (
     managed_repository_present, require_empty_managed_repository,
@@ -129,6 +129,7 @@ _active_run_tasks: dict[int, asyncio.Task] = {}
 _executing_run_ids: set[int] = set()
 _repository_locks: dict[tuple[int, str], tuple[int, asyncio.Semaphore]] = {}
 _mount_locks: dict[tuple[int, str], tuple[int, asyncio.Semaphore]] = {}
+_manager_borg_locks: dict[tuple[int, int], asyncio.Lock] = {}
 _run_claim_lock = Lock()
 _repository_chain_lock = Lock()
 _repository_chain_reservations: dict[str, list[dict[str, object]]] = {}
@@ -461,6 +462,42 @@ def _repository_lock(repository_id: int | None) -> asyncio.Semaphore | None:
     return _capacity_semaphore(_repository_locks, key, limit)
 
 
+def _manager_borg_lock(repository_id: int | None) -> asyncio.Lock | None:
+    """Return the one-at-a-time lock for BBM's manager-side Borg cache.
+
+    Backup jobs run Borg on the source client and do not use this lock. Manager
+    operations such as info/list/prune/compact share /data/borg-cache and must
+    never overlap for one repository, regardless of its backup parallel limit.
+    """
+    if repository_id is None:
+        return None
+    loop = asyncio.get_running_loop()
+    key = (id(loop), int(repository_id))
+    lock = _manager_borg_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _manager_borg_locks[key] = lock
+    return lock
+
+
+def _cleanup_external_manager_cache_locks(repository_id: int | None) -> dict[str, int]:
+    """Repair only stale BBM-private cache locks for external repositories.
+
+    The caller must already hold ``_manager_borg_lock``. Since the cache path
+    belongs exclusively to BBM, any remaining lock at this point cannot belong
+    to another active manager Borg command. Managed repositories keep their
+    existing behavior unchanged.
+    """
+    if repository_id is None:
+        return {"lock_directories_removed": 0, "lock_files_removed": 0}
+    with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        if repository is None or repository.storage_path:
+            return {"lock_directories_removed": 0, "lock_files_removed": 0}
+        db.expunge(repository)
+    return clear_repository_manager_cache_locks(repository)
+
+
 def _mount_lock(repository_id: int | None) -> asyncio.Semaphore | None:
     if repository_id is None:
         return None
@@ -783,17 +820,29 @@ async def _wait_for_repository_turn(run_id: int, repository_id: int | None) -> b
 
 
 async def execute_interactive(repository_id: int | None, command: Command) -> tuple[int, str, str]:
-    """Execute an interactive command under mount and repository capacity limits."""
+    """Execute an interactive command under repository and manager-cache limits."""
     mount_lock = _mount_lock(repository_id)
     repository_lock = _repository_lock(repository_id)
-    mount_acquired = repository_acquired = False
+    manager_lock = _manager_borg_lock(command.manager_cache_repository_id)
+    mount_acquired = repository_acquired = manager_acquired = False
     try:
         if mount_lock:
             await mount_lock.acquire(); mount_acquired = True
         if repository_lock:
             await repository_lock.acquire(); repository_acquired = True
+        if manager_lock:
+            await manager_lock.acquire(); manager_acquired = True
+            # External repositories can leave a stale local cache lock after an
+            # interrupted/aborted manager-side Borg process. Once the dedicated
+            # manager lock is held, no other BBM manager command can own this
+            # private cache, so removing only its lock artifacts is safe.
+            await asyncio.to_thread(
+                _cleanup_external_manager_cache_locks, command.manager_cache_repository_id
+            )
         return await execute(command)
     finally:
+        if manager_lock and manager_acquired:
+            manager_lock.release()
         if repository_lock and repository_acquired:
             repository_lock.release()
         if mount_lock and mount_acquired:
@@ -994,7 +1043,8 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
 
     mount_lock = None
     repository_lock = None
-    mount_acquired = repository_acquired = False
+    manager_lock = _manager_borg_lock(command.manager_cache_repository_id)
+    mount_acquired = repository_acquired = manager_acquired = False
     last_queue_message = ""
     try:
         while True:
@@ -1033,6 +1083,20 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
                 log_writer.append(message + "\n")
                 last_queue_message = message
             await asyncio.sleep(0.25)
+        if manager_lock:
+            await manager_lock.acquire()
+            manager_acquired = True
+            cache_cleanup = await asyncio.to_thread(
+                _cleanup_external_manager_cache_locks, command.manager_cache_repository_id
+            )
+            removed_cache_locks = int(cache_cleanup.get("lock_directories_removed", 0)) + int(
+                cache_cleanup.get("lock_files_removed", 0)
+            )
+            if removed_cache_locks:
+                log_writer.append(
+                    "HINWEIS: Verwaiste lokale BBM-Borg-Cache-Sperre des externen Repositorys "
+                    "vor dem Manager-Aufruf automatisch bereinigt.\n"
+                )
         code, output, error = await execute(
             command,
             on_output=append_output,
@@ -1117,6 +1181,8 @@ async def _execute_run_inner(run_id: int, command: Command, *, refresh_size_afte
         live_log_flush_task.cancel()
         await asyncio.gather(live_log_flush_task, return_exceptions=True)
         log_writer.close()
+        if manager_lock and manager_acquired:
+            manager_lock.release()
         if repository_lock and repository_acquired:
             repository_lock.release()
         if mount_lock and mount_acquired:

@@ -428,3 +428,36 @@ def test_manual_maintenance_chain_blocks_later_repository_runs(monkeypatch):
         with service._active_run_lock:
             service._executing_run_ids.discard(root_id)
             service._executing_run_ids.discard(later_id)
+
+
+def test_manager_side_borg_commands_share_single_cache_slot(monkeypatch):
+    active = 0
+    peak = 0
+
+    async def fake_execute(_command, **_kwargs):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.03)
+        active -= 1
+        return 0, "", ""
+
+    async def scenario():
+        service._manager_borg_locks.clear()
+        monkeypatch.setattr(service, "_mount_lock", lambda _repository_id: None)
+        monkeypatch.setattr(service, "_repository_lock", lambda _repository_id: None)
+        monkeypatch.setattr(
+            service,
+            "_cleanup_external_manager_cache_locks",
+            lambda _repository_id: {"lock_directories_removed": 0, "lock_files_removed": 0},
+        )
+        monkeypatch.setattr(service, "execute", fake_execute)
+        first = Command(argv=["true"], preview="first", manager_cache_repository_id=77)
+        second = Command(argv=["true"], preview="second", manager_cache_repository_id=77)
+        await asyncio.gather(
+            service.execute_interactive(77, first),
+            service.execute_interactive(77, second),
+        )
+
+    asyncio.run(scenario())
+    assert peak == 1

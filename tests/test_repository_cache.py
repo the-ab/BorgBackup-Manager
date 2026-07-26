@@ -73,3 +73,23 @@ def test_external_cache_clear_removes_repository_scoped_cache_without_borg_lock(
     assert result["cache_removed"] is True
     assert result["removed_bytes"] > 0
     assert not scoped.exists()
+
+
+def test_external_cache_lock_cleanup_preserves_cache_contents(monkeypatch, tmp_path: Path):
+    current_cache = tmp_path / "data" / "borg-cache"
+    monkeypatch.setattr(repository_cache, "MANAGER_BORG_CACHE_DIR", current_cache)
+    repository = Repository(id=18, name="external", location="ssh://backup@example/./repo", storage_path=None)
+    scoped = current_cache / "repository-18" / ("d" * 64)
+    scoped.mkdir(parents=True)
+    (scoped / "config").write_text("keep-cache", encoding="utf-8")
+    (scoped / "chunks").write_text("keep-data", encoding="utf-8")
+    (scoped / "lock.exclusive").mkdir()
+    (scoped / "lock.roster").write_text("stale", encoding="utf-8")
+
+    result = repository_cache.clear_repository_manager_cache_locks(repository)
+
+    assert result == {"lock_directories_removed": 1, "lock_files_removed": 1}
+    assert (scoped / "config").read_text(encoding="utf-8") == "keep-cache"
+    assert (scoped / "chunks").read_text(encoding="utf-8") == "keep-data"
+    assert not (scoped / "lock.exclusive").exists()
+    assert not (scoped / "lock.roster").exists()
