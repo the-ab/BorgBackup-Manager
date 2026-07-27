@@ -714,17 +714,6 @@ def test_repository_archive_overview_assigns_job_owners_and_accepts_colons(monke
 
     suffix = uuid4().hex[:8]
     commands = []
-
-    async def archive_listing(repository_id, command):
-        commands.append((repository_id, command.argv[-1]))
-        return 0, json.dumps({
-            "archives": [
-                {"name": "bbm-job-900-client-2026-07-13T22:00:00", "id": "a1", "start": "2026-07-13T22:00:01"},
-                {"name": "legacy-client-2026-07-12T22:00:00", "id": "a2", "start": "2026-07-12T22:00:01"},
-            ]
-        }), ""
-
-    monkeypatch.setattr(main_module, "execute_interactive", archive_listing)
     with TestClient(app) as client:
         host = client.post(
             "/api/hosts", headers=AUTH,
@@ -734,6 +723,10 @@ def test_repository_archive_overview_assigns_job_owners_and_accepts_colons(monke
             "/api/repositories", headers=AUTH,
             json={"name": f"archive-repo-{suffix}", "managed": False, "location": f"/tmp/archive-{suffix}"},
         ).json()
+        with SessionLocal() as db:
+            row = db.get(Repository, repository["id"])
+            row.initialized = True
+            db.commit()
         job = client.post(
             "/api/jobs", headers=AUTH,
             json={
@@ -741,17 +734,19 @@ def test_repository_archive_overview_assigns_job_owners_and_accepts_colons(monke
                 "repository_id": repository["id"], "source_paths": ["/srv"],
             },
         ).json()
-        # Make the mocked archive name belong to this actual job.
         owned_name = f"{job['archive_prefix']}client-2026-07-13T22:00:00"
 
         async def actual_listing(repository_id, command):
-            commands.append((repository_id, command.argv[-1]))
+            commands.append((repository_id, command.preview))
             return 0, json.dumps({"archives": [
                 {"name": owned_name, "id": "a1", "start": "2026-07-13T22:00:01"},
                 {"name": "legacy-client-2026-07-12T22:00:00", "id": "a2", "start": "2026-07-12T22:00:01"},
             ]}), ""
 
-        monkeypatch.setattr(main_module, "execute_interactive", actual_listing)
+        monkeypatch.setattr(service, "execute_interactive", actual_listing)
+        refresh = client.post(f"/api/repositories/{repository['id']}/archives/refresh", headers=AUTH)
+        assert refresh.status_code == 202, refresh.text
+        assert wait_for_run_terminal(client, refresh.json()["run_id"])["status"] == "success"
         response = client.get(f"/api/jobs/{job['id']}/archives?all_archives=true", headers=AUTH)
 
     assert response.status_code == 200
@@ -760,7 +755,7 @@ def test_repository_archive_overview_assigns_job_owners_and_accepts_colons(monke
     assert archives[0]["job_id"] == job["id"]
     assert archives[0]["legacy"] is False
     assert archives[1]["legacy"] is True
-    assert "--glob-archives" not in commands[-1][1]
+    assert "--glob-archives" in commands[-1][1]
 
 
 def test_existing_repository_can_be_discovered_and_imported(monkeypatch, tmp_path):
@@ -1228,12 +1223,12 @@ def test_archive_overview_can_include_and_mark_checkpoints(monkeypatch):
     commands = []
 
     async def checkpoint_listing(repository_id, command):
-        commands.append(command.argv[-1])
+        commands.append(command.preview)
         return 0, json.dumps({"archives": [
             {"name": "job-checkpoint.checkpoint", "id": "cp1", "start": "2026-07-16T12:00:00"},
         ]}), ""
 
-    monkeypatch.setattr(main_module, "execute_interactive", checkpoint_listing)
+    monkeypatch.setattr(service, "execute_interactive", checkpoint_listing)
     with TestClient(app) as client:
         host = client.post(
             "/api/hosts", headers=AUTH,
@@ -1243,10 +1238,19 @@ def test_archive_overview_can_include_and_mark_checkpoints(monkeypatch):
             "/api/repositories", headers=AUTH,
             json={"name": f"checkpoint-repo-{suffix}", "managed": False, "location": f"/tmp/checkpoint-{suffix}"},
         ).json()
+        with SessionLocal() as db:
+            row = db.get(Repository, repository["id"])
+            row.initialized = True
+            db.commit()
         job = client.post(
             "/api/jobs", headers=AUTH,
             json={"name": f"checkpoint-job-{suffix}", "host_id": host["id"], "repository_id": repository["id"], "source_paths": ["/srv"]},
         ).json()
+        refresh = client.post(
+            f"/api/repositories/{repository['id']}/archives/refresh?consider_checkpoints=true", headers=AUTH,
+        )
+        assert refresh.status_code == 202, refresh.text
+        assert wait_for_run_terminal(client, refresh.json()["run_id"])["status"] == "success"
         response = client.get(
             f"/api/jobs/{job['id']}/archives?all_archives=true&consider_checkpoints=true",
             headers=AUTH,
@@ -1256,7 +1260,8 @@ def test_archive_overview_can_include_and_mark_checkpoints(monkeypatch):
     payload = response.json()
     assert payload["consider_checkpoints"] is True
     assert payload["archives"][0]["checkpoint"] is True
-    assert "--consider-checkpoints" in commands[-1]
+    assert any("--glob-archives" in command for command in commands)
+    assert any("--consider-checkpoints" in command for command in commands)
 
 
 def test_external_repository_can_list_archives_without_backup_job(monkeypatch):
@@ -1316,6 +1321,9 @@ def test_external_repository_can_list_archives_without_backup_job(monkeypatch):
         assert tested.status_code == 202, tested.text
         assert tested.json()["access_mode"] == "manager-local"
         assert wait_for_run_terminal(client, tested.json()["run_id"])["status"] == "success"
+        refresh = client.post(f"/api/repositories/{repository['id']}/archives/refresh", headers=AUTH)
+        assert refresh.status_code == 202, refresh.text
+        assert wait_for_run_terminal(client, refresh.json()["run_id"])["status"] == "success"
         archives = client.get(f"/api/repositories/{repository['id']}/archives", headers=AUTH)
 
     assert archives.status_code == 200, archives.text
@@ -1943,21 +1951,20 @@ def test_location_confirmation_lock_diagnosis_distinguishes_external_lock():
 
 
 
-def test_archive_overview_uses_persistent_cache_and_supports_explicit_refresh(monkeypatch, tmp_path):
+
+def test_archive_overview_is_cache_only_and_refresh_is_queued(monkeypatch, tmp_path):
     from uuid import uuid4
     from app import archive_cache
 
     suffix = uuid4().hex[:8]
-    calls = []
     monkeypatch.setattr(archive_cache, "ARCHIVE_CACHE_DIR", tmp_path)
+    queued = []
 
-    async def listing(repository_id, command):
-        calls.append((repository_id, command.preview))
-        return 0, json.dumps({"archives": [
-            {"name": "cached-archive", "id": "cache-1", "start": "2026-07-17T10:00:00"},
-        ]}), ""
+    def fake_queue(repository_id, consider_checkpoints=False):
+        queued.append((repository_id, consider_checkpoints))
+        return 4321
 
-    monkeypatch.setattr(main_module, "execute_interactive", listing)
+    monkeypatch.setattr(main_module, "queue_repository_archive_refresh", fake_queue)
     with TestClient(app) as client:
         host = client.post(
             "/api/hosts", headers=AUTH,
@@ -1967,63 +1974,38 @@ def test_archive_overview_uses_persistent_cache_and_supports_explicit_refresh(mo
             "/api/repositories", headers=AUTH,
             json={"name": f"cache-repo-{suffix}", "managed": False, "location": f"/tmp/cache-{suffix}"},
         ).json()
+        with SessionLocal() as db:
+            row = db.get(Repository, repository["id"])
+            row.initialized = True
+            db.commit()
         job = client.post(
             "/api/jobs", headers=AUTH,
             json={"name": f"cache-job-{suffix}", "host_id": host["id"], "repository_id": repository["id"], "source_paths": ["/srv"]},
         ).json()
 
-        first = client.get(f"/api/jobs/{job['id']}/archives?all_archives=true", headers=AUTH)
-        second = client.get(f"/api/jobs/{job['id']}/archives?all_archives=true", headers=AUTH)
-        refreshed = client.get(
+        missing = client.get(f"/api/jobs/{job['id']}/archives?all_archives=true", headers=AUTH)
+        archive_cache.store_archive_cache(repository["id"], False, {
+            "repository_statistics": {},
+            "archives": [{"name": "cached-archive", "id": "cache-1", "start": "2026-07-17T10:00:00"}],
+        })
+        cached = client.get(f"/api/jobs/{job['id']}/archives?all_archives=true", headers=AUTH)
+        old_force = client.get(
             f"/api/jobs/{job['id']}/archives?all_archives=true&force_refresh=true", headers=AUTH,
         )
-
-    assert first.status_code == 200
-    assert first.json()["archive_cache_source"] == "repository"
-    assert second.status_code == 200
-    assert second.json()["archive_cache_source"] == "cache"
-    assert refreshed.status_code == 200
-    assert refreshed.json()["archive_cache_source"] == "repository"
-    assert len(calls) == 2
-
-
-
-def test_archive_listing_permission_error_returns_only_actionable_cause(monkeypatch, tmp_path):
-    suffix = str(time.time_ns())
-    repository_path = tmp_path / "repository"
-    repository_path.mkdir()
-    (repository_path / "config").write_text("[repository]\nversion = 1\n", encoding="utf-8")
-    with SessionLocal() as db:
-        repository = Repository(
-            name=f"permission-repo-{suffix}",
-            location=str(repository_path),
-            storage_path=str(repository_path),
-            initialized=True,
+        refresh = client.post(
+            f"/api/repositories/{repository['id']}/archives/refresh?consider_checkpoints=true", headers=AUTH,
         )
-        db.add(repository); db.commit(); repository_id = repository.id
 
-    error = """Exception ignored in: <function Repository.__del__ at 0x123>
-Traceback (most recent call last):
-  File "/usr/lib/python3/dist-packages/borg/repository.py", line 1491, in open_fd
-PermissionError: [Errno 13] Permission denied: '/repositories/borg/data/69/69536'
-Platform: Linux bbm
-Borg: 1.4.0
-"""
-
-    async def denied(_repository_id, _command):
-        return 2, "", error
-
-    monkeypatch.setattr(main_module, "execute_interactive", denied)
-    main_module.invalidate_archive_cache(repository_id)
-    with TestClient(app) as client:
-        response = client.get(f"/api/repositories/{repository_id}/archives?force_refresh=true", headers=AUTH)
-
-    assert response.status_code == 400
-    detail = response.json()["detail"]
-    assert "Zugriff auf Repository-Datei verweigert" in detail
-    assert "/repositories/borg/data/69/69536" in detail
-    assert "Traceback" not in detail
-    assert "Platform:" not in detail
+    assert missing.status_code == 200
+    assert missing.json()["archive_cache_source"] == "missing"
+    assert missing.json()["archive_cache_missing"] is True
+    assert cached.status_code == 200
+    assert cached.json()["archive_cache_source"] == "cache"
+    assert [item["name"] for item in cached.json()["archives"]] == ["cached-archive"]
+    assert old_force.status_code == 409
+    assert refresh.status_code == 202
+    assert refresh.json()["run_id"] == 4321
+    assert queued == [(repository["id"], True)]
 
 
 def test_dashboard_jobs_include_schedule_latest_run_and_backup_sizes():
@@ -3003,7 +2985,7 @@ def test_source_statistics_are_persisted_from_live_scan_and_backup(monkeypatch):
     Base.metadata.create_all(engine)
     suffix = str(time.time_ns())
     outputs = [
-        (0, 'BBM_SOURCE_STATS_JSON={"size_bytes":12345,"file_count":17,"warning_count":0,"method":"python-lstat"}\n', ''),
+        (0, 'BBM_SOURCE_STATS_JSON={"size_bytes":12345,"file_count":17,"warning_count":0,"method":"python-borg-excludes","quality":"high","sources":[{"path":"/srv/data","size_bytes":12345,"file_count":17}]}\n', ''),
         (0, 'Archive name: bbm-source-auto\nNumber of files: 19\nThis archive: 15.00 kB  12.00 kB  5.00 kB\n', ''),
     ]
 
@@ -3056,6 +3038,9 @@ def test_source_statistics_are_persisted_from_live_scan_and_backup(monkeypatch):
         assert job.source_size_bytes == 12345
         assert job.source_file_count == 17
         assert job.source_stats_origin == 'scan'
+        detail = json.loads(job.source_stats_detail_json)
+        assert detail['quality'] == 'high'
+        assert detail['sources'] == [{'path': '/srv/data', 'size_bytes': 12345, 'file_count': 17}]
         backup_run = Run(
             job_id=job.id, repository_id=job.repository_id, job_name_snapshot=job.name,
             action='backup', status='queued', command_preview='borg create',
@@ -3074,6 +3059,9 @@ def test_source_statistics_are_persisted_from_live_scan_and_backup(monkeypatch):
         assert job.source_size_bytes == 15000
         assert job.source_file_count == 19
         assert job.source_stats_origin == 'backup'
+        # The exact last-backup total may supersede the scan total, while the
+        # Per-source distribution remains available for source attribution and the next frozen baseline.
+        assert json.loads(job.source_stats_detail_json)['sources'][0]['path'] == '/srv/data'
         assert run.backup_file_count == 19
         assert run.backup_network_download_bytes == 4321
         assert run.backup_network_upload_bytes == 8765
@@ -3088,6 +3076,7 @@ def test_editing_job_source_configuration_clears_stale_source_statistics():
         archive_template='source-{now}', compression='zstd,6', prune_options_json='{}',
         create_options_json=json.dumps(DEFAULT_CREATE_OPTIONS), enabled=True,
         source_size_bytes=1000, source_file_count=10, source_stats_origin='backup',
+        source_stats_detail_json='{"quality":"high","sources":[{"path":"/srv/data","size_bytes":1000,"file_count":10}]}',
     )
     unchanged = JobIn(
         name='source-config', host_id=1, repository_id=2, source_paths=['/srv/data'],
@@ -3097,6 +3086,7 @@ def test_editing_job_source_configuration_clears_stale_source_statistics():
     main_module.apply_job(row, unchanged)
     assert row.source_size_bytes == 1000
     assert row.source_file_count == 10
+    assert json.loads(row.source_stats_detail_json)['sources']
 
     changed = unchanged.model_copy(update={'source_paths': ['/srv/data', '/etc']})
     main_module.apply_job(row, changed)
@@ -3104,6 +3094,7 @@ def test_editing_job_source_configuration_clears_stale_source_statistics():
     assert row.source_file_count is None
     assert row.source_stats_checked_at is None
     assert row.source_stats_origin is None
+    assert row.source_stats_detail_json == '{}'
 
 
 def test_run_json_can_limit_active_live_log_window(monkeypatch):
@@ -3257,6 +3248,7 @@ def test_archive_diff_labels_mixed_jobs_instead_of_first_repository_job(monkeypa
 
 
 def test_run_json_exposes_lightweight_live_backup_progress(monkeypatch):
+    gib = 1024 ** 3
     job = Job(
         id=701,
         name="progress-job",
@@ -3264,9 +3256,10 @@ def test_run_json_exposes_lightweight_live_backup_progress(monkeypatch):
         repository_id=1,
         source_paths_json='["/srv"]',
         exclude_patterns_json='[]',
-        source_size_bytes=10_000,
+        source_size_bytes=10 * gib,
         source_file_count=100,
-        source_stats_origin="backup",
+        source_stats_origin="scan",
+        source_stats_detail_json=json.dumps({"quality":"high","sources":[{"path":"/srv","size_bytes":10 * gib,"file_count":100}]}),
     )
     row = Run(
         id=17001,
@@ -3274,23 +3267,35 @@ def test_run_json_exposes_lightweight_live_backup_progress(monkeypatch):
         action="backup",
         status="running",
         started_at=datetime.now(timezone.utc) - timedelta(seconds=100),
+        backup_source_size_bytes_snapshot=12 * gib,
+        backup_source_file_count_snapshot=120,
     )
     row.job = job
     monkeypatch.setattr(main_module, "get_run_progress", lambda _run_id: {
-        "original_bytes": 5_000,
-        "compressed_bytes": 4_000,
-        "deduplicated_bytes": 500,
+        "original_bytes": 6 * gib,
+        "compressed_bytes": 4 * gib,
+        "deduplicated_bytes": gib // 2,
         "files": 60,
         "path": "/srv/current.dat",
     })
+    monkeypatch.setattr(main_module, "get_run_progress_history", lambda _run_id: [
+        {"timestamp": 0.0, "original_bytes": 2 * gib, "compressed_bytes": gib, "deduplicated_bytes": 50, "files": 20, "path": "srv/a"},
+        {"timestamp": 100.0, "original_bytes": 6 * gib, "compressed_bytes": 4 * gib, "deduplicated_bytes": gib // 2, "files": 60, "path": "srv/current.dat"},
+    ])
     monkeypatch.setattr(main_module, "read_run_log", lambda *_args, **_kwargs: "")
     payload = main_module.run_json(row)
     progress = payload["backup_progress"]
     assert progress["files"] == 60
-    assert progress["estimated_total_files"] == 100
-    assert progress["estimated_total_bytes"] == 10_000
+    # The per-run snapshot is authoritative even if the job baseline changes later.
+    assert progress["estimated_total_files"] == 120
+    assert progress["estimated_total_bytes"] == 12 * gib
     assert progress["estimated_percent"] == 50.0
-    assert 95 <= progress["estimated_eta_seconds"] <= 105
+    assert progress["estimated_eta_seconds"] == 68
+    assert progress["estimate_basis"] == "fixed-1g-source-baseline"
+    assert progress["estimate_assumed_interface_gbps"] == 1.0
+    assert progress["estimate_assumed_utilization_percent"] == 80
+    assert progress["current_source"] == "/srv"
+    assert "current_source_percent" not in progress
     assert progress["path"] == "/srv/current.dat"
 
 
@@ -3324,9 +3329,10 @@ def test_run_json_exposes_manager_network_only_for_incremental_active_poll(monke
 def test_individual_delete_rejects_last_retained_backup_of_existing_job():
     from uuid import uuid4
     from fastapi.testclient import TestClient
-    from app.database import SessionLocal
+    from app.database import Base, SessionLocal, engine
     from app.models import Host, Job, Repository, Run
 
+    Base.metadata.create_all(engine)
     suffix = uuid4().hex
     with SessionLocal() as db:
         host = Host(name=f"protected-delete-host-{suffix}", address="127.0.0.1", port=22, username="root")
@@ -3346,6 +3352,35 @@ def test_individual_delete_rejects_last_retained_backup_of_existing_job():
     assert response.status_code == 409
     assert "Alle Protokolle löschen" in response.json()["detail"]
 
+
+
+def test_failed_or_cancelled_latest_backup_is_not_retention_protected():
+    from uuid import uuid4
+    from fastapi.testclient import TestClient
+    from app.database import Base, SessionLocal, engine
+    from app.models import Host, Job, Repository, Run
+
+    Base.metadata.create_all(engine)
+    suffix = uuid4().hex
+    with SessionLocal() as db:
+        host = Host(name=f"unprotected-delete-host-{suffix}", address="127.0.0.1", port=22, username="root")
+        repository = Repository(name=f"unprotected-delete-repo-{suffix}", location=f"/tmp/unprotected-delete-{suffix}")
+        db.add_all([host, repository]); db.flush()
+        job = Job(name=f"unprotected-delete-job-{suffix}", host_id=host.id, repository_id=repository.id, source_paths_json='["/srv"]', exclude_patterns_json='[]', prune_options_json='{}', create_options_json='{}')
+        db.add(job); db.flush()
+        good = Run(job_id=job.id, repository_id=repository.id, action="backup", status="warning", backup_deduplicated_size_bytes=99)
+        failed = Run(job_id=job.id, repository_id=repository.id, action="backup", status="failed")
+        cancelled = Run(job_id=job.id, repository_id=repository.id, action="backup", status="cancelled")
+        db.add_all([good, failed, cancelled]); db.commit()
+        good_id, failed_id, cancelled_id = good.id, failed.id, cancelled.id
+
+    with TestClient(app) as client:
+        dashboard = client.get("/api/dashboard", headers=AUTH)
+        assert dashboard.status_code == 200
+        by_id = {item["id"]: item for item in dashboard.json()["runs"]}
+        assert by_id[good_id]["retention_protected"] is True
+        assert by_id[failed_id]["retention_protected"] is False
+        assert by_id[cancelled_id]["retention_protected"] is False
 
 
 def test_repository_can_be_disabled_without_disabling_jobs_and_blocks_execution():
@@ -3554,3 +3589,51 @@ def test_schedule_status_counts_reflect_disabled_repository():
         assert item["assigned_job_count"] == 2
         assert item["runnable_job_count"] == 1
         assert item["repository_disabled_job_count"] == 1
+
+
+def test_queue_backup_freezes_source_baseline_on_run(monkeypatch):
+    Base.metadata.create_all(engine)
+    created = []
+
+    def fake_create_task(coro):
+        coro.close()
+        token = object()
+        created.append(token)
+        return token
+
+    monkeypatch.setattr(service.asyncio, "create_task", fake_create_task)
+    monkeypatch.setattr(service, "backup_command", lambda _job: service.Command(argv=["true"], preview="true"))
+    with SessionLocal() as db:
+        host = Host(name="eta-baseline-host", address="10.0.0.71", username="root", enabled=True)
+        repository = Repository(
+            name="eta-baseline-repo",
+            location="ssh://borg@example.invalid/./repo",
+            encryption_mode="none",
+            enabled=True,
+        )
+        db.add_all([host, repository]); db.flush()
+        job = Job(
+            name="eta-baseline-job",
+            host_id=host.id,
+            repository_id=repository.id,
+            source_paths_json='["/srv"]',
+            exclude_patterns_json="[]",
+            source_size_bytes=25_700_000_000_000,
+            source_file_count=11_300_000,
+            source_stats_origin="backup",
+        )
+        db.add(job); db.commit(); job_id = int(job.id)
+
+    run_id = service.queue_job_action(job_id, "backup")
+    assert created
+    with SessionLocal() as db:
+        run = db.get(Run, run_id)
+        assert run.backup_source_size_bytes_snapshot == 25_700_000_000_000
+        assert run.backup_source_file_count_snapshot == 11_300_000
+        job = db.get(Job, job_id)
+        job.source_size_bytes = 99_000_000_000_000
+        job.source_file_count = 99_000_000
+        db.commit()
+        db.refresh(run)
+        assert run.backup_source_size_bytes_snapshot == 25_700_000_000_000
+        assert run.backup_source_file_count_snapshot == 11_300_000

@@ -59,6 +59,20 @@ def parse_source_scan_statistics(text: str | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     skipped_mounts = payload.get("skipped_mounts") if isinstance(payload.get("skipped_mounts"), list) else []
+    raw_sources = payload.get("sources") if isinstance(payload.get("sources"), list) else []
+    sources = []
+    for item in raw_sources:
+        if not isinstance(item, dict):
+            continue
+        try:
+            source_size = max(0, int(item.get("size_bytes") or 0))
+            source_files = max(0, int(item.get("file_count") or 0))
+        except (TypeError, ValueError):
+            continue
+        path = str(item.get("path") or "").strip()
+        if path:
+            sources.append({"path": path, "size_bytes": source_size, "file_count": source_files})
+    unsupported = payload.get("unsupported_patterns") if isinstance(payload.get("unsupported_patterns"), list) else []
     return {
         "original_size_bytes": size,
         "file_count": count,
@@ -67,6 +81,11 @@ def parse_source_scan_statistics(text: str | None) -> dict[str, Any]:
         "skipped_mount_count": max(0, int(payload.get("skipped_mount_count") or 0)),
         "skipped_mounts": [str(path) for path in skipped_mounts[:50]],
         "included_mount_count": max(0, int(payload.get("included_mount_count") or 0)),
+        "excluded_file_count": max(0, int(payload.get("excluded_file_count") or 0)),
+        "excluded_size_bytes": max(0, int(payload.get("excluded_size_bytes") or 0)),
+        "unsupported_patterns": [str(value) for value in unsupported[:50]],
+        "quality": str(payload.get("quality") or ("high" if sources else "partial")),
+        "sources": sources,
     }
 
 def parse_human_size(value: str) -> int | None:

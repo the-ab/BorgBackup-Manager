@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -105,6 +106,51 @@ def load_borg_json_document(output: str, *, expected_keys: set[str] | None = Non
             return payload
         raise original_error
 
+
+
+def parse_archive_listing(output: str) -> list[dict[str, Any]]:
+    """Normalize ``borg list --json`` archive rows.
+
+    Kept with the Borg JSON parsers so synchronous API callers and queued
+    archive-cache refreshes share one implementation.
+    """
+    try:
+        payload = load_borg_json_document(output, expected_keys={"archives"})
+    except json.JSONDecodeError as exc:
+        raise ValueError("Borg returned an invalid archive list") from exc
+    archives = payload.get("archives", []) if isinstance(payload, dict) else []
+    if not isinstance(archives, list):
+        raise ValueError("Borg archive list has an unexpected structure")
+    result: list[dict[str, Any]] = []
+    for item in archives:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        start_value = normalize_borg_timestamp(item.get("start") or item.get("time"))
+        end_value = normalize_borg_timestamp(item.get("end"))
+        duration = item.get("duration") if isinstance(item.get("duration"), (int, float)) else None
+        if duration is None and isinstance(start_value, str) and isinstance(end_value, str):
+            try:
+                start_dt = datetime.fromisoformat(start_value.replace("Z", "+00:00"))
+                end_dt = datetime.fromisoformat(end_value.replace("Z", "+00:00"))
+                duration = max(0.0, (end_dt - start_dt).total_seconds())
+            except (ValueError, TypeError):
+                duration = None
+        result.append({
+            "name": str(item["name"]),
+            "id": item.get("id"),
+            "start": start_value,
+            "end": end_value,
+            "duration": duration,
+            "hostname": item.get("hostname"),
+            "username": item.get("username"),
+            "comment": item.get("comment") or "",
+            "nfiles": item.get("nfiles"),
+            "original_size": item.get("original_size"),
+            "compressed_size": item.get("compressed_size"),
+            "deduplicated_size": item.get("deduplicated_size"),
+            "checkpoint": bool(re.search(r"\.checkpoint(?:\.\d+)?$", str(item["name"]))),
+        })
+    return sort_archives_newest_first(result)
 
 def parse_borg_info(output: str) -> dict[str, Any]:
     """Normalize Borg 1.2–1.4 ``info --json`` output.

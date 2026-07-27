@@ -1,5 +1,69 @@
 # Release Notes
 
+## v1.1.1 – 27.07.2026
+
+### Large repository archive lists without HTTP 504
+
+- **Reload from Repository** no longer performs the potentially long repository-wide Borg scan inside the HTTP request. It now queues a normal background run with its own run ID and returns immediately to the Web UI.
+- **Show Archives** is now strictly cache-only: when `/data/archive-cache` does not exist yet, no hidden `borg info`/`borg list` request is started. The UI instead explains that a repository scan must be run first.
+- The background run still uses `borg info --json --glob-archives '*'` and adds `borg list --json` when checkpoint visibility or a compatibility fallback requires it. Both steps use the existing repository and manager-cache locks and can be cancelled cleanly.
+- After successful completion the persistent archive cache is written atomically and an open archive view reloads automatically. Existing cached data remains visible while a refresh is running.
+- The large Borg JSON stream is not duplicated into SQLite or the run log. Only compact status/error information is stored there; normalized archive metadata is written only to the regenerable archive cache.
+- The shared `borg list --json` parser was moved from the API module into the Borg statistics layer so synchronous exact checks and the queued refresh use the same normalization.
+
+## v1.1.0 – 27.07.2026
+
+### More conservative fixed remaining-time baseline and leaner source display
+
+- The deterministic remaining-time estimate now assumes a fixed **1-Gbit/s interface** while retaining 80% usable throughput. The effective calculation rate therefore drops from 250 MB/s to **100 MB/s**. The frozen run baseline, Borg O/N subtraction and fixed file-count factor remain unchanged.
+- The live **Current source** row now shows the source path only. The redundant per-source percentage was removed from both frontend rendering and backend calculation; global live progress remains the only percentage display.
+- Unneeded fields and calculation paths for `current_source_percent`, `completed_source_count` and `total_source_count` were removed.
+- Version advanced to **v1.1.0**.
+
+## v1.0.99 – 27.07.2026
+
+### Deterministic remaining-time calculation from a frozen source baseline
+
+- The adaptive O/N/D ETA introduced in v1.0.96–v1.0.98 has been removed completely from active code. There are no 30/120-second ETA rates, cache/content phase detection, estimate-quality levels or ETA frontier anymore.
+- Every newly queued backup freezes the last known source size and file count as a per-run baseline. Later changes to job statistics therefore cannot alter an already running backup's calculation.
+- Borg `O` and `N` are subtracted directly from that baseline. Remaining time is calculated only from remaining bytes using a fixed 2.5-Gbit/s interface assumption with 80% usable throughput, i.e. 2.0 Gbit/s or 250 MB/s effective.
+- Remaining file count contributes only a fixed, transparent small-file correction factor. Short-term Borg rates, measured network throughput, files-cache state and previous total runtimes do not affect the result.
+- If the frozen byte baseline is exceeded, remaining time becomes unavailable. Any still-valid byte or file dimension may continue to drive the percentage display.
+- The separate A/M/C/E history of up to 300 samples and the complete ETA-frontier migration were removed. A/M/C/E remain only as current live counters. The existing bounded Borg progress buffer is retained solely for current-source attribution and post-run per-source statistics.
+- The live tile now shows only the calculated time value. Quality badges, ranges and the old cache-ETA explanation are gone; the fixed 2.5-Gbit/s/80% assumption is available compactly as a tooltip.
+
+## v1.0.98 – 27.07.2026
+
+### Files-cache phase-aware remaining-time estimate
+
+- The ETA now uses Borg's already available `A` and `M` status counters as a files-cache phase signal. A very fast scan containing almost exclusively cached files can no longer project its O/N rate onto a later uncached section. `U` output is still not requested, avoiding an extra output line for millions of unchanged files.
+- Failed or cancelled backup runs can leave a tiny internal **ETA frontier** on the job: only O, N, current path/source, cache phase and, when reliable, a conservative 30/120-second content-processing rate. This hint is not a backup state and never affects run-log retention protection.
+- The first start after updating also covers older jobs: when the latest backup is failed/cancelled and no precise frontier exists yet, BBM stores one constant-size uncertainty marker. This specifically prevents a files cache partially rebuilt under v1.0.97 from resuming with a false minute-scale ETA even though the old live-progress frames were intentionally not persisted.
+- When the same partially rebuilt files cache is restarted, BBM separates the fast already-cached prefix from the still-cold suffix. If the previous incomplete run supplied a content rate, that conservative rate is used for the cold remainder. Without one, the live view reports **“not reliable yet”** instead of an obviously false minute-scale ETA.
+- As soon as A/M identify a real content-processing phase, the ETA uses the current slower 30/120-second content rate rather than the complete-run average distorted by the fast prefix.
+- Memory remains strictly bounded: the existing progress history stays capped at 720 samples; at most 300 coarse A/M/C/E counter snapshots without file paths are added. The persisted ETA frontier is one small JSON object per job and never grows with runtime or file count.
+
+## v1.0.97 – 27.07.2026
+
+### More conservative long-run ETA and compact live block
+
+- The adaptive ETA long-run rate now comes from the complete current job's `O`/`N` counters divided by its elapsed runtime. On long backups, the bounded rolling buffer can therefore no longer replace an hours-long trend with only a few unusually fast minutes.
+- Short-term slowdowns may still increase ETA quickly. Short-term acceleration is capped asymmetrically and must prove itself over the complete run, preventing a fast scan of unchanged/cached files from reducing several TiB of remaining work to a minute-scale ETA.
+- Current `O`/`N` rates far above the complete-run average also reduce estimate quality. Network throughput and previous total backup runtimes remain deliberately excluded from the estimator.
+- ETA requires no growing long-term history in RAM. The existing progress buffer remains hard-limited to 720 process-local samples per active job; the new complete-run rate needs no additional history, so memory usage does not grow with backup duration.
+- The live tile now labels the value **Remaining estimate** and renders `high`, `medium` or `low` compactly beside the time. The separate estimate-quality row and the two explanatory text rows below the tile are removed.
+
+## v1.0.96 – 27.07.2026
+
+### Adaptive current-run ETA and precise run-retention protection
+
+- The live view now uses an **adaptive current-run ETA** based only on the currently running Borg backup: `O` (original bytes), `N` (files) and changes in `D` (deduplicated/new data), smoothed over short and medium time windows. Host/network throughput and previous total backup runtimes are deliberately excluded from the ETA.
+- ETA source statistics are stored **per configured source path**. The preferred manual live scan applies Borg exclusion patterns, `--exclude-caches`, `--exclude-nodump` and `--one-file-system`; patterns that cannot be mirrored safely downgrade the source-stat quality rather than creating false precision.
+- After a successful or warning backup, BBM can retain the per-source distribution observed from the current Borg progress stream and scale it to Borg's exact final totals. High-frequency ETA samples remain process-local and do not grow SQLite or persistent run logs.
+- Remaining time combines current byte and file rates. Depending on stability the live view shows a single ETA or a range, together with **estimate quality** and the **current source**. Strong changes in the `D/O` ratio reduce confidence and make the estimator react more strongly to recent current-run rates.
+- If a running backup exceeds a stored byte or file baseline, BBM discards that stale dimension. If both known totals are exceeded, ETA deliberately becomes unavailable instead of showing a false 100% or zero remaining time.
+- Retention protection is now precise: **Latest state protected applies only to the newest successful or warning backup of an existing job.** Failed, cancelled/aborted or otherwise unsuccessful backup runs remain subject to normal retention and can be deleted individually.
+
 ## v1.0.95 – 27.07.2026
 
 ### Consistent run-log protection, up to five header interfaces and configurable session timeout

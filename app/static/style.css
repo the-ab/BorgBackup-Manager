@@ -2369,3 +2369,6 @@ body.run-dialog-open { overflow: hidden; }
   .header-network-chip .header-network-rates { font-size: .61rem; }
   .header-network-interface-list { grid-template-columns: 1fr; }
 }
+
+/* Compact remaining-time value without extra live-progress rows. */
+.backup-progress-eta strong { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }

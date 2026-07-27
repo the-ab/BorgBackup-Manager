@@ -16,12 +16,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
+from app.borg_stats import merge_archive_statistics, parse_archive_listing, parse_borg_info
+from app.archive_metadata import sort_archives_newest_first
 from app.borg_progress import (
     BorgItemActivityStreamFilter, BorgNetworkStreamFilter, BorgProgressStreamFilter,
-    clear_run_live_activity, clear_run_progress, get_run_network_activity, set_run_item_activity,
+    clear_run_live_activity, clear_run_progress, get_run_network_activity, get_run_progress_history, set_run_item_activity,
     set_run_network_activity, set_run_progress,
 )
 from app.backup_stats import parse_backup_statistics, parse_source_scan_statistics
+from app.backup_eta import observed_source_statistics
 from app.borg_warnings import BorgWarningCollector, unresolved_warning_summary
 from app.config import (
     REPOSITORY_AUTHORIZED_KEYS_PATH,
@@ -36,7 +39,7 @@ from app.repository_sizes import (
     managed_repository_filesystem_size, repository_statistics_from_borg_info,
     store_repository_statistics,
 )
-from app.archive_cache import invalidate_archive_cache
+from app.archive_cache import invalidate_archive_cache, store_archive_cache
 from app.repository_cache import clear_repository_manager_cache, clear_repository_manager_cache_locks
 from app.repository_diagnostics import compact_repository_diagnostic
 from app.repository_state import (
@@ -63,6 +66,7 @@ from app.runner import (
     external_repository_storage_command,
     parse_external_repository_storage,
     repository_compact_command,
+    repository_archives_info_command, repository_list_command,
     source_stats_command,
     rename_archive_command,
     restore_command,
@@ -1511,6 +1515,29 @@ async def _execute_run_inner(
                     job.source_file_count = statistics.get("file_count")
                     job.source_stats_checked_at = datetime.now(timezone.utc)
                     job.source_stats_origin = "backup" if action == "backup" else "scan"
+                    if action == "source-stats":
+                        job.source_stats_detail_json = json.dumps({
+                            "version": 1,
+                            "quality": statistics.get("quality") or "partial",
+                            "scan_method": statistics.get("scan_method"),
+                            "sources": statistics.get("sources") or [],
+                            "excluded_file_count": statistics.get("excluded_file_count") or 0,
+                            "excluded_size_bytes": statistics.get("excluded_size_bytes") or 0,
+                            "unsupported_patterns": statistics.get("unsupported_patterns") or [],
+                            "checked_at": datetime.now(timezone.utc).isoformat(),
+                        }, ensure_ascii=False, separators=(",", ":"))
+                    elif action == "backup":
+                        observed = observed_source_statistics(
+                            get_run_progress_history(run_id),
+                            json.loads(job.source_paths_json or "[]"),
+                            final_total_bytes=statistics.get("original_size_bytes"),
+                            final_total_files=statistics.get("file_count"),
+                        )
+                        if observed:
+                            observed["checked_at"] = datetime.now(timezone.utc).isoformat()
+                            job.source_stats_detail_json = json.dumps(
+                                observed, ensure_ascii=False, separators=(",", ":")
+                            )
             if terminal_db_hook is not None:
                 terminal_db_hook(db, run, status)
             run.finished_at = datetime.now(timezone.utc)
@@ -1843,6 +1870,180 @@ def queue_host_ssh_action(action_id: int) -> int:
     return run_id
 
 
+
+async def execute_repository_archive_refresh(
+    run_id: int,
+    repository_id: int,
+    consider_checkpoints: bool = False,
+) -> None:
+    """Refresh the persistent archive cache outside the HTTP request lifecycle.
+
+    Large repositories can make ``borg info --glob-archives '*'`` run for many
+    minutes. Keeping that work in a persisted run avoids reverse-proxy 504s and
+    still uses the existing repository / manager-cache locks. The Borg JSON is
+    parsed in memory and written directly to the compact archive cache; it is
+    deliberately not copied into SQLite or the run log.
+    """
+    max_log_bytes = load_settings().run_log_max_mib * 1024 * 1024
+    status = "failed"
+    summary = ""
+    error_text = ""
+    with _active_run_lock:
+        _executing_run_ids.add(run_id)
+    try:
+        if not await _wait_for_repository_turn(run_id, repository_id):
+            return
+        with SessionLocal() as db:
+            run = db.get(Run, run_id)
+            repository = db.get(Repository, repository_id)
+            if not run or run.status != "queued":
+                return
+            if not repository:
+                raise LookupError("Repository not found")
+            if not repository.enabled:
+                raise ValueError("Repository ist deaktiviert")
+            if not repository.initialized:
+                raise ValueError("Repository is not initialized")
+            if repository.storage_path and not managed_repository_present(repository):
+                raise ValueError("Verwaltetes Repository ist derzeit nicht verfügbar; Mount prüfen und Status erneut aktualisieren")
+            info_command = repository_archives_info_command(repository)
+            list_command = repository_list_command(repository, consider_checkpoints=consider_checkpoints)
+            run.status = "running"
+            run.started_at = datetime.now(timezone.utc)
+            db.commit()
+
+        append_run_log(
+            run_id,
+            "ARCHIVLISTE: Repository wird außerhalb der HTTP-Anfrage eingelesen.\n",
+            max_log_bytes,
+        )
+        info_code, info_output, info_error = await execute_interactive(repository_id, info_command)
+        if info_code not in {0, 1}:
+            diagnostic, _details = compact_repository_diagnostic(info_output, info_error, info_code)
+            raise ValueError(diagnostic)
+        normalized = parse_borg_info(info_output + "\n" + info_error)
+        repository_statistics = normalized.get("repository", {})
+        archives = normalized.get("archives", [])
+        final_code = info_code
+        append_run_log(
+            run_id,
+            f"ARCHIVLISTE: Borg-Information gelesen · {len(archives)} Archiv(e) mit Detailstatistik.\n",
+            max_log_bytes,
+        )
+
+        # ``borg info`` normally already returns every regular archive with
+        # statistics. A list pass remains necessary for checkpoint inclusion and
+        # for Borg variants that return no archive array in the info document.
+        if consider_checkpoints or not archives:
+            append_run_log(
+                run_id,
+                "ARCHIVLISTE: Zusätzliche Repository-Liste wird eingelesen.\n",
+                max_log_bytes,
+            )
+            list_code, list_output, list_error = await execute_interactive(repository_id, list_command)
+            if list_code not in {0, 1}:
+                diagnostic, _details = compact_repository_diagnostic(list_output, list_error, list_code)
+                raise ValueError(diagnostic)
+            listed = parse_archive_listing(list_output + "\n" + list_error)
+            archives = merge_archive_statistics(listed, archives)
+            final_code = max(final_code, list_code)
+
+        archives = sort_archives_newest_first(archives)
+        dataset = {"repository_statistics": repository_statistics, "archives": archives}
+        cached = store_archive_cache(repository_id, consider_checkpoints, dataset)
+        if repository_statistics.get("deduplicated_size") is not None:
+            store_repository_statistics(
+                repository_id,
+                original_size=repository_statistics.get("original_size"),
+                compressed_size=repository_statistics.get("compressed_size"),
+                deduplicated_size=repository_statistics.get("deduplicated_size"),
+            )
+        status = "warning" if final_code == 1 else "success"
+        generated_at = cached.get("generated_at") or ""
+        summary = (
+            f"Archivliste aktualisiert: {len(archives)} Archiv(e)"
+            + (" einschließlich Checkpoints" if consider_checkpoints else "")
+            + (f" · Cache {generated_at}" if generated_at else "")
+        )
+        append_run_log(run_id, f"ARCHIVLISTE: {summary}.\n", max_log_bytes)
+    except CommandCancelled as exc:
+        status = "cancelled"
+        error_text = (
+            "Archivscan wurde kontrolliert abgebrochen; Borg-Prozess wurde beendet."
+            if not exc.forced
+            else "Archivscan wurde zwangsweise abgebrochen; Repository-Sperre vor einem neuen Lauf prüfen."
+        )
+        append_run_log(run_id, f"ABBRUCH: {error_text}\n", max_log_bytes)
+    except asyncio.CancelledError:
+        status = "cancelled"
+        error_text = "Archivscan wurde vor dem Start abgebrochen."
+        append_run_log(run_id, f"ABBRUCH: {error_text}\n", max_log_bytes)
+    except Exception as exc:
+        status = "failed"
+        error_text = str(exc)
+        append_run_log(run_id, f"FEHLER: {error_text}\n", max_log_bytes)
+    finally:
+        with SessionLocal() as db:
+            run = db.get(Run, run_id)
+            if run and run.status in {"queued", "running"}:
+                run.status = status
+                run.output = summary[-64 * 1024:]
+                run.error = error_text[-32 * 1024:]
+                run.log_output = "\n".join(part for part in (run.output, run.error) if part)[-64 * 1024:]
+                run.finished_at = datetime.now(timezone.utc)
+                db.commit()
+        with _active_run_lock:
+            _executing_run_ids.discard(run_id)
+            if _active_run_tasks.get(run_id) is asyncio.current_task():
+                _active_run_tasks.pop(run_id, None)
+
+
+def queue_repository_archive_refresh(
+    repository_id: int,
+    consider_checkpoints: bool = False,
+) -> int:
+    """Queue one long-running repository archive-cache refresh."""
+    with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        if not repository:
+            raise LookupError("Repository not found")
+        if not repository.enabled:
+            raise ValueError("Repository ist deaktiviert")
+        if not repository.initialized:
+            raise ValueError("Repository is not initialized")
+        if repository.storage_path and not managed_repository_present(repository):
+            raise ValueError("Verwaltetes Repository ist derzeit nicht verfügbar; Mount prüfen und Status erneut aktualisieren")
+        if db.scalar(
+            select(Run.id).where(
+                Run.repository_id == repository_id,
+                Run.status.in_(["queued", "running"]),
+            ).limit(1)
+        ):
+            raise ValueError("Repository hat eine wartende oder laufende Ausführung")
+        info_command = repository_archives_info_command(repository)
+        run = Run(
+            job_id=None,
+            job_name_snapshot=f"Archivliste: {repository.name}"[:100],
+            repository_id=repository_id,
+            action="archive-refresh",
+            status="queued",
+            command_preview=(
+                info_command.preview
+                + (" · anschließend borg list --consider-checkpoints" if consider_checkpoints else "")
+            ),
+            trigger_type="manual",
+        )
+        db.add(run)
+        db.commit()
+        run_id = int(run.id)
+
+    task = asyncio.create_task(
+        execute_repository_archive_refresh(run_id, repository_id, consider_checkpoints)
+    )
+    with _active_run_lock:
+        _active_run_tasks[run_id] = task
+    return run_id
+
 def queue_repository_action(
     repository_id: int,
     action: str,
@@ -2035,6 +2236,8 @@ def queue_job_action(
             schedule_name_snapshot=schedule_name.strip()[:100] if schedule_name else None,
             schedule_id_snapshot=schedule_id if trigger_type == "schedule" else None,
             schedule_parallel_limit_snapshot=(schedule_parallel_limit if trigger_type == "schedule" else 0),
+            backup_source_size_bytes_snapshot=(job.source_size_bytes if action == "backup" else None),
+            backup_source_file_count_snapshot=(job.source_file_count if action == "backup" else None),
         )
         db.add(run)
         db.commit()

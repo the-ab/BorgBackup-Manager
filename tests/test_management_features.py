@@ -489,7 +489,7 @@ def test_run_json_prefers_archive_comparison_snapshot_over_access_job():
     assert payload["job_name"] == "OVPN-C-VPN0 ↔ OVPN-C-VPN1"
 
 
-def test_run_retention_keeps_last_backup_and_last_success_for_existing_job(monkeypatch):
+def test_run_retention_keeps_only_last_success_or_warning_for_existing_job(monkeypatch):
     from datetime import datetime, timedelta, timezone
     from uuid import uuid4
 
@@ -509,7 +509,7 @@ def test_run_retention_keeps_last_backup_and_last_success_for_existing_job(monke
             name=f"ret-job-{suffix}", host_id=host.id, repository_id=repository.id,
             source_paths_json='["/srv"]', exclude_patterns_json='[]', prune_options_json='{}',
             create_options_json='{}', source_size_bytes=9999, source_file_count=77,
-            source_stats_checked_at=old, source_stats_origin="backup",
+            source_stats_checked_at=old, source_stats_origin="backup", source_stats_detail_json='{"quality":"high","sources":[{"path":"/srv","size_bytes":9999,"file_count":77}]}',
         )
         db.add(job); db.flush()
         obsolete = Run(job_id=job.id, repository_id=repository.id, action="backup", status="success", created_at=old, backup_deduplicated_size_bytes=111)
@@ -524,11 +524,12 @@ def test_run_retention_keeps_last_backup_and_last_success_for_existing_job(monke
     with SessionLocal() as db:
         assert db.get(Run, obsolete_id) is None
         assert db.get(Run, last_success_id) is not None
-        assert db.get(Run, last_backup_id) is not None
+        assert db.get(Run, last_backup_id) is None
         job = db.get(Job, job_id)
         assert job.source_size_bytes == 9999
         assert job.source_file_count == 77
         assert job.source_stats_origin == "backup"
+        assert json.loads(job.source_stats_detail_json)["sources"]
 
 
 def test_run_retention_does_not_protect_history_of_deleted_job(monkeypatch):
@@ -594,6 +595,7 @@ def test_all_logs_cleanup_removes_protected_runs_deliveries_and_source_statistic
             name=f"all-job-{suffix}", host_id=host.id, repository_id=repository.id,
             source_paths_json='["/srv"]', exclude_patterns_json='[]', prune_options_json='{}', create_options_json='{}',
             source_size_bytes=12345, source_file_count=12, source_stats_origin="scan",
+            source_stats_detail_json='{"quality":"high","sources":[{"path":"/srv","size_bytes":12345,"file_count":12}]}',
         )
         db.add(job); db.flush()
         run = Run(job_id=job.id, repository_id=repository.id, action="backup", status="success", backup_deduplicated_size_bytes=321)
@@ -610,3 +612,4 @@ def test_all_logs_cleanup_removes_protected_runs_deliveries_and_source_statistic
         assert job.source_file_count is None
         assert job.source_stats_checked_at is None
         assert job.source_stats_origin is None
+        assert job.source_stats_detail_json == "{}"

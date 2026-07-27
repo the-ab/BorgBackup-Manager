@@ -1,5 +1,69 @@
 # Release Notes
 
+## v1.1.1 – 27.07.2026
+
+### Große Repository-Archivlisten ohne HTTP 504
+
+- **Neu aus Repository einlesen** führt den potenziell langen repositoryweiten Borg-Scan nicht mehr innerhalb der HTTP-Anfrage aus. Stattdessen wird eine normale Hintergrund-Ausführung mit eigener Lauf-ID eingereiht und sofort an die WebUI zurückgegeben.
+- **Archive anzeigen** ist jetzt konsequent cache-only: Ohne vorhandenen `/data/archive-cache` wird kein versteckter `borg info`-/`borg list`-Aufruf gestartet. Die WebUI zeigt stattdessen an, dass zunächst ein Repository-Scan erforderlich ist.
+- Der Hintergrundlauf verwendet weiterhin `borg info --json --glob-archives '*'` und ergänzt bei aktivierten Checkpoints beziehungsweise Kompatibilitätsfällen `borg list --json`. Beide Schritte laufen unter den bestehenden Repository- und Manager-Cache-Sperren und können kontrolliert abgebrochen werden.
+- Nach erfolgreichem Abschluss wird der persistente Archivcache atomar geschrieben und eine geöffnete Archivansicht automatisch neu geladen. Bereits vorhandene Cache-Daten bleiben während eines erneuten Scans sichtbar.
+- Der große Borg-JSON-Datenstrom wird nicht zusätzlich in SQLite oder das Ausführungsprotokoll kopiert. Dort landen nur kurze Status-/Fehlerangaben; die normalisierte Archivmetadatenliste wird ausschließlich im regenerierbaren Archivcache gespeichert.
+- Der gemeinsame Parser für `borg list --json` wurde aus dem API-Modul in die Borg-Statistikschicht verschoben, damit synchron benötigte Einzelprüfungen und der neue Hintergrundscan dieselbe Normalisierung verwenden.
+
+## v1.1.0 – 27.07.2026
+
+### Konservativere feste Restzeitbasis und kompaktere Quellenanzeige
+
+- Die deterministische Restzeitschätzung rechnet jetzt mit einem festen **1-Gbit/s-Interface** und weiterhin 80 % nutzbarem Durchsatz. Der effektive Rechenwert sinkt damit von 250 MB/s auf **100 MB/s**. Die beim Start eingefrorene Quellenbasis, Borg O/N und der feste Dateifaktor bleiben unverändert.
+- Die Live-Zeile **Aktuelle Quelle** zeigt nur noch den Quellpfad. Die redundante per-source Prozentanzeige wurde sowohl im Frontend als auch in der Backend-Berechnung entfernt; der globale Live-Fortschritt bleibt die einzige Prozentanzeige.
+- Nicht mehr benötigte Felder und Berechnungsteile für `current_source_percent`, `completed_source_count` und `total_source_count` wurden entfernt.
+- Versionsstand auf **v1.1.0** angehoben.
+
+## v1.0.99 – 27.07.2026
+
+### Deterministische Restzeitschätzung aus eingefrorener Quellenbasis
+
+- Die adaptive O/N/D-ETA aus v1.0.96–v1.0.98 wurde vollständig aus dem aktiven Code entfernt. Es gibt keine 30-/120-Sekunden-Raten, Cache-/Content-Phasenerkennung, Schätzqualitätsstufen oder ETA-Frontier mehr.
+- Jeder neu eingereihte Backup-Lauf friert die zuletzt bekannte Quellengröße und Dateianzahl als eigene Laufbasis ein. Änderungen an späteren Job-Statistiken können die Berechnung eines bereits laufenden Backups dadurch nicht verändern.
+- Borg `O` und `N` werden direkt von dieser Basis abgezogen. Die Restzeit wird ausschließlich aus den verbleibenden Bytes mit der festen Annahme eines 2,5-Gbit/s-Interfaces und 80 % nutzbarem Durchsatz berechnet; effektiv werden 2,0 Gbit/s beziehungsweise 250 MB/s angesetzt.
+- Die verbleibende Dateianzahl wirkt nur über einen festen, nachvollziehbaren Korrekturfaktor für viele kleine Dateien. Kurzfristige Borg-Raten, gemessener Netzwerkdurchsatz, Files-Cache-Zustand und frühere Gesamtlaufzeiten haben keinen Einfluss.
+- Wird die eingefrorene Byte-Basis überschritten, wird keine Restzeit mehr berechnet. Die weiterhin gültige Datei- oder Byte-Dimension kann jedoch noch für die Prozentanzeige verwendet werden.
+- Die separate A/M/C/E-Verlaufshistorie mit bis zu 300 Samples sowie die komplette ETA-Frontier-Migration wurden entfernt. A/M/C/E bleiben nur als aktuelle Live-Zähler erhalten. Der bestehende begrenzte Borg-Progress-Puffer bleibt ausschließlich für aktuelle Quellenzuordnung und die nachträgliche Quellenstatistik bestehen.
+- Die Live-Anzeige zeigt nur noch den berechneten Zeitwert. Qualitätsbadge, Zeitbereich und die alte Cache-ETA-Erklärung entfallen; die feste 2,5-Gbit/s-/80-%-Annahme steht platzsparend als Tooltip bereit.
+
+## v1.0.98 – 27.07.2026
+
+### Cache-phasenbewusste Restzeitschätzung
+
+- Die ETA wertet die ohnehin vorhandenen Borg-Statuszähler `A` und `M` jetzt als Files-Cache-Phasensignal aus. Eine sehr schnelle Scanphase mit nahezu ausschließlich gecachten Dateien darf ihre O-/N-Rate nicht mehr auf einen späteren ungecacheten Bereich übertragen. `U` wird weiterhin nicht angefordert, damit bei Millionen unveränderten Dateien kein zusätzlicher Ausgabestrom entsteht.
+- Fehlgeschlagene oder abgebrochene Backup-Läufe können einen kleinen internen **ETA-Frontier** am Job hinterlassen: nur O, N, aktueller Pfad/Quelle, Cache-Phase und – falls belastbar – eine konservative 30-/120-Sekunden-Content-Rate. Dieser Hinweis ist kein Sicherungsstand und hat keinerlei Einfluss auf den Protokollschutz.
+- Beim ersten Start nach dem Update werden auch bereits vorhandene ältere Jobs berücksichtigt: Ist der letzte Backup-Lauf fehlgeschlagen oder abgebrochen und existiert noch kein präziser Frontier, setzt BBM einen konstant kleinen Unsicherheitsmarker. Dadurch wird gerade ein unter v1.0.97 teilweise aufgebauter Files-Cache nicht mehr mit einer falschen Minuten-ETA fortgesetzt, obwohl die alten Live-Progress-Frames bewusst nicht gespeichert wurden.
+- Wird derselbe teilweise aufgebaute Files-Cache erneut durchlaufen, trennt BBM den schnellen bereits gecachten Präfix vom noch kalten Rest. Ist eine Content-Rate des vorherigen unvollständigen Laufs vorhanden, wird sie konservativ für den kalten Rest verwendet. Fehlt sie, zeigt die Live-Ansicht **„noch nicht belastbar“** statt einer offensichtlich falschen Minuten-ETA.
+- Sobald A/M eine echte Inhaltsprüfungsphase erkennen lassen, verwendet die ETA deren aktuelle langsame 30-/120-Sekunden-Rate statt des durch den schnellen Präfix verzerrten Gesamtmittels.
+- Der Speicherverbrauch bleibt hart begrenzt: Der bestehende Progress-Verlauf bleibt bei maximal 720 Samples; zusätzlich werden höchstens 300 grobe A/M/C/E-Zählersnapshots ohne Dateipfade gehalten. Der persistente ETA-Frontier ist ein einzelnes kleines JSON-Objekt pro Job und wächst nicht mit Laufzeit oder Dateianzahl.
+
+## v1.0.97 – 27.07.2026
+
+### Konservativere Langzeit-ETA und kompakter Live-Block
+
+- Die Langzeitrate der adaptiven ETA wird jetzt aus den gesamten `O`-/`N`-Zählern des aktuell laufenden Jobs und dessen bisheriger Laufzeit gebildet. Der begrenzte Rolling-Puffer kann bei langen Backups dadurch nicht mehr den Stundenverlauf durch nur wenige schnelle Minuten ersetzen.
+- Kurzfristige Verlangsamungen dürfen die ETA weiterhin schnell erhöhen. Kurzfristige Beschleunigungen werden dagegen asymmetrisch begrenzt und müssen sich erst im Gesamtverlauf bestätigen. Ein schneller Scan unveränderter beziehungsweise gecachter Dateien kann eine noch mehrere TiB große Restmenge damit nicht mehr auf wenige Minuten Restzeit drücken.
+- Stark über dem bisherigen Laufmittel liegende aktuelle `O`-/`N`-Raten reduzieren zusätzlich die Schätzqualität. Netzwerkdurchsatz und alte Gesamtlaufzeiten bleiben weiterhin bewusst außerhalb der eigentlichen ETA.
+- Die ETA benötigt keinen wachsenden Langzeitverlauf im RAM. Der bereits vorhandene Progress-Puffer bleibt hart auf 720 Prozess-Samples pro laufendem Job begrenzt; die neue Langzeitrate selbst benötigt keinen zusätzlichen Verlauf und verursacht damit keinen laufzeitabhängigen Speicherzuwachs.
+- Im Live-Block heißt die Anzeige jetzt **Restzeitschätzung**. `hoch`, `mittel` oder `niedrig` steht kompakt direkt neben dem Zeitwert. Die separate Zeile **Schätzqualität** und die beiden erklärenden Hinweistexte unter dem Block entfallen.
+
+## v1.0.96 – 27.07.2026
+
+### Adaptive Current-Run-ETA und präziser Protokollschutz
+
+- Die Live-Ansicht verwendet jetzt eine **adaptive Current-Run-ETA**. Grundlage sind ausschließlich Messwerte des aktuell laufenden Borg-Backups: `O` (Originaldaten), `N` (Dateien) und die Veränderung von `D` (deduplizierte/neue Daten), geglättet über kurze und mittlere Zeitfenster. Netzwerkdurchsatz und pauschale Gesamtlaufzeiten früherer Backups werden bewusst nicht in die ETA eingerechnet.
+- Quellenstatistiken werden für die ETA **pro konfiguriertem Quellpfad** gespeichert. Der bevorzugte manuelle Live-Scan berücksichtigt Borg-Ausschlussmuster, `--exclude-caches`, `--exclude-nodump` und `--one-file-system`. Nicht sicher nachbildbare Muster führen zu einer als eingeschränkt gekennzeichneten Statistik statt zu falscher Präzision.
+- Nach einem erfolgreichen beziehungsweise mit Warnung abgeschlossenen Backup kann BBM die im aktuellen Borg-Progress beobachtete Verteilung auf die einzelnen Quellpfade speichern und an Borgs exakte Abschlusswerte skalieren. Die hochfrequenten ETA-Messpunkte selbst bleiben ausschließlich im Arbeitsspeicher und vergrößern weder SQLite noch die Ausführungsprotokolle.
+- Die Restzeit wird aus Daten- und Dateirate kombiniert. Die Live-Ansicht zeigt je nach Stabilität einen Einzelwert oder einen Zeitbereich sowie **Schätzqualität** und **aktuelle Quelle**. Starke Änderungen des `D/O`-Verhältnisses senken die Qualität und gewichten die jüngste aktuelle Rate stärker.
+- Überschreitet ein laufendes Backup eine gespeicherte Größen- oder Dateibasis, verwirft BBM diese veraltete Dimension. Werden beide bekannten Gesamtwerte überschritten, bleibt die ETA bewusst „noch nicht schätzbar“, statt fälschlich 100 % beziehungsweise 0 Minuten anzuzeigen.
+- Der Aufbewahrungsschutz wurde präzisiert: **„Letzter Stand geschützt“ gilt nur noch für den neuesten erfolgreichen oder mit Warnung abgeschlossenen Backup-Lauf eines noch vorhandenen Jobs.** Fehlgeschlagene, abgebrochene oder anderweitig nicht erfolgreich abgeschlossene Backup-Läufe unterliegen wieder der normalen Aufbewahrungsfrist und können einzeln gelöscht werden.
+
 ## v1.0.95 – 27.07.2026
 
 ### Konsistenter Protokollschutz, bis zu fünf Kopfzeilen-Interfaces und Session-Timeout

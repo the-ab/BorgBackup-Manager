@@ -107,6 +107,7 @@ class Job(Base):
     source_file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_stats_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_stats_origin: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    source_stats_detail_json: Mapped[str] = mapped_column(Text, default="{}")
     host: Mapped[Host] = relationship()
     repository: Mapped[Repository] = relationship()
 
@@ -170,6 +171,8 @@ class Run(Base):
     backup_compressed_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backup_deduplicated_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backup_file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    backup_source_size_bytes_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    backup_source_file_count_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backup_network_download_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backup_network_upload_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

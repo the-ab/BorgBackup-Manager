@@ -129,7 +129,7 @@ def test_job_list_shows_refreshable_source_statistics():
     assert "Quellenstatistik:" in javascript
     assert "'source-stats'" in javascript
     assert "source_file_count" in javascript
-    assert "Live-Scan vor Ausschlüssen" in javascript
+    assert "Ausschlussbereinigter Quellen-Scan" in javascript
 
 
 def test_job_list_has_direct_edit_button_before_more_actions():
@@ -159,6 +159,12 @@ def test_live_backup_progress_widget_is_present_and_lightweight():
     assert 'run.backup_progress' in script
     assert 'estimated_eta_seconds' in script
     assert 'backup-progress-grid' in style
+    assert 'Restzeitschätzung' in script
+    assert 'backup-estimate-quality' not in script
+    assert 'Adaptive Schätzung aus dem aktuellen Lauf' not in script
+    assert 'assumedInterface = Number(progress.estimate_assumed_interface_gbps || 1)' in script
+    assert 'assumedUtilization' in script
+    assert 'current_source_percent' not in script
 
 
 def test_live_dialog_exposes_manager_network_and_direct_stop_controls():

@@ -168,13 +168,13 @@ function runActionLabel(action) {
     backup: 'Backup', 'diff-archives': 'Compare archives', restore: 'Restore',
     prune: 'Retention', compact: 'Compact', check: 'Repository check',
     verify: 'Full verification', info: 'Job info', probe: 'Connection test',
-    'source-stats': 'Source statistics', 'delete-archive': 'Delete archive',
+    'source-stats': 'Source statistics', 'delete-archive': 'Delete archive', 'archive-refresh': 'Read archive list',
     'rename-archive': 'Rename archive', version: 'Borg version', 'ssh-command': 'SSH action',
   } : {
     backup: 'Backup', 'diff-archives': 'Archive vergleichen', restore: 'Wiederherstellung',
     prune: 'Aufbewahrung', compact: 'Compact', check: 'Repository-Prüfung',
     verify: 'Vollprüfung', info: 'Job-Info', probe: 'Verbindungstest',
-    'source-stats': 'Quellenstatistik', 'delete-archive': 'Archiv löschen',
+    'source-stats': 'Quellenstatistik', 'delete-archive': 'Archiv löschen', 'archive-refresh': 'Archivliste einlesen',
     'rename-archive': 'Archiv umbenennen', version: 'Borg-Version', 'ssh-command': 'SSH-Aktion',
   };
   return labels[action] || action || (currentLanguage() === 'en' ? 'Run' : 'Ausführung');
@@ -738,7 +738,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.95`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.1.1`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -781,7 +781,7 @@ function runRow(run) {
   const runTitle = admin
     ? `<button class="entity-link" ${bbmAction('showRun', run.id)}>#${run.id} · ${esc(subject)}</button>`
     : `<b>#${run.id} · ${esc(subject)}</b>`;
-  const protectedHint = run.retention_protected ? '<span class="muted retention-protected" title="Letzter relevanter Backup-Stand dieses vorhandenen Jobs; nur über Alle Protokolle löschen entfernbar.">Letzter Stand geschützt</span>' : '';
+  const protectedHint = run.retention_protected ? '<span class="muted retention-protected" title="Neuester erfolgreicher oder mit Warnung abgeschlossener Backup-Stand dieses vorhandenen Jobs; nur über Alle Protokolle löschen entfernbar.">Letzter Stand geschützt</span>' : '';
   const actions = admin
     ? `<div class="table-actions"><button class="secondary" ${bbmAction('showRun', run.id)}>${active ? 'Live-Log' : 'Details'}</button>${active ? `<button class="danger" ${bbmAction('cancelExecution', run.id)}>Stoppen</button>` : `${run.job_id ? `<button class="secondary" ${bbmAction('retryExecution', run.id)}>Wiederholen</button>` : ''}${run.retention_protected ? protectedHint : `<button class="danger ghost" ${bbmAction('deleteExecution', run.id)}>Löschen</button>`}`}</div>`
     : '<span class="muted">Nur Ansicht</span>';
@@ -1027,15 +1027,18 @@ function syncRunFilterControls() {
 
 function sourceStatsLine(job, refreshable = false) {
   const hasStats = job.source_size_bytes != null || job.source_file_count != null;
-  const sourceLabel = job.source_stats_origin === 'scan' ? 'Live-Scan vor Ausschlüssen' : 'Letztes Backup';
+  const sourceLabel = job.source_stats_origin === 'scan' ? 'Ausschlussbereinigter Quellen-Scan' : 'Letztes Backup';
   const values = hasStats
     ? `${formatBytes(job.source_size_bytes)} · ${job.source_file_count == null ? '–' : Number(job.source_file_count).toLocaleString(currentLocale())} Dateien`
     : 'noch nicht ermittelt';
   const checked = job.source_stats_checked_at ? formatDate(job.source_stats_checked_at) : '–';
+  const sourceCount = Array.isArray(job.source_stats_by_path) ? job.source_stats_by_path.length : 0;
+  const quality = job.source_stats_quality === 'high' ? 'Qualität hoch' : job.source_stats_quality === 'observed' ? 'aus letztem Borg-Lauf beobachtet' : job.source_stats_quality === 'partial' ? 'Qualität eingeschränkt' : '';
+  const detail = [sourceLabel, checked, sourceCount ? `${sourceCount} Quelle${sourceCount === 1 ? '' : 'n'}` : '', quality].filter(Boolean).join(' · ');
   const refresh = refreshable && state.currentUser?.role === 'admin'
     ? `<button type="button" class="inline-action" ${bbmAction('action', job.id, 'source-stats')}>Aktualisieren</button>`
     : '';
-  return `<span class="source-stat-line"><span class="source-stat-copy"><span><b>Quellenstatistik:</b> ${values}</span><small>${hasStats ? `${sourceLabel} · ${esc(checked)}` : 'Noch keine Quellenstatistik gespeichert'}</small></span>${refresh}</span>`;
+  return `<span class="source-stat-line"><span class="source-stat-copy"><span><b>Quellenstatistik:</b> ${values}</span><small>${hasStats ? esc(detail) : 'Noch keine Quellenstatistik gespeichert'}</small></span>${refresh}</span>`;
 }
 
 function dashboardJobTable(jobs) {
@@ -2701,6 +2704,10 @@ function renderBackupProgress(run, active) {
   const totalBytes = progress.estimated_total_bytes == null ? null : Number(progress.estimated_total_bytes);
   const percent = progress.estimated_percent == null ? null : Number(progress.estimated_percent);
   const eta = progress.estimated_eta_seconds == null ? null : Number(progress.estimated_eta_seconds);
+  const baselineExceeded = Boolean(progress.estimate_baseline_exceeded);
+  const assumedInterface = Number(progress.estimate_assumed_interface_gbps || 1);
+  const assumedUtilization = Number(progress.estimate_assumed_utilization_percent || 80);
+  const fileFactor = Number(progress.estimate_file_factor || 1);
   const filesLabel = totalFiles && totalFiles > 0
     ? `${files.toLocaleString(currentLocale())} / ~${totalFiles.toLocaleString(currentLocale())}`
     : files.toLocaleString(currentLocale());
@@ -2710,19 +2717,17 @@ function renderBackupProgress(run, active) {
   const percentLabel = Number.isFinite(percent)
     ? `${percent.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} %`
     : (english ? 'running' : 'läuft');
-  const etaLabel = Number.isFinite(eta) && eta >= 0
-    ? `${english ? 'approx.' : 'ca.'} ${formatDuration(eta)}`
-    : (english ? 'not estimable yet' : 'noch nicht schätzbar');
-  const basis = progress.estimate_basis === 'scan'
-    ? (english ? 'last source scan' : 'letzter Quellenprüfung')
-    : (english ? 'last completed backup' : 'letztem abgeschlossenen Backup');
-  const hint = (totalFiles || totalBytes)
-    ? (english
-      ? `Estimate based on the ${basis}; changed file counts and sizes can make the percentage and remaining time differ.`
-      : `Schätzung auf Basis der ${basis}; geänderte Datei-Anzahl und Datenmenge können Prozentwert und Restzeit beeinflussen.`)
-    : (english
-      ? 'No previous source statistics are available yet; Borg still reports the processed file count and data volumes live.'
-      : 'Noch keine frühere Quellenstatistik vorhanden; Borg liefert Dateizähler und Datenmengen trotzdem live.');
+  let etaLabel = totalBytes && totalBytes > 0
+    ? (english ? 'not calculable' : 'nicht berechenbar')
+    : (english ? 'no source baseline' : 'keine Quellenbasis');
+  if (baselineExceeded) {
+    etaLabel = english ? 'source baseline exceeded' : 'Quellenbasis überschritten';
+  } else if (Number.isFinite(eta) && eta >= 0) {
+    etaLabel = `${english ? 'approx.' : 'ca.'} ${formatDuration(eta)}`;
+  }
+  const etaTitle = english
+    ? `Calculated from the frozen source baseline. Assumption: ${assumedInterface.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} Gbit/s interface × ${assumedUtilization.toLocaleString(currentLocale(), {maximumFractionDigits: 0})}% usable throughput${fileFactor > 1 ? `; file factor ×${fileFactor.toLocaleString(currentLocale(), {maximumFractionDigits: 2})}` : ''}.`
+    : `Berechnet aus der beim Start eingefrorenen Quellenbasis. Annahme: ${assumedInterface.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} Gbit/s Interface × ${assumedUtilization.toLocaleString(currentLocale(), {maximumFractionDigits: 0})} % nutzbarer Durchsatz${fileFactor > 1 ? `; Dateifaktor ×${fileFactor.toLocaleString(currentLocale(), {maximumFractionDigits: 2})}` : ''}.`;
   const progressTag = Number.isFinite(percent)
     ? `<progress max="100" value="${Math.max(0, Math.min(100, percent))}"></progress>`
     : '<progress max="100"></progress>';
@@ -2746,12 +2751,12 @@ function renderBackupProgress(run, active) {
       <div><span>${english ? 'Original' : 'Original'}</span><strong>${esc(originalLabel)}</strong></div>
       <div><span>${english ? 'Compressed' : 'Komprimiert'}</span><strong>${esc(formatBytes(progress.compressed_bytes))}</strong></div>
       <div><span>${english ? 'Deduplicated' : 'Dedupliziert'}</span><strong>${esc(formatBytes(progress.deduplicated_bytes))}</strong></div>
-      <div><span>${english ? 'Remaining' : 'Restzeit'}</span><strong>${esc(etaLabel)}</strong></div>
+      <div class="backup-progress-eta"><span>${english ? 'Remaining estimate' : 'Restzeitschätzung'}</span><strong title="${esc(etaTitle)}">${esc(etaLabel)}</strong></div>
     </div>
     <div class="backup-item-statuses" aria-label="${english ? 'Borg item status counters' : 'Borg-Dateistatus-Zähler'}">${statusRow}</div>
+    ${progress.current_source ? `<div class="backup-progress-path"><span>${english ? 'Current source' : 'Aktuelle Quelle'}</span><code data-i18n-skip title="${esc(progress.current_source)}">${esc(progress.current_source)}</code></div>` : ''}
     <div class="backup-progress-path"><span>${english ? 'Currently processing' : 'Aktuell verarbeitet'}</span><code data-i18n-skip title="${esc(progress.path || '')}">${esc(progress.path || '–')}</code></div>
-    ${lastStatus}
-    <small>${esc(hint)}</small>`;
+    ${lastStatus}`;
 }
 
 function renderRunDialog(run, {appendLog = false} = {}) {
@@ -3402,21 +3407,50 @@ async function loadArchives(options = {}) {
   localStorage.setItem('bbm-archive-repository', String(repositoryId));
   localStorage.setItem('bbm-archive-checkpoints', considerCheckpoints ? '1' : '0');
   const requestId = ++state.archiveRequestId;
-  const button = options.force === true ? $('#refresh-archives') : $('#load-archives');
-  const otherButton = options.force === true ? $('#load-archives') : $('#refresh-archives');
+  const forceRefresh = options.force === true;
+  const button = forceRefresh ? $('#refresh-archives') : $('#load-archives');
+  const otherButton = forceRefresh ? $('#load-archives') : $('#refresh-archives');
   const silent = options.silent === true;
   button.disabled = true;
   otherButton.disabled = true;
-  button.textContent = options.force === true ? 'Repository wird eingelesen …' : (silent ? 'Wird aktualisiert …' : 'Archive werden angezeigt …');
+  button.textContent = forceRefresh ? 'Repository-Scan wird eingereiht …' : (silent ? 'Wird aktualisiert …' : 'Archive werden angezeigt …');
   $('#archive-error').classList.add('hidden');
   $('#archive-error').textContent = '';
-  if (!state.archiveData) $('#archive-list').innerHTML = '<div class="empty">Archive werden geladen …</div>';
-  else $('#archive-summary').textContent = 'Archivliste wird manuell aktualisiert …';
+  if (!state.archiveData && !forceRefresh) $('#archive-list').innerHTML = '<div class="empty">Archiv-Zwischenspeicher wird geladen …</div>';
+  else if (!forceRefresh) $('#archive-summary').textContent = 'Archivliste wird aus dem Zwischenspeicher geladen …';
   try {
-    const forceRefresh = options.force === true;
-    const result = await api(`/repositories/${repositoryId}/archives?consider_checkpoints=${considerCheckpoints}&force_refresh=${forceRefresh}`);
+    if (forceRefresh) {
+      const result = await api(`/repositories/${repositoryId}/archives/refresh?consider_checkpoints=${considerCheckpoints}`, {method: 'POST'});
+      if (requestId !== state.archiveRequestId) return;
+      $('#archive-summary').textContent = `Repository wird als Ausführung #${result.run_id} eingelesen. Die vorhandene Archivliste bleibt währenddessen verfügbar.`;
+      watchRunCompletion(result.run_id, {
+        areas: ['dashboard', 'runs', 'repositories'],
+        repositoryId,
+        refreshArchives: true,
+      });
+      toast(`Archivscan #${result.run_id} eingereiht`);
+      showRun(result.run_id);
+      return;
+    }
+
+    const result = await api(`/repositories/${repositoryId}/archives?consider_checkpoints=${considerCheckpoints}`);
     if (requestId !== state.archiveRequestId) return;
     state.archiveData = result;
+    if (result.archive_cache_missing) {
+      state.archiveSelection = new Set();
+      state.activeBrowser = null;
+      state.browserSelection = new Set();
+      $('#archive-browser-panel').classList.add('hidden');
+      $('#archive-summary').textContent = 'Noch keine gespeicherte Archivliste vorhanden.';
+      $('#archive-list').innerHTML = '<div class="empty">„Neu aus Repository einlesen“ startet den Repository-Scan als Hintergrund-Ausführung. Auch große Repositorys bleiben dadurch unabhängig vom HTTP-Timeout.</div>';
+      $('#archive-diff-first').innerHTML = '<option value="">Noch keine Archivliste</option>';
+      $('#archive-diff-second').innerHTML = '<option value="">Noch keine Archivliste</option>';
+      $('#archive-device-filter').innerHTML = '<option value="">Alle Geräte / alle Archive</option>';
+      $('#archive-device-filter').disabled = true;
+      $('#compare-archives').disabled = true;
+      updateArchiveSelectionControls([]);
+      return;
+    }
     renderArchives();
   } catch (error) {
     if (requestId !== state.archiveRequestId) return;
@@ -3428,7 +3462,7 @@ async function loadArchives(options = {}) {
     if (requestId === state.archiveRequestId) {
       button.disabled = false;
       otherButton.disabled = false;
-      button.textContent = options.force === true ? 'Neu aus Repository einlesen' : 'Archive anzeigen';
+      button.textContent = forceRefresh ? 'Neu aus Repository einlesen' : 'Archive anzeigen';
     }
   }
 }

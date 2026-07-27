@@ -677,6 +677,8 @@ class JobOut(JobIn):
     source_file_count: int | None = None
     source_stats_checked_at: datetime | None = None
     source_stats_origin: str | None = None
+    source_stats_by_path: list[dict[str, Any]] = Field(default_factory=list)
+    source_stats_quality: str | None = None
 
 
 class BackupScheduleIn(BaseModel):

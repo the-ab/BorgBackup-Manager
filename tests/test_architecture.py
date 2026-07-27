@@ -672,7 +672,10 @@ def test_archive_cache_is_regenerable_and_ui_exposes_explicit_repository_refresh
     assert "/data/archive-cache" in entrypoint
     assert "--exclude='./archive-cache'" in update
     assert 'id="refresh-archives"' in html
-    assert "force_refresh=${forceRefresh}" in javascript
+    assert "/archives/refresh?consider_checkpoints=" in javascript
+    assert "{method: 'POST'}" in javascript
+    assert "force_refresh=${forceRefresh}" not in javascript
+    assert "execute_repository_archive_refresh" in service
     assert "invalidate_archive_cache(repository_id)" in service
 
 

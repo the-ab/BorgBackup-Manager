@@ -887,7 +887,8 @@ def test_source_stats_command_uses_repository_independent_live_scan(job):
     command = source_stats_command(job)
     assert "BBM_SOURCE_STATS_JSON" in command.preview
     assert "Live-Scan" in command.preview
-    assert "vor Borg-Ausschlüssen" in command.preview
+    assert "Borg-Pfadausschlüsse" in command.preview
+    assert "python-borg-excludes" in command.preview
     assert "borg --lock-wait" not in command.preview
     assert "--dry-run --stats" not in command.preview
     assert command.stdin_controlled_cancel is True
@@ -922,6 +923,39 @@ def test_source_stats_live_scan_counts_files_without_repository_access(job, tmp_
     assert payload["file_count"] == 3
     assert payload["size_bytes"] == 8
 
+
+
+def test_source_stats_live_scan_applies_excludes_and_reports_each_source(job, tmp_path):
+    from app.runner import source_stats_command
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir(); second.mkdir()
+    (first / "keep.bin").write_bytes(b"12345")
+    (first / "skip.tmp").write_bytes(b"x" * 20)
+    (second / "keep.txt").write_bytes(b"abc")
+    cache_dir = second / "cache"; cache_dir.mkdir()
+    (cache_dir / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55")
+    (cache_dir / "large.bin").write_bytes(b"x" * 100)
+    job.source_paths_json = json.dumps([str(first), str(second)])
+    # Borg archive paths are absolute paths without the leading slash.
+    job.exclude_patterns_json = json.dumps([f"pf:{str(first / 'skip.tmp').lstrip('/')}"])
+
+    command = source_stats_command(job)
+    remote_parts = shlex.split(command.preview.split(" -- ", 1)[1])
+    result = subprocess.run(remote_parts, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    marker = next(line for line in result.stdout.splitlines() if line.startswith("BBM_SOURCE_STATS_JSON="))
+    payload = json.loads(marker.split("=", 1)[1])
+    assert payload["quality"] == "high"
+    assert payload["size_bytes"] == 8
+    assert payload["file_count"] == 2
+    assert payload["excluded_size_bytes"] == 20
+    assert payload["sources"] == [
+        {"path": str(first), "size_bytes": 5, "file_count": 1},
+        {"path": str(second), "size_bytes": 3, "file_count": 1},
+    ]
 
 def test_archive_browser_command_requests_owner_and_mode(job):
     from app.runner import browse_archive_command

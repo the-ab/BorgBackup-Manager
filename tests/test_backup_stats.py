@@ -39,15 +39,16 @@ def test_parse_source_scan_statistics_from_mixed_remote_output():
 BBM_SOURCE_STATS_JSON={"size_bytes":12345,"file_count":17,"warning_count":1,"method":"python-lstat"}
 ERGEBNIS: Quellenstatistik mit Warnungen aktualisiert.
 """
-    assert parse_source_scan_statistics(raw) == {
-        "original_size_bytes": 12345,
-        "file_count": 17,
-        "scan_method": "python-lstat",
-        "warning_count": 1,
-        "skipped_mount_count": 0,
-        "skipped_mounts": [],
-        "included_mount_count": 0,
-    }
+    stats = parse_source_scan_statistics(raw)
+    assert stats["original_size_bytes"] == 12345
+    assert stats["file_count"] == 17
+    assert stats["scan_method"] == "python-lstat"
+    assert stats["warning_count"] == 1
+    assert stats["skipped_mount_count"] == 0
+    assert stats["skipped_mounts"] == []
+    assert stats["included_mount_count"] == 0
+    assert stats["sources"] == []
+    assert stats["quality"] == "partial"
 
 
 def test_invalid_source_scan_marker_is_ignored():

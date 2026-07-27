@@ -31,10 +31,11 @@ from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 
-from app.archive_cache import invalidate_archive_cache, load_archive_cache, store_archive_cache
+from app.archive_cache import invalidate_archive_cache, load_archive_cache
 from app.archive_metadata import annotate_archive_devices, infer_archive_device, sort_archives_newest_first
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
-from app.borg_progress import get_run_item_activity, get_run_network_activity, get_run_progress
+from app.borg_progress import get_run_item_activity, get_run_network_activity, get_run_progress, get_run_progress_history
+from app.backup_eta import estimate_fixed_baseline_remaining, parse_source_detail
 from app.manager_backup_progress import begin_task as begin_manager_backup_task, current_task as current_manager_backup_task, fail_task as fail_manager_backup_task, finish_task as finish_manager_backup_task, get_task as get_manager_backup_task, update_task as update_manager_backup_task
 from app.borg_warnings import (
     parse_borg_warnings,
@@ -43,7 +44,7 @@ from app.borg_warnings import (
     warning_summary_from_json,
 )
 from app.backup_stats import parse_backup_statistics
-from app.borg_stats import load_borg_json_document, merge_archive_statistics, parse_borg_info
+from app.borg_stats import parse_archive_listing, parse_borg_info
 from app.config import (
     BACKUP_DIR,
     BACKUP_MAX_FILE_BYTES,
@@ -107,7 +108,6 @@ from app.runner import (
     repository_size_command,
     repository_list_command,
     repository_archive_info_command,
-    repository_archives_info_command,
     repository_browse_archive_command,
     job_archive_prefixes,
     manager_borg_argv,
@@ -203,6 +203,7 @@ from app.service import (
     queue_manual_backup,
     queue_host_ssh_action,
     queue_repository_action,
+    queue_repository_archive_refresh,
     queue_repository_init,
     refresh_external_repository_storage,
     reset_managed_repository_state,
@@ -220,7 +221,6 @@ VERSION_FILE = Path(__file__).parent.parent / "VERSION"
 APP_VERSION = VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.is_file() else "0.0.0"
 scheduler = AsyncIOScheduler(timezone=APP_TIMEZONE)
 UPDATE_CHECK_JOB_ID = "github-release-check"
-_archive_cache_locks: dict[tuple[int, int, bool], asyncio.Lock] = {}
 
 
 def _forwarded_request_scheme(request: Request) -> str:
@@ -258,16 +258,6 @@ def _delete_session_cookie(response: Response, request: Request) -> None:
             httponly=True,
             samesite="strict",
         )
-
-
-def _archive_cache_lock(repository_id: int, consider_checkpoints: bool) -> asyncio.Lock:
-    loop = asyncio.get_running_loop()
-    key = (id(loop), int(repository_id), bool(consider_checkpoints))
-    lock = _archive_cache_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _archive_cache_locks[key] = lock
-    return lock
 
 
 def host_out(row: Host) -> HostOut:
@@ -499,6 +489,8 @@ def job_out(
         source_file_count=row.source_file_count,
         source_stats_checked_at=row.source_stats_checked_at,
         source_stats_origin=row.source_stats_origin,
+        source_stats_by_path=parse_source_detail(getattr(row, "source_stats_detail_json", "{}" )).get("sources", []),
+        source_stats_quality=parse_source_detail(getattr(row, "source_stats_detail_json", "{}" )).get("quality"),
     )
 
 
@@ -593,45 +585,6 @@ def managed_repository_candidates(*, max_depth: int = 6, max_directories: int = 
                 queue.append((child, depth + 1))
     return candidates
 
-
-def parse_archive_listing(output: str) -> list[dict]:
-    try:
-        payload = load_borg_json_document(output, expected_keys={"archives"})
-    except json.JSONDecodeError as exc:
-        raise ValueError("Borg returned an invalid archive list") from exc
-    archives = payload.get("archives", []) if isinstance(payload, dict) else []
-    if not isinstance(archives, list):
-        raise ValueError("Borg archive list has an unexpected structure")
-    result: list[dict] = []
-    for item in archives:
-        if not isinstance(item, dict) or not item.get("name"):
-            continue
-        start_value = normalize_borg_timestamp(item.get("start") or item.get("time"))
-        end_value = normalize_borg_timestamp(item.get("end"))
-        duration = item.get("duration") if isinstance(item.get("duration"), (int, float)) else None
-        if duration is None and isinstance(start_value, str) and isinstance(end_value, str):
-            try:
-                start_dt = datetime.fromisoformat(start_value.replace("Z", "+00:00"))
-                end_dt = datetime.fromisoformat(end_value.replace("Z", "+00:00"))
-                duration = max(0.0, (end_dt - start_dt).total_seconds())
-            except (ValueError, TypeError):
-                duration = None
-        result.append({
-            "name": str(item["name"]),
-            "id": item.get("id"),
-            "start": start_value,
-            "end": end_value,
-            "duration": duration,
-            "hostname": item.get("hostname"),
-            "username": item.get("username"),
-            "comment": item.get("comment") or "",
-            "nfiles": item.get("nfiles"),
-            "original_size": item.get("original_size"),
-            "compressed_size": item.get("compressed_size"),
-            "deduplicated_size": item.get("deduplicated_size"),
-            "checkpoint": bool(re.search(r"\.checkpoint(?:\.\d+)?$", str(item["name"]))),
-        })
-    return sort_archives_newest_first(result)
 
 
 def load_job_with_connections(db, job_id: int, require_client_access: bool = True) -> Job:
@@ -805,6 +758,7 @@ def apply_job(row: Job, data: JobIn) -> None:
         row.source_file_count = None
         row.source_stats_checked_at = None
         row.source_stats_origin = None
+        row.source_stats_detail_json = "{}"
 
 
 def repair_invalid_stored_borg_versions() -> int:
@@ -876,26 +830,16 @@ def allocate_job_id(db) -> int:
 
 
 def retained_run_ids_for_existing_jobs(db) -> set[int]:
-    """Return completed backup runs that must survive normal retention cleanup.
+    """Return reliable backup runs that must survive normal retention cleanup.
 
-    For each currently existing job we keep the newest completed backup so the
-    "last run" display remains available.  If the newest backup failed or was
-    cancelled, we additionally keep the newest successful/warning backup so the
-    last-backup size statistics remain available.  Deleted jobs are naturally
+    For each currently existing job only the newest successful or warning
+    backup is retained. Failed, cancelled or otherwise aborted runs are useful
+    history, but they are not a reliable source/size baseline and therefore
+    remain subject to the normal retention policy. Deleted jobs are naturally
     excluded because their historical runs have job_id=NULL.
     """
     existing_job_ids = select(Job.id).join(Host, Host.id == Job.host_id)
-    finished = Run.status.notin_(["queued", "running"])
-    latest_backup_ids = list(db.scalars(
-        select(func.max(Run.id))
-        .where(
-            Run.action == "backup",
-            Run.job_id.in_(existing_job_ids),
-            finished,
-        )
-        .group_by(Run.job_id)
-    ))
-    latest_successful_ids = list(db.scalars(
+    retained_ids = db.scalars(
         select(func.max(Run.id))
         .where(
             Run.action == "backup",
@@ -903,8 +847,8 @@ def retained_run_ids_for_existing_jobs(db) -> set[int]:
             Run.status.in_(["success", "warning"]),
         )
         .group_by(Run.job_id)
-    ))
-    return {int(run_id) for run_id in (*latest_backup_ids, *latest_successful_ids) if run_id is not None}
+    )
+    return {int(run_id) for run_id in retained_ids if run_id is not None}
 
 
 def _clear_retained_job_statistics(db) -> None:
@@ -914,6 +858,7 @@ def _clear_retained_job_statistics(db) -> None:
         job.source_file_count = None
         job.source_stats_checked_at = None
         job.source_stats_origin = None
+        job.source_stats_detail_json = "{}"
 
 
 def cleanup_run_history(days: int | None = None, *, all_finished: bool = False) -> int:
@@ -1125,6 +1070,7 @@ def recover_interrupted_runs() -> None:
         db.commit()
 
 
+
 async def system_health_watch_loop() -> None:
     """Watch core health independently from APScheduler.
 
@@ -1153,7 +1099,6 @@ async def lifespan(_: FastAPI):
     # Build a fresh instance for every application lifecycle so reloads and
     # clean restarts never reuse a scheduler attached to a closed loop.
     scheduler = AsyncIOScheduler(timezone=APP_TIMEZONE)
-    _archive_cache_locks.clear()
     Base.metadata.create_all(engine)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     migrate_schema()
@@ -1193,7 +1138,6 @@ async def lifespan(_: FastAPI):
             pass
         scheduler.shutdown(wait=False)
         loop.set_exception_handler(previous_exception_handler)
-        _archive_cache_locks.clear()
 
 
 app = FastAPI(title="BorgBackup Manager", version=APP_VERSION, lifespan=lifespan)
@@ -3067,7 +3011,12 @@ async def _repository_archive_dataset(
     repository_id: int, *, consider_checkpoints: bool = False, force_refresh: bool = False,
     allow_unvalidated_external: bool = False,
 ) -> tuple[dict, list[Job], str, str | None]:
-    """Return the full repository archive dataset, preferably from persistent cache."""
+    """Return only the persistent archive cache; never scan Borg in an HTTP request.
+
+    Large repositories can take many minutes to enumerate. Repository scans are
+    queued separately through ``/archives/refresh`` so reverse proxies cannot
+    terminate the operation with HTTP 504 while Borg is still working.
+    """
     with SessionLocal() as db:
         repository = db.get(Repository, repository_id) if allow_unvalidated_external else load_repository_with_access(db, repository_id)
         if not repository:
@@ -3076,57 +3025,33 @@ async def _repository_archive_dataset(
             select(Job).options(joinedload(Job.host)).where(Job.repository_id == repository_id)
         ))
 
-    if not force_refresh:
-        cached = load_archive_cache(repository_id, consider_checkpoints)
-        if cached:
-            return copy.deepcopy(cached["data"]), repository_jobs, "cache", cached.get("generated_at")
+    if force_refresh:
+        raise HTTPException(
+            409,
+            "Repository-Archivscan muss über die asynchrone Aktualisierung gestartet werden",
+        )
+    cached = load_archive_cache(repository_id, consider_checkpoints)
+    if cached:
+        return copy.deepcopy(cached["data"]), repository_jobs, "cache", cached.get("generated_at")
+    return {"repository_statistics": {}, "archives": []}, repository_jobs, "missing", None
 
-    async with _archive_cache_lock(repository_id, consider_checkpoints):
-        # A second request may have waited while the first request populated the
-        # persistent cache.  Recheck before starting another expensive Borg scan.
-        if not force_refresh:
-            cached = load_archive_cache(repository_id, consider_checkpoints)
-            if cached:
-                return copy.deepcopy(cached["data"]), repository_jobs, "cache", cached.get("generated_at")
 
-        info_command = repository_archives_info_command(repository)
-        list_command = repository_list_command(repository, consider_checkpoints=consider_checkpoints)
-        info_code, info_output, info_error = await execute_interactive(repository_id, info_command)
-        if info_code not in {0, 1}:
-            summary, _details = compact_repository_diagnostic(info_output, info_error, info_code)
-            raise HTTPException(400, summary)
-        try:
-            normalized = parse_borg_info(info_output + "\n" + info_error)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        repository_statistics = normalized.get("repository", {})
-        archives = normalized.get("archives", [])
 
-        # Borg info contains the detailed statistics used by the compact archive
-        # rows. A list call is only necessary for checkpoints or compatibility
-        # fallbacks where Borg did not return an archive array.
-        if consider_checkpoints or not archives:
-            code, output, error = await execute_interactive(repository_id, list_command)
-            if code not in {0, 1}:
-                summary, _details = compact_repository_diagnostic(output, error, code)
-                raise HTTPException(400, summary)
-            try:
-                listed = parse_archive_listing(output + "\n" + error)
-            except ValueError as exc:
-                raise HTTPException(400, str(exc)) from exc
-            archives = merge_archive_statistics(listed, archives)
-
-        archives = sort_archives_newest_first(archives)
-        dataset = {"repository_statistics": repository_statistics, "archives": archives}
-        cached = store_archive_cache(repository_id, consider_checkpoints, dataset)
-        if repository_statistics.get("deduplicated_size") is not None:
-            store_repository_statistics(
-                repository_id,
-                original_size=repository_statistics.get("original_size"),
-                compressed_size=repository_statistics.get("compressed_size"),
-                deduplicated_size=repository_statistics.get("deduplicated_size"),
-            )
-        return copy.deepcopy(dataset), repository_jobs, "repository", cached.get("generated_at")
+@app.post("/api/repositories/{repository_id}/archives/refresh", status_code=202, dependencies=admin_protected)
+async def refresh_repository_archives(repository_id: int, consider_checkpoints: bool = False) -> dict:
+    """Queue a repository archive scan and return immediately."""
+    try:
+        run_id = queue_repository_archive_refresh(repository_id, consider_checkpoints)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {
+        "status": "queued",
+        "repository_id": repository_id,
+        "consider_checkpoints": bool(consider_checkpoints),
+        "run_id": run_id,
+    }
 
 
 @app.get("/api/repositories/{repository_id}/archives", dependencies=admin_protected)
@@ -3148,6 +3073,7 @@ async def list_repository_archives(
         "archives": archives,
         "archive_cache_source": cache_source,
         "archive_cache_updated_at": cache_updated_at,
+        "archive_cache_missing": cache_source == "missing",
     }
 
 
@@ -3292,6 +3218,7 @@ async def list_job_archives(
         "archives": archives,
         "archive_cache_source": cache_source,
         "archive_cache_updated_at": cache_updated_at,
+        "archive_cache_missing": cache_source == "missing",
     }
 
 
@@ -3770,27 +3697,46 @@ def run_json(
     if row.action == "backup" and active:
         progress = get_run_progress(row.id)
         if progress:
-            estimated_files = row.job.source_file_count if row.job else None
-            estimated_bytes = row.job.source_size_bytes if row.job else None
-            progress_ratio = None
-            if estimated_bytes and estimated_bytes > 0 and progress["original_bytes"] >= 0:
-                progress_ratio = progress["original_bytes"] / estimated_bytes
-            elif estimated_files and estimated_files > 0 and progress["files"] >= 0:
-                progress_ratio = progress["files"] / estimated_files
-            percent = None
-            eta_seconds = None
-            if progress_ratio is not None and progress_ratio > 0:
-                percent = min(99.9, max(0.0, progress_ratio * 100.0))
-                if duration is not None and duration >= 10 and 0.01 <= progress_ratio < 1.0:
-                    eta_seconds = min(30 * 24 * 3600, max(0, int(duration * (1.0 - progress_ratio) / progress_ratio)))
-            backup_progress = {
-                **progress,
-                "estimated_total_files": estimated_files,
-                "estimated_total_bytes": estimated_bytes,
-                "estimated_percent": percent,
-                "estimated_eta_seconds": eta_seconds,
-                "estimate_basis": (row.job.source_stats_origin if row.job else None),
-            }
+            if row.job:
+                baseline_bytes = (
+                    row.backup_source_size_bytes_snapshot
+                    if row.backup_source_size_bytes_snapshot is not None
+                    else row.job.source_size_bytes
+                )
+                baseline_files = (
+                    row.backup_source_file_count_snapshot
+                    if row.backup_source_file_count_snapshot is not None
+                    else row.job.source_file_count
+                )
+                eta = estimate_fixed_baseline_remaining(
+                    progress=progress,
+                    history=get_run_progress_history(row.id),
+                    source_paths=json.loads(row.job.source_paths_json or "[]"),
+                    source_detail_json=getattr(row.job, "source_stats_detail_json", "{}"),
+                    total_bytes=baseline_bytes,
+                    total_files=baseline_files,
+                    total_origin=row.job.source_stats_origin,
+                )
+            else:
+                eta = {
+                    "estimated_total_files": None,
+                    "estimated_total_bytes": None,
+                    "estimated_percent": None,
+                    "estimated_eta_seconds": None,
+                    "estimated_remaining_bytes": None,
+                    "estimated_remaining_files": None,
+                    "estimate_file_factor": 1.0,
+                    "estimate_basis": "fixed-1g-source-baseline",
+                    "estimate_total_origin": None,
+                    "estimate_baseline_exceeded": False,
+                    "estimate_byte_baseline_exceeded": False,
+                    "estimate_file_baseline_exceeded": False,
+                    "estimate_assumed_interface_gbps": 1.0,
+                    "estimate_assumed_utilization_percent": 80,
+                    "estimate_assumed_bytes_per_second": 100_000_000,
+                    "current_source": None,
+                }
+            backup_progress = {**progress, **eta}
 
     bbm_network = sample_manager_network() if active and log_offset is not None else None
 
@@ -4322,7 +4268,6 @@ def download_backup(name: str) -> FileResponse:
 def _apply_manager_restore_and_restart(staging: Path) -> None:
     try:
         scheduler.shutdown(wait=False)
-        _archive_cache_locks.clear()
     except Exception:
         pass
     engine.dispose()

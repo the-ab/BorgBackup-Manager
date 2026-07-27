@@ -805,30 +805,53 @@ exit "$bbm_rc"
 
 
 def source_stats_command(job: Job) -> Command:
-    """Scan configured source paths without accessing or modifying a repository.
+    """Scan source paths read-only and mirror Borg exclusions for source baselines.
 
-    Borg 1.x does not permit ``create --dry-run`` together with ``--stats``.
-    A manual refresh therefore performs a read-only filesystem traversal as the
-    configured source-device SSH user. Exact post-exclusion values continue to
-    come from a completed Borg backup and replace this preliminary scan.
+    The preferred Python scanner applies the job's path excludes, cache tags,
+    nodump flag and one-file-system setting and emits separate totals for every
+    configured source. A minimal find/stat fallback remains for unusual clients
+    without Python and is explicitly marked as partial so the stored source
+    statistics are not presented as fully exclusion-accurate.
     """
     sources = json.loads(job.source_paths_json or "[]")
+    excludes = json.loads(job.exclude_patterns_json or "[]")
     options = validate_create_options(json.loads(job.create_options_json or "{}"))
     one_file_system = "1" if options["one_file_system"] else "0"
+    exclude_caches = "1" if options["exclude_caches"] else "0"
+    exclude_nodump = "1" if options["exclude_nodump"] else "0"
+    patterns_json = json.dumps(excludes, ensure_ascii=False, separators=(",", ":"))
     python_scan = r'''
+import array
+import fnmatch
 import json
 import os
+import re
 import stat
 import sys
 
 one_file_system = sys.argv[1] == "1"
-roots = sys.argv[2:]
-size_bytes = 0
-file_count = 0
+exclude_caches = sys.argv[2] == "1"
+exclude_nodump = sys.argv[3] == "1"
+try:
+    raw_patterns = json.loads(sys.argv[4])
+except Exception:
+    raw_patterns = []
+roots = sys.argv[5:]
 warning_count = 0
 seen_paths = set()
 skipped_mounts = []
 included_mounts = []
+unsupported_patterns = []
+excluded_file_count = 0
+excluded_size_bytes = 0
+CACHEDIR_SIGNATURE = b"Signature: 8a477f597d28d172789f06886806bc55"
+FS_IOC_GETFLAGS = 0x80086601
+FS_NODUMP_FL = 0x00000040
+
+try:
+    import fcntl
+except Exception:
+    fcntl = None
 
 
 def remember(items, path):
@@ -840,34 +863,157 @@ def remember(items, path):
 def warn(message):
     global warning_count
     warning_count += 1
-    print("WARNUNG: " + message, file=sys.stderr)
+    if warning_count <= 50:
+        print("WARNUNG: " + message, file=sys.stderr)
 
 
-def account(path, st):
-    global size_bytes, file_count
-    normalized = os.path.normpath(path)
-    if normalized in seen_paths:
-        return
-    seen_paths.add(normalized)
-    if stat.S_ISDIR(st.st_mode):
-        return
-    file_count += 1
-    if stat.S_ISREG(st.st_mode):
-        size_bytes += max(0, int(st.st_size))
+def archive_path(path):
+    normalized = os.path.normpath(path).replace(os.sep, "/")
+    return normalized.lstrip("/")
 
 
+def shell_regex(pattern):
+    out = ["^"]
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "*":
+            if i + 1 < len(pattern) and pattern[i + 1] == "*":
+                while i + 1 < len(pattern) and pattern[i + 1] == "*":
+                    i += 1
+                if i + 1 < len(pattern) and pattern[i + 1] == "/":
+                    i += 1
+                    out.append("(?:.*/)?")
+                else:
+                    out.append(".*")
+            else:
+                out.append("[^/]*")
+        elif char == "?":
+            out.append("[^/]")
+        elif char == "[":
+            end = pattern.find("]", i + 1)
+            if end < 0:
+                out.append(r"\[")
+            else:
+                content = pattern[i + 1:end]
+                if content.startswith("!"):
+                    content = "^" + content[1:]
+                out.append("[" + content + "]")
+                i = end
+        else:
+            out.append(re.escape(char))
+        i += 1
+    out.append("(?:/.*)?$")
+    return re.compile("".join(out))
+
+
+def compile_pattern(raw):
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    style = "sh"
+    body = value
+    if len(value) >= 3 and value[2] == ":":
+        style, body = value[:2].lower(), value[3:]
+    if style not in {"sh", "fm", "re", "pp", "pf"}:
+        unsupported_patterns.append(value)
+        return None
+    try:
+        if style == "re":
+            regex = re.compile(body)
+            return lambda candidate: bool(regex.search(candidate))
+        body = body.replace("\\", "/").lstrip("/")
+        if style == "pp":
+            prefix = body.rstrip("/")
+            return lambda candidate: candidate == prefix or candidate.startswith(prefix + "/")
+        if style == "pf":
+            return lambda candidate: candidate == body
+        if style == "fm":
+            return lambda candidate: fnmatch.fnmatchcase(candidate, body)
+        regex = shell_regex(body)
+        return lambda candidate: bool(regex.match(candidate))
+    except (re.error, ValueError):
+        unsupported_patterns.append(value)
+        return None
+
+
+matchers = [matcher for matcher in (compile_pattern(item) for item in raw_patterns) if matcher is not None]
+
+
+def excluded_by_pattern(path):
+    candidate = archive_path(path)
+    return any(matcher(candidate) for matcher in matchers)
+
+
+def cache_tagged(directory):
+    if not exclude_caches:
+        return False
+    try:
+        with open(os.path.join(directory, "CACHEDIR.TAG"), "rb") as handle:
+            return handle.read(len(CACHEDIR_SIGNATURE)) == CACHEDIR_SIGNATURE
+    except OSError:
+        return False
+
+
+def has_nodump(path):
+    if not exclude_nodump or fcntl is None:
+        return False
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return False
+    try:
+        values = array.array("I", [0])
+        fcntl.ioctl(fd, FS_IOC_GETFLAGS, values, True)
+        return bool(values[0] & FS_NODUMP_FL)
+    except (OSError, TypeError, ValueError):
+        return False
+    finally:
+        os.close(fd)
+
+
+def excluded(path, *, is_dir=False):
+    if excluded_by_pattern(path):
+        return True
+    if has_nodump(path):
+        return True
+    if is_dir and cache_tagged(path):
+        return True
+    return False
+
+
+source_results = []
+total_size = 0
+total_files = 0
 for root in roots:
+    source_size = 0
+    source_files = 0
     try:
         root_stat = os.lstat(root)
     except OSError as exc:
         warn(f"{root}: {exc}")
+        source_results.append({"path": root, "size_bytes": 0, "file_count": 0})
         continue
-    if not stat.S_ISDIR(root_stat.st_mode):
-        account(root, root_stat)
+    root_is_dir = stat.S_ISDIR(root_stat.st_mode)
+    if excluded(root, is_dir=root_is_dir):
+        source_results.append({"path": root, "size_bytes": 0, "file_count": 0})
+        continue
+    if not root_is_dir:
+        normalized = os.path.normpath(root)
+        if normalized not in seen_paths:
+            seen_paths.add(normalized)
+            source_files += 1
+            if stat.S_ISREG(root_stat.st_mode):
+                source_size += max(0, int(root_stat.st_size))
+        source_results.append({"path": root, "size_bytes": source_size, "file_count": source_files})
+        total_size += source_size
+        total_files += source_files
         continue
     root_device = root_stat.st_dev
     normalized_root = os.path.normpath(root)
     if normalized_root in seen_paths:
+        source_results.append({"path": root, "size_bytes": 0, "file_count": 0})
         continue
     seen_paths.add(normalized_root)
     stack = [(root, root_device)]
@@ -882,7 +1028,14 @@ for root in roots:
                     except OSError as exc:
                         warn(f"{path}: {exc}")
                         continue
-                    if stat.S_ISDIR(item_stat.st_mode):
+                    is_dir = stat.S_ISDIR(item_stat.st_mode)
+                    if excluded(path, is_dir=is_dir):
+                        if not is_dir:
+                            excluded_file_count += 1
+                            if stat.S_ISREG(item_stat.st_mode):
+                                excluded_size_bytes += max(0, int(item_stat.st_size))
+                        continue
+                    if is_dir:
                         if one_file_system and item_stat.st_dev != root_device:
                             remember(skipped_mounts, path)
                             continue
@@ -894,44 +1047,66 @@ for root in roots:
                         seen_paths.add(normalized_path)
                         stack.append((path, item_stat.st_dev))
                     else:
-                        account(path, item_stat)
+                        normalized_path = os.path.normpath(path)
+                        if normalized_path in seen_paths:
+                            continue
+                        seen_paths.add(normalized_path)
+                        source_files += 1
+                        if stat.S_ISREG(item_stat.st_mode):
+                            source_size += max(0, int(item_stat.st_size))
         except OSError as exc:
             warn(f"{directory}: {exc}")
             continue
+    source_results.append({"path": root, "size_bytes": source_size, "file_count": source_files})
+    total_size += source_size
+    total_files += source_files
 
 if skipped_mounts:
     print(
         "HINWEIS: " + str(len(skipped_mounts))
-        + " eingebundene Unterdateisystem(e) wurden wegen "
-        + "'Nur jeweiliges Quelldateisystem' nicht mitgezählt: "
-        + ", ".join(skipped_mounts[:10])
-        + (" …" if len(skipped_mounts) > 10 else ""),
+        + " eingebundene Unterdateisystem(e) wurden wegen 'Nur jeweiliges Quelldateisystem' nicht mitgezählt: "
+        + ", ".join(skipped_mounts[:10]) + (" …" if len(skipped_mounts) > 10 else ""),
         file=sys.stderr,
     )
 elif included_mounts:
     print(
         "HINWEIS: Eingebundene Unterdateisysteme werden mitgezählt: "
-        + ", ".join(included_mounts[:10])
-        + (" …" if len(included_mounts) > 10 else ""),
+        + ", ".join(included_mounts[:10]) + (" …" if len(included_mounts) > 10 else ""),
+        file=sys.stderr,
+    )
+if unsupported_patterns:
+    print(
+        "WARNUNG: " + str(len(unsupported_patterns))
+        + " Ausschlussmuster konnten für die Quellenstatistik nicht sicher nachgebildet werden: "
+        + ", ".join(unsupported_patterns[:10]),
         file=sys.stderr,
     )
 
+nodump_unavailable = exclude_nodump and fcntl is None
+quality = "high" if not unsupported_patterns and not nodump_unavailable else "partial"
 print("BBM_SOURCE_STATS_JSON=" + json.dumps({
-    "size_bytes": size_bytes,
-    "file_count": file_count,
+    "size_bytes": total_size,
+    "file_count": total_files,
     "warning_count": warning_count,
     "skipped_mount_count": len(skipped_mounts),
     "skipped_mounts": skipped_mounts,
     "included_mount_count": len(included_mounts),
-    "method": "python-lstat",
+    "excluded_file_count": excluded_file_count,
+    "excluded_size_bytes": excluded_size_bytes,
+    "unsupported_patterns": unsupported_patterns,
+    "nodump_supported": not nodump_unavailable,
+    "quality": quality,
+    "sources": source_results,
+    "method": "python-borg-excludes",
 }, separators=(",", ":")))
-sys.exit(1 if warning_count else 0)
+sys.exit(1 if (warning_count or unsupported_patterns or nodump_unavailable) else 0)
 '''.strip()
     fallback_scan = r'''
 set +e
 tmpfile=$(mktemp /tmp/bbm-source-stats.XXXXXX) || exit 70
 trap 'rm -f -- "$tmpfile"' EXIT HUP INT TERM
 warnings=0
+printf '%s\n' 'WARNUNG: Python 3 fehlt; Ausschlüsse und Quellenaufteilung können im Fallback nicht vollständig nachgebildet werden.' >&2
 for source in "$@"; do
   if [ ! -e "$source" ] && [ ! -L "$source" ]; then
     printf 'WARNUNG: Quelle nicht gefunden: %s\n' "$source" >&2
@@ -949,35 +1124,34 @@ for source in "$@"; do
     stat -c '%s' "$source" >>"$tmpfile" 2>/dev/null
     rc=$?
   fi
-  if [ "$rc" -ne 0 ]; then
-    printf 'WARNUNG: Quelle konnte nicht vollständig gelesen werden: %s\n' "$source" >&2
-    warnings=$((warnings + 1))
-  fi
+  if [ "$rc" -ne 0 ]; then warnings=$((warnings + 1)); fi
 done
 awk -v warnings="$warnings" '
   { size += $1; count += 1 }
   END {
-    printf "BBM_SOURCE_STATS_JSON={\"size_bytes\":%.0f,\"file_count\":%d,\"warning_count\":%d,\"method\":\"find-stat\"}\n", size, count, warnings
+    printf "BBM_SOURCE_STATS_JSON={\"size_bytes\":%.0f,\"file_count\":%d,\"warning_count\":%d,\"quality\":\"partial\",\"sources\":[],\"method\":\"find-stat-fallback\"}\n", size, count, warnings
   }
 ' "$tmpfile"
 [ "$warnings" -eq 0 ]
 '''.strip()
     script = f'''
 set +e
-printf '%s\n' '=== Quellenstatistik aktualisieren (Live-Scan) ==='
+printf '%s\n' '=== Quellenstatistik aktualisieren (ausschlussbereinigter Live-Scan) ==='
 printf 'BACKUP-JOB: %s\n' {shlex.quote(job.name)}
 printf 'QUELLPFADE: %s\n' {shlex.quote(', '.join(sources))}
-printf '%s\n' 'Hinweis: Der manuelle Scan zählt die konfigurierten Quellen vor Borg-Ausschlüssen.'
+printf '%s\n' 'Hinweis: Der bevorzugte Scan berücksichtigt Borg-Pfadausschlüsse, Cache-Tags, nodump und Dateisystemgrenzen.'
 printf '%s\n' 'Das Repository wird nicht geöffnet und es wird kein Archiv geschrieben.'
 printf '%s\n' '------------------------------------------------------------------------------'
 one_file_system={one_file_system}
+exclude_caches={exclude_caches}
+exclude_nodump={exclude_nodump}
 if [ "$one_file_system" = "1" ]; then
   printf '%s\n' "HINWEIS: 'Nur jeweiliges Quelldateisystem' ist aktiv; eingehängte Unterverzeichnisse werden wie beim Backup übersprungen."
 else
   printf '%s\n' 'HINWEIS: Eingehängte Unterverzeichnisse werden in die Quellenstatistik einbezogen.'
 fi
 if command -v python3 >/dev/null 2>&1; then
-  python3 -S -c {shlex.quote(python_scan)} "$one_file_system" "$@"
+  python3 -S -c {shlex.quote(python_scan)} "$one_file_system" "$exclude_caches" "$exclude_nodump" {shlex.quote(patterns_json)} "$@"
   bbm_rc=$?
 elif command -v find >/dev/null 2>&1 && command -v stat >/dev/null 2>&1 && stat -c '%s' / >/dev/null 2>&1; then
   {fallback_scan}
@@ -988,7 +1162,7 @@ else
 fi
 printf '%s\n' '------------------------------------------------------------------------------'
 if [ "$bbm_rc" -eq 0 ]; then
-  printf '%s\n' 'ERGEBNIS: Quellenstatistik erfolgreich aktualisiert.'
+  printf '%s\n' 'ERGEBNIS: Ausschlussbereinigte Quellenstatistik erfolgreich aktualisiert.'
 elif [ "$bbm_rc" -eq 1 ]; then
   printf '%s\n' 'ERGEBNIS: Quellenstatistik mit Warnungen aktualisiert.' >&2
 else
