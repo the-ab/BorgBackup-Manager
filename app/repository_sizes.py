@@ -85,12 +85,6 @@ def store_repository_statistics(
         }
 
 
-def store_repository_size(repository_id: int, size: int) -> int:
-    """Backward-compatible helper retained for older internal callers/tests."""
-    result = store_repository_statistics(repository_id, deduplicated_size=size)
-    return int(result["size_bytes"] or 0)
-
-
 def managed_repository_filesystem_size(repository_id: int) -> int:
     with SessionLocal() as db:
         repository = db.get(Repository, repository_id)
@@ -105,14 +99,3 @@ def managed_repository_filesystem_size(repository_id: int) -> int:
     return directory_size(path) if path.is_dir() else 0
 
 
-def refresh_repository_size(repository_id: int) -> int:
-    """Backward-compatible managed repository filesystem refresh."""
-    size = managed_repository_filesystem_size(repository_id)
-    with SessionLocal() as db:
-        repository = db.get(Repository, repository_id)
-        if not repository:
-            raise LookupError("Repository not found")
-        repository.size_bytes = size
-        repository.size_checked_at = datetime.now(timezone.utc)
-        db.commit()
-    return size

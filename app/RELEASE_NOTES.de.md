@@ -1,5 +1,29 @@
 # Release Notes
 
+## v1.1.3 – 27.07.2026
+
+### Einheitliches modernes Button-Design
+
+- Die in v1.1.2 versehentlich entfernte globale Basisregel für normale Aktionsbuttons wurde wiederhergestellt. Dadurch fallen nicht klassifizierte Aktionsbuttons nicht mehr auf die Browser-Standarddarstellung zurück.
+- Normale Aktionsbuttons verwenden jetzt ein gemeinsames Designsystem mit einheitlicher Höhe, Innenabstand, Radius, Typografie, Fokusdarstellung sowie Hover-/Active-/Disabled-Zuständen.
+- Primäre, sekundäre sowie Gefahr-/Ghost-Varianten teilen dieselbe Grundgeometrie und Interaktionslogik; kompakte Tabellen- und Job-Aktionen behalten nur ihre bewusst kleinere Dichte.
+- Navigation, Tabs, Link-Buttons, Breadcrumbs und Status-Pills behalten ihre rollenbezogene Darstellung, verwenden aber weiterhin die gemeinsamen Fokus- und Übergangsregeln.
+- Der Projekt-Audit prüft jetzt ausdrücklich das Vorhandensein der gemeinsamen Button-Basis, damit eine spätere Bereinigung diese dynamisch genutzte CSS-Regel nicht erneut als vermeintlich verwaist entfernt.
+
+## v1.1.2 – 27.07.2026
+
+### Konsistenz- und Bereinigungsrelease
+
+- Versionsstand und Funktionsbeschreibungen wurden zwischen README, Installationsanleitungen, integrierter DE/EN-Hilfe, statischen Asset-Markern und Release-Metadaten abgeglichen. Die Installationsanleitungen beschreiben jetzt den seit v1.1.1 gültigen Cache-only-Archivaufruf mit Hintergrundscan, den aktuellen Umfang der Borg-Cache-Prüfung und die feste 1-Gbit/s-Restzeitberechnung.
+- Die englischen Übersetzungen des neuen Archivscans wurden vervollständigt und das Übersetzungswörterbuch zusammengeführt, sodass doppelte Schlüssel keine früheren Werte mehr unbemerkt überschreiben können. Veraltete Archiv-Refresh-Texte wurden entfernt.
+- Nachweislich tote private Helfer, ein ungenutzter Schema-Typ, ungenutzte Imports/Konstanten und nicht mehr referenzierte CSS-Selektoren wurden entfernt. Kompatibilitätshelfer mit weiterhin klarer Aufgabe bleiben bewusst erhalten.
+- Die redundante Datei `app/VERSION` wurde entfernt; maßgeblich ist nur noch die zentrale `VERSION` im Projektstamm. Die absichtlichen Release-Notes-Kopien für alte Updater bleiben erhalten und werden weiterhin bytegenau geprüft.
+- Die feste 1-Gbit/s-Restzeitberechnung kopiert beim Live-Poll nicht mehr den begrenzten Borg-Progress-Verlauf. Dieser bleibt ausschließlich für die Zuordnung zur aktuellen Quelle und die Quellenstatistik nach dem Lauf prozesslokal erhalten.
+- Veraltete Cache-Felder gehören nicht mehr zum aktuellen Manager-Backup-Request-Schema. Unbekannte alte Felder werden ausdrücklich abgewiesen, statt stillschweigend akzeptiert zu werden.
+- `scripts/project-audit.py` wurde erweitert und prüft jetzt zusätzlich Versions-/Doku-Marker, redundante Versionsdateien, doppelte Übersetzungsschlüssel, ausgewählte aktuelle UI-Übersetzungen, tote private Top-Level-Definitionen, ungenutzte Imports, unreferenzierte statische Assets/CSS-Klassen und die Kompatibilitätskopien der Release Notes.
+- Die Testphase des Release-Checks startet Pytest jetzt als normalen Subprozess in einem isolierten temporären Datenverzeichnis. Dadurch entstehen keine Test-Laufzeitdaten im Projektbaum und der Release-Check verwendet denselben Ausführungspfad wie der direkte Testsatz.
+- Die Runner-Befehlstests initialisieren jetzt einen eigenen temporären Security-Store und prüfen aufgelöste Manager-Cache-Pfade ausdrücklich. Damit entfällt eine versteckte Abhängigkeit von zuvor ausgeführten Testmodulen und deren Initialisierungsreihenfolge.
+
 ## v1.1.1 – 27.07.2026
 
 ### Große Repository-Archivlisten ohne HTTP 504

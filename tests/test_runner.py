@@ -41,6 +41,34 @@ from app.runner import (
 from app.security import encrypt_secret
 
 
+@pytest.fixture(scope="module", autouse=True)
+def isolated_runner_security_store(tmp_path_factory):
+    """Keep runner tests independent from security-store setup in other modules."""
+    from app import secret_crypto, security_store
+
+    security_dir = tmp_path_factory.mktemp("runner-security")
+    original = (
+        security_store.SECURITY_DIR,
+        security_store.SECURITY_DATABASE_PATH,
+        security_store.INITIAL_ADMIN_PATH,
+        secret_crypto.MASTER_KEY_PATH,
+    )
+    security_store.SECURITY_DIR = security_dir
+    security_store.SECURITY_DATABASE_PATH = security_dir / "security.db"
+    security_store.INITIAL_ADMIN_PATH = security_dir / "initial-admin.txt"
+    secret_crypto.MASTER_KEY_PATH = security_dir / "master.key"
+    security_store.initialize_security_store(None)
+    try:
+        yield
+    finally:
+        (
+            security_store.SECURITY_DIR,
+            security_store.SECURITY_DATABASE_PATH,
+            security_store.INITIAL_ADMIN_PATH,
+            secret_crypto.MASTER_KEY_PATH,
+        ) = original
+
+
 @pytest.fixture
 def job(monkeypatch) -> Job:
     monkeypatch.setattr("app.runner.get_system_secret", lambda name, default=None: "TEST-CONTROLLER-PRIVATE-KEY" if name == "controller_private_key" else default)
@@ -135,7 +163,7 @@ def test_manager_repository_operations_use_data_cache_not_repository_mount():
 
     command = repository_validation_command(repository)
 
-    assert command.env["BORG_CACHE_DIR"] == str(MANAGER_BORG_CACHE_DIR / "repository-88")
+    assert command.env["BORG_CACHE_DIR"] == str(MANAGER_BORG_CACHE_DIR.resolve() / "repository-88")
     assert command.env["BORG_SECURITY_DIR"] == str(MANAGER_BORG_SECURITY_DIR)
     assert not str(command.env["BORG_CACHE_DIR"]).startswith("/repositories/")
 
@@ -330,7 +358,7 @@ def test_repository_init_keeps_encrypted_secret_out_of_command(job):
     assert "managed secret" not in command.preview
     assert command.stdin_data == b"managed secret\n"
     assert command.env["BORG_PASSPHRASE_FD"] == "0"
-    assert command.env["BORG_CACHE_DIR"] == str(MANAGER_BORG_CACHE_DIR / "repository-7")
+    assert command.env["BORG_CACHE_DIR"] == str(MANAGER_BORG_CACHE_DIR.resolve() / "repository-7")
     assert command.env["BORG_SECURITY_DIR"] == str(MANAGER_BORG_SECURITY_DIR)
 
 
@@ -342,7 +370,7 @@ def test_unencrypted_repository_init_has_no_secret(job):
     assert "--encryption=none" in command.argv
     assert command.stdin_data is None
     assert command.env == {
-        "BORG_CACHE_DIR": str(MANAGER_BORG_CACHE_DIR / "repository-7"),
+        "BORG_CACHE_DIR": str(MANAGER_BORG_CACHE_DIR.resolve() / "repository-7"),
         "BORG_SECURITY_DIR": str(MANAGER_BORG_SECURITY_DIR),
     }
 

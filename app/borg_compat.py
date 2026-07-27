@@ -6,9 +6,7 @@ from dataclasses import dataclass
 BORG_MINIMUM = (1, 2, 0)
 BORG_SECURITY_FIXED = (1, 2, 5)
 BORG_RECOMMENDED = (1, 2, 8)
-BORG_MANAGER_MINIMUM = (1, 4, 0)
 BORG_MAXIMUM_EXCLUSIVE = (1, 5, 0)
-_VERSION_RE = re.compile(r"(?<!\d)(1|2)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[^\d]|$)")
 
 
 @dataclass(frozen=True)

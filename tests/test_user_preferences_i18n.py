@@ -60,13 +60,13 @@ def test_german_and_english_ui_resources_cover_all_main_areas():
     help_en = (PROJECT_ROOT / 'app/static/help.en.html').read_text(encoding='utf-8')
 
     assert '/static/i18n.js?v=' in html
-    assert "'Backup-Jobs': 'Backup jobs'" in i18n
-    assert "'Repository hinzufügen': 'Add repository'" in i18n
-    assert "'Manager-Repository-ID': 'Manager repository ID'" in i18n
-    assert "'Wiederherstellung starten': 'Start restore'" in i18n
-    assert "'Ausgewählte Archive löschen': 'Delete selected archives'" in i18n
-    assert "'Mehrere Geräte': 'Multiple devices'" in i18n
-    assert "'Compact direkt am Repository': 'Compact directly on repository'" in i18n
+    assert '"Backup-Jobs": "Backup jobs"' in i18n
+    assert '"Repository hinzufügen": "Add repository"' in i18n
+    assert '"Manager-Repository-ID": "Manager repository ID"' in i18n
+    assert '"Wiederherstellung starten": "Start restore"' in i18n
+    assert '"Ausgewählte Archive löschen": "Delete selected archives"' in i18n
+    assert '"Mehrere Geräte": "Multiple devices"' in i18n
+    assert '"Compact direkt am Repository": "Compact directly on repository"' in i18n
     assert 'MutationObserver' in i18n
     for section in ('start', 'security', 'dashboard', 'hosts', 'repositories', 'jobs', 'schedules', 'runs', 'archives', 'restore', 'backups', 'users', 'settings', 'diagnostics'):
         assert f'id="help-{section}"' in help_de

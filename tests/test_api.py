@@ -3278,10 +3278,6 @@ def test_run_json_exposes_lightweight_live_backup_progress(monkeypatch):
         "files": 60,
         "path": "/srv/current.dat",
     })
-    monkeypatch.setattr(main_module, "get_run_progress_history", lambda _run_id: [
-        {"timestamp": 0.0, "original_bytes": 2 * gib, "compressed_bytes": gib, "deduplicated_bytes": 50, "files": 20, "path": "srv/a"},
-        {"timestamp": 100.0, "original_bytes": 6 * gib, "compressed_bytes": 4 * gib, "deduplicated_bytes": gib // 2, "files": 60, "path": "srv/current.dat"},
-    ])
     monkeypatch.setattr(main_module, "read_run_log", lambda *_args, **_kwargs: "")
     payload = main_module.run_json(row)
     progress = payload["backup_progress"]

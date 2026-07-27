@@ -65,8 +65,26 @@ def test_system_tabs_are_inside_sticky_header_and_active_is_visibly_filled():
     assert 'color: #fff' in active
     assert '--system-tab-active: #174c46' in css
     assert '--system-tab-active: #2f7f70' in css
-    generic = css.split('button:not(.link)', 1)[1].split('{', 1)[0]
+    generic = css.split('button:where(', 1)[1].split('{', 1)[0]
     assert ':not(.system-tab)' in generic
+    assert ':not(.sync-state)' in generic
+
+
+def test_shared_action_buttons_use_one_modern_base_style():
+    css = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    base = css.split("/* Shared action-button system.", 1)[1].split("button.secondary", 1)[0]
+    for marker in (
+        "min-height: 38px",
+        "border-radius: var(--button-radius)",
+        "font-weight: 700",
+        "box-shadow: var(--button-shadow)",
+        "transform: translateY(-1px)",
+    ):
+        assert marker in base
+    assert "button.secondary:not(:disabled):hover" in css
+    assert "button.danger.ghost:not(:disabled):hover" in css
+    assert "button:focus-visible" in css
+    assert "button:disabled" in css
 
 
 def test_system_tabs_resynchronize_after_session_restore_and_permissions():

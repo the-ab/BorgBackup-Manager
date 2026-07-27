@@ -946,10 +946,6 @@ class ArchiveDiffIn(BaseModel):
         return self
 
 
-class ActionIn(BaseModel):
-    action: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
-
 class ControllerKeyRotateIn(BaseModel):
     confirmation: str = Field(min_length=1, max_length=80)
 
@@ -961,12 +957,12 @@ class ControllerKeyRotateIn(BaseModel):
 
 
 class ManagerBackupCreateIn(BaseModel):
+    # Manager and cache backups are separate API objects. Reject unknown legacy
+    # cache fields rather than silently implying that cache data was included.
+    model_config = ConfigDict(extra="forbid")
+
     label: str = Field(default="", max_length=48)
     encrypted: bool = True
-    # Kept for one release as explicit compatibility guards. Cache content is
-    # no longer accepted in manager backups; callers must use CacheBackupCreateIn.
-    include_borg_cache: bool = False
-    include_client_borg_cache: bool = False
     compression: str = "standard"
 
     @field_validator("compression")
@@ -1002,8 +998,6 @@ class ManagerBackupCreateIn(BaseModel):
                 raise ValueError("backup passphrase must be single-line")
         elif secret or confirmation:
             raise ValueError("backup passphrase is only valid when encryption is enabled")
-        if self.include_borg_cache or self.include_client_borg_cache:
-            raise ValueError("Borg cache data must be created as a separate cache backup")
         return self
 
 

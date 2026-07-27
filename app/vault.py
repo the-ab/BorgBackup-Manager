@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
 
 from app.models import Repository
 from app.security import decrypt_secret
@@ -131,5 +130,3 @@ def get_system_secret(name: str, default: str | None = None) -> str | None:
     return get_secret(SYSTEM_SCOPE, name, default)
 
 
-def system_secret_exists(name: str) -> bool:
-    return secret_exists(SYSTEM_SCOPE, name)

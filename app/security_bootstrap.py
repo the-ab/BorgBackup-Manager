@@ -10,7 +10,7 @@ from pathlib import Path
 from app.config import DATA_DIR
 from app.external_repository import generate_ed25519_keypair, public_key_from_private
 from app.security_migrate import run_security_migration
-from app.vault import get_system_secret, set_system_secret, system_secret_exists
+from app.vault import get_system_secret, set_system_secret
 
 RUNTIME_ROOT = Path(os.getenv("BBM_RUNTIME_SECRET_DIR", "/run/bbm-secrets"))
 

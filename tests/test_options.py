@@ -299,3 +299,21 @@ def test_manual_backup_maintenance_requires_retention_and_prune_before_compact()
     )
     assert job.manual_prune_after_backup is True
     assert job.manual_compact_after_prune is True
+
+
+def test_manager_backup_schema_rejects_legacy_cache_fields():
+    from pydantic import ValidationError
+    from app.schemas import ManagerBackupCreateIn
+
+    try:
+        ManagerBackupCreateIn(
+            label="cleanup",
+            encrypted=True,
+            passphrase="123456789012",
+            passphrase_confirm="123456789012",
+            include_borg_cache=True,
+        )
+    except ValidationError as exc:
+        assert "include_borg_cache" in str(exc)
+    else:
+        raise AssertionError("legacy manager-backup cache field must be rejected")

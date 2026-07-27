@@ -1,5 +1,29 @@
 # Release Notes
 
+## v1.1.3 – 27.07.2026
+
+### Unified modern button design
+
+- Restored the global base rule for normal action buttons that was accidentally removed during the v1.1.2 cleanup. Unclassified action buttons therefore no longer fall back to browser-default styling.
+- Normal action buttons now use one shared design system for height, padding, radius, typography, focus presentation and hover/active/disabled states.
+- Primary, secondary and danger/ghost variants share the same base geometry and interaction model; compact table and job actions keep only their intentionally reduced density.
+- Navigation, tabs, link-style controls, breadcrumbs and status pills keep their role-specific presentation while still using common focus and transition behavior.
+- The project audit now explicitly guards the shared button foundation so a future cleanup cannot remove this dynamically used CSS rule as an apparent orphan again.
+
+## v1.1.2 – 27.07.2026
+
+### Consistency and cleanup release
+
+- Synchronized the current version and feature descriptions across README, installation guides, integrated DE/EN help, static asset markers and release metadata. The installation guides now describe the v1.1.1 cache-only archive view/background repository scan, current Borg-cache inspection scope and the deterministic 1-Gbit/s remaining-time model.
+- Completed the English archive-scan translations and consolidated the translation dictionary so duplicate keys can no longer silently override earlier values. Obsolete archive-refresh strings were removed.
+- Removed verified dead private helpers, an unused schema type, unused imports/constants and obsolete CSS selectors that had no references in the current HTML/JavaScript/help surfaces. Compatibility helpers that still have an explicit supported purpose remain in place.
+- Removed the redundant `app/VERSION`; the project now has a single authoritative root `VERSION` file. Old-updater compatibility copies of the release notes remain intentionally duplicated and are still checked byte-for-byte.
+- The fixed 1-Gbit/s remaining-time calculation no longer copies the bounded Borg progress history on every live-status poll. That history remains process-local only for current-source attribution and post-run per-source statistics.
+- Legacy manager-backup cache fields are no longer part of the current request schema. Unknown legacy fields are rejected explicitly instead of being silently accepted.
+- Expanded `scripts/project-audit.py` to validate version/document markers, redundant version files, duplicate translation keys, selected current UI translations, dead private top-level definitions, unused imports, unreferenced static assets/CSS classes and release-note compatibility copies.
+- The release-check test phase now runs Pytest as a normal subprocess inside an isolated temporary data directory. This avoids test runtime data in the project tree and makes the release check match the standalone test execution path.
+- Runner command tests now initialize their own temporary security store and validate resolved manager-cache paths explicitly, removing a hidden dependency on earlier test modules and their initialization order.
+
 ## v1.1.1 – 27.07.2026
 
 ### Large repository archive lists without HTTP 504

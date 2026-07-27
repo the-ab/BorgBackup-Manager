@@ -174,9 +174,7 @@ def _remaining_file_factor(remaining_bytes: int, remaining_files: int | None) ->
 def estimate_fixed_baseline_remaining(
     *,
     progress: dict[str, Any],
-    history: list[dict[str, Any]],
     source_paths: list[str],
-    source_detail_json: str | None,
     total_bytes: int | None,
     total_files: int | None,
     total_origin: str | None,

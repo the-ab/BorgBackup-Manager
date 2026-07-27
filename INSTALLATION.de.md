@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.0.90
+# Installation und Betrieb – BorgBackup Manager 1.1.3
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.0.90.zip
+BorgBackup-Manager-1.1.3.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.90.zip
+unzip /pfad/BorgBackup-Manager-1.1.3.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -134,7 +134,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.90.zip
+unzip /pfad/BorgBackup-Manager-1.1.3.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build
@@ -514,12 +514,13 @@ Die Liste wird repositorybezogen persistent unter `/data/archive-cache` gespeich
 
 1. Repository auswählen.
 2. optional unvollständige Checkpoint-Archive einblenden.
-3. **Archive anzeigen** wählen. Beim ersten Zugriff oder nach einer erfolgreichen Archivänderung liest der Manager Borg neu ein; danach kommt die Liste direkt aus dem Cache.
-4. Optional unter **Archive anzeigen** ein erkanntes Gerät auswählen. Die Zuordnung verwendet zuerst die Archivserie, danach Borg-Hostname beziehungsweise Archivname.
-5. Für eine Mehrfachlöschung einzelne Archive markieren oder **Sichtbare Archive auswählen** verwenden.
-6. Nur bei Änderungen außerhalb des Managers **Neu aus Repository einlesen** wählen.
+3. **Archive anzeigen** wählen. Diese Aktion liest ausschließlich den vorhandenen persistenten Archivcache und startet keinen Borg-Befehl.
+4. Ist noch kein Cache vorhanden oder wurde das Repository außerhalb des Managers verändert, **Neu aus Repository einlesen** wählen. BBM legt dafür eine normale Hintergrund-Ausführung mit eigener Run-ID an; `borg info`/`borg list` sind damit unabhängig vom HTTP- beziehungsweise Reverse-Proxy-Timeout.
+5. Während des Scans bleibt eine vorhandene Archivliste sichtbar. Erst nach erfolgreichem Abschluss wird der Cache atomar ersetzt.
+6. Optional ein erkanntes Gerät auswählen. Die Zuordnung verwendet zuerst die Archivserie, danach Borg-Hostname beziehungsweise Archivname.
+7. Für eine Mehrfachlöschung einzelne Archive markieren oder **Sichtbare Archive auswählen** verwenden.
 
-Nach Backup, Prune, Umbenennen oder Löschen wird der Cache des betroffenen Repositorys automatisch ungültig. Andere Repository-Caches bleiben erhalten. Ein Backup-Job ist für Archivliste, Archivinformationen und den Browser nicht erforderlich. Verwaltete Repositories werden über ihren lokalen Pfad gelesen; externe Repositories öffnet der Manager selbst per Borg/SSH mit den zentral gespeicherten Repository-Zugangsdaten.
+Nach Backup, Prune, Umbenennen oder Löschen wird nur der Cache des betroffenen Repositorys automatisch ungültig. Andere Repository-Caches bleiben erhalten. Ein Backup-Job ist für Archivliste, Archivinformationen und den Browser nicht erforderlich. Verwaltete Repositories werden über ihren lokalen Pfad gelesen; externe Repositories öffnet der Manager selbst per Borg/SSH mit den zentral gespeicherten Repository-Zugangsdaten.
 
 Die Liste wird unabhängig von der Borg-Ausgabereihenfolge immer absteigend sortiert; das neueste Archiv steht oben. Der Gerätefilter verwendet die Namen der bereits zwischengespeicherten Archive und startet keinen erneuten Repository-Scan. Unterstützt werden auch generische Namen mit minutengenauem Zeitstempel wie `docker-2026-07-17_03-20`; Sekunden sind optional. Nicht eindeutig erkennbare Namen können separat ausgewählt werden.
 
@@ -604,7 +605,9 @@ Technische Details:
 
 Fehlermeldungen können markiert und kopiert werden.
 
-Ein Borg-Rückgabecode `1` bedeutet, dass der Vorgang sein normales Ende erreicht und das Archiv gespeichert wurde, aber Warnungen vorlagen. Der Manager zeigt die konkreten Ursachen im Laufdialog an. Wenn die vollständige Dateiliste im Job deaktiviert ist, ergänzt der Backup-Befehl intern `--list --filter CE`; dadurch werden nur geänderte Dateien (`C`) und Datei-Zugriffsfehler (`E`) protokolliert, ohne das Live-Log mit allen unveränderten Dateien zu füllen. Ist die vollständige Liste aktiviert, verarbeitet der Manager die große Statusausgabe gepuffert und mit einer Schnellprüfung für normale Dateistatus, sodass die vollständige Anzeige deutlich weniger Manager-CPU benötigt.
+Ein Borg-Rückgabecode `1` bedeutet, dass der Vorgang sein normales Ende erreicht und das Archiv gespeichert wurde, aber Warnungen vorlagen. Der Manager zeigt die konkreten Ursachen im Laufdialog an. Wenn die vollständige Dateiliste im Job deaktiviert ist, ergänzt der Backup-Befehl intern `--list --filter AMCE`: `A` und `M` werden nur als leichtgewichtige Live-Zähler ausgewertet und nicht dauerhaft in das Laufprotokoll geschrieben; `C` und `E` bleiben zusätzlich für die Warnungsdiagnose erhalten. Unveränderte `U`-Einträge werden nicht angefordert. Ist die vollständige Liste aktiviert, verarbeitet der Manager die große Statusausgabe gepuffert und mit einer Schnellprüfung für normale Dateistatus, sodass die vollständige Anzeige deutlich weniger Manager-CPU benötigt.
+
+Bei nutzbarer Quellenbasis friert der Backup-Lauf beim Einreihen die zuletzt bekannte Quellengröße und Dateianzahl ein. Borg O/N werden direkt davon abgezogen. Die Restzeit wird rein rechnerisch aus den verbleibenden Bytes mit einer festen 1-Gbit/s-Annahme und 80 % nutzbarem Durchsatz (effektiv 100 MB/s) bestimmt; die verbleibende Dateianzahl ergänzt lediglich den festen Korrekturfaktor für viele kleine Dateien. Gemessener Netzwerkdurchsatz, kurzfristige Borg-Raten, Files-Cache-Phasen und frühere Gesamtlaufzeiten fließen nicht ein. Wird die eingefrorene Byte-Basis überschritten, bleibt die Restzeit leer statt einen falschen Null- oder Negativwert anzuzeigen.
 
 Ab Version 0.8.7 liegen vollständige neue Laufprotokolle unter:
 
@@ -657,7 +660,7 @@ Die Cache-Verschlüsselung ist standardmäßig eingeschaltet und empfohlen, aber
 
 Die Live-Anzeige nennt beim Client-Cache das aktuelle Gerät/Repository, `Client x/y` und die übertragenen Bytes; beim Manager-Cache werden verarbeitete Dateien und Bytes angezeigt. Bei verschlüsselten Cache-Backups folgt als eigener Schritt der Verschlüsselungsfortschritt.
 
-Unter **Borg-Cache verwalten** können Manager- und Client-Caches bei Bedarf manuell gescannt werden. Der Client-Scan prüft ausschließlich `$HOME/.cache/borgbackup-manager/` auf aktiven Geräten. Nicht mehr über einen Backup-Job zugeordnete `repository-<ID>`-Caches werden als verwaist markiert; durch Client-Cache-Restores entstandene `repository-<ID>.pre-bbm-restore-<Zeit>`-Rückfall-Sicherungen erscheinen in einer eigenen Kategorie. Beide Gruppen können getrennt ausgewählt und nach ausdrücklicher Bestätigung bereinigt werden. Vor dem Löschen verwaister Caches wird die Zuordnung erneut geprüft; deaktivierte und nicht erreichbare Geräte werden nicht verändert.
+Unter **Borg-Cache verwalten** können Manager- und Client-Zustände bei Bedarf manuell gescannt werden. Der Client-Scan kann alle Geräte oder eine Mehrfachauswahl prüfen. Er berücksichtigt den verwalteten BBM-Client-Cache `$HOME/.cache/borgbackup-manager/`, den normalen Borg-Cache `$HOME/.cache/borg/` beziehungsweise `BORG_CACHE_DIR`, zusätzliche historische Cache-Wurzeln aus XDG-/SSH-Benutzerkonfiguration sowie den Borg-Sicherheitsstatus unter `$HOME/.config/borg/security/` beziehungsweise `BORG_SECURITY_DIR`. Rückfall-Sicherungen wie `repository-<ID>.pre-bbm-restore-<Zeit>` bleiben separat. Unbekannte reguläre Borg-/Security-Verzeichnisse werden nie automatisch vorausgewählt. Vor jeder Löschung werden Zuordnung und aktueller Zustand erneut geprüft; deaktivierte oder nicht erreichbare Geräte werden nicht verändert. Für `/data/borg-cache` und `/data/borg-security` auf der Manager-Seite gelten dieselben konservativen Prüfungen.
 
 ### Backup hochladen
 
@@ -704,7 +707,7 @@ apt install python3-cryptography
 bash restore-backup.sh /pfad/manager-backup.bbm
 ```
 
-Neue 0.9.x-Backups enthalten Sicherheitsdatenbank und Master-Key vollständig. Alte 0.8.x-Backups übernehmen beim ersten Start ihre bisherigen Token-/Schlüsselwerte einmalig in das neue Sicherheitsmodell. Repository-Verzeichnisse müssen separat übertragen oder wieder eingebunden werden.
+Historische Backups ab Version 0.9.x enthalten Sicherheitsdatenbank und Master-Key vollständig. Alte 0.8.x-Backups übernehmen beim ersten Start ihre bisherigen Token-/Schlüsselwerte einmalig in das neue Sicherheitsmodell. Repository-Verzeichnisse müssen separat übertragen oder wieder eingebunden werden.
 
 ## 19. Zeitzone, Dashboard und Systembereich
 

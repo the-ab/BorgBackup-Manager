@@ -25,25 +25,21 @@ fi
 
 python scripts/project-audit.py
 python -m compileall -q app tests scripts/project-audit.py
-python - <<'PYTEST'
-import os
-import shutil
-import tempfile
-from pathlib import Path
 
-import pytest
+runtime_dir="$(mktemp -d "${TMPDIR:-/tmp}/bbm-test-data.XXXXXX")"
+cleanup_runtime() {
+  rm -rf "$runtime_dir"
+}
+trap cleanup_runtime EXIT
 
-runtime = Path(tempfile.gettempdir()) / f"bbm-test-data-{os.getpid()}"
-shutil.rmtree(runtime, ignore_errors=True)
-os.environ["BBM_DATA_DIR"] = str(runtime)
-os.environ["BBM_DATABASE_URL"] = "sqlite://"
-os.environ.setdefault("BBM_ADMIN_TOKEN", "test-token")
-os.environ.setdefault("BBM_ALLOW_LEGACY_TOKEN_AUTH", "1")
-try:
-    raise SystemExit(pytest.main(["-q"]))
-finally:
-    shutil.rmtree(runtime, ignore_errors=True)
-PYTEST
+BBM_DATA_DIR="$runtime_dir" \
+BBM_DATABASE_URL="sqlite://" \
+BBM_ADMIN_TOKEN="${BBM_ADMIN_TOKEN:-test-token}" \
+BBM_ALLOW_LEGACY_TOKEN_AUTH="${BBM_ALLOW_LEGACY_TOKEN_AUTH:-1}" \
+pytest -q
+
+cleanup_runtime
+trap - EXIT
 
 node --check app/static/app.js
 node --check app/static/i18n.js

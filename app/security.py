@@ -8,13 +8,12 @@ from fastapi import Cookie, Header, HTTPException, Request
 from app.config import (
     ALLOW_LEGACY_TOKEN_AUTH,
     LEGACY_ADMIN_TOKEN,
-    LEGACY_SECRET_KEY,
     SESSION_COOKIE_NAME,
 )
 from app.security_store import AuthUser, get_session_user, get_session_user_by_reload_token
 
 
-from app.secret_crypto import decrypt_value, encrypt_value, value_needs_migration
+from app.secret_crypto import decrypt_value, encrypt_value
 
 
 def encrypt_secret(value: str) -> str:
@@ -23,10 +22,6 @@ def encrypt_secret(value: str) -> str:
 
 def decrypt_secret(value: str) -> str:
     return decrypt_value(value)
-
-
-def secret_needs_migration(value: str | None) -> bool:
-    return value_needs_migration(value)
 
 
 def legacy_admin_token_matches(value: str | None) -> bool:

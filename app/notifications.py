@@ -10,12 +10,11 @@ import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
-from pathlib import Path
 from typing import Literal
 from urllib import parse, request
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 
 from app.config import HEALTH_NOTIFICATION_STATE_PATH, NOTIFICATION_SETTINGS_PATH
 from app.database import SessionLocal

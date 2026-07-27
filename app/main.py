@@ -34,7 +34,7 @@ from sqlalchemy.exc import IntegrityError
 from app.archive_cache import invalidate_archive_cache, load_archive_cache
 from app.archive_metadata import annotate_archive_devices, infer_archive_device, sort_archives_newest_first
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
-from app.borg_progress import get_run_item_activity, get_run_network_activity, get_run_progress, get_run_progress_history
+from app.borg_progress import get_run_item_activity, get_run_network_activity, get_run_progress
 from app.backup_eta import estimate_fixed_baseline_remaining, parse_source_detail
 from app.manager_backup_progress import begin_task as begin_manager_backup_task, current_task as current_manager_backup_task, fail_task as fail_manager_backup_task, finish_task as finish_manager_backup_task, get_task as get_manager_backup_task, update_task as update_manager_backup_task
 from app.borg_warnings import (
@@ -60,7 +60,6 @@ from app.config import (
     RUNTIME_SECRET_DIR,
     HEALTH_REQUIRE_SSHD,
     SESSION_COOKIE_NAME,
-    SESSION_COOKIE_SECURE_MODE,
     SESSION_TTL_SECONDS,
 )
 from app.backups import (
@@ -166,7 +165,7 @@ from app.storage_guard import (
     effective_storage_guard, mounted_filesystems_below, repository_mount_path,
     repository_storage_filesystems, repository_storage_status,
 )
-from app.time_utils import APP_TIMEZONE, APP_TIMEZONE_NAME, iso_utc, normalize_borg_timestamp
+from app.time_utils import APP_TIMEZONE, APP_TIMEZONE_NAME, iso_utc
 from app.schedules import (
     migrate_legacy_job_schedules, schedule_assignments, schedule_expressions,
     schedule_target_job_ids, validate_job_schedule_conflicts, validate_schedule_conflicts,
@@ -176,7 +175,7 @@ from app.security_bootstrap import bootstrap_security_material
 from app.security_migrate import migrate_repository_secrets
 from app.security_store import (
     AuthUser, authenticate_user, change_own_password, consume_login_attempt, create_session, create_session_reload_token, create_user,
-    delete_user as delete_security_user, get_session_user, get_session_user_by_reload_token, get_user, initialize_security_store,
+    delete_user as delete_security_user, get_session_user, get_session_user_by_reload_token, initialize_security_store,
     list_users, reset_login_rate_limit, revoke_session, revoke_session_by_reload_token, security_status, authentication_readiness, set_user_password, update_user, update_user_preferences,
 )
 from app.vault import (
@@ -186,9 +185,7 @@ from app.vault import (
 from app.config import LEGACY_ADMIN_TOKEN
 from app.security import require_authenticated_user, require_token, session_cookie_values
 from app.request_security import (
-    browser_origin,
     client_address,
-    forwarded_request_scheme,
     origin_matches_request,
     request_uses_https,
 )
@@ -209,7 +206,6 @@ from app.service import (
     reset_managed_repository_state,
     retry_run,
     revoke_host_repository_access,
-    scheduled_backup,
     scheduled_schedule,
     sync_repository_access_assignments,
     trust_host_key,
@@ -221,10 +217,6 @@ VERSION_FILE = Path(__file__).parent.parent / "VERSION"
 APP_VERSION = VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.is_file() else "0.0.0"
 scheduler = AsyncIOScheduler(timezone=APP_TIMEZONE)
 UPDATE_CHECK_JOB_ID = "github-release-check"
-
-
-def _forwarded_request_scheme(request: Request) -> str:
-    return forwarded_request_scheme(request)
 
 
 def _request_uses_https(request: Request) -> bool:
@@ -3710,9 +3702,7 @@ def run_json(
                 )
                 eta = estimate_fixed_baseline_remaining(
                     progress=progress,
-                    history=get_run_progress_history(row.id),
                     source_paths=json.loads(row.job.source_paths_json or "[]"),
-                    source_detail_json=getattr(row.job, "source_stats_detail_json", "{}"),
                     total_bytes=baseline_bytes,
                     total_files=baseline_files,
                     total_origin=row.job.source_stats_origin,

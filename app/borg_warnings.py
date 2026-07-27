@@ -118,23 +118,6 @@ def _warning_item(line: str) -> dict[str, str] | None:
     return None
 
 
-def _can_skip_item_line(line: str) -> bool:
-    """Fast-path ordinary ``borg create --list`` activity lines.
-
-    Full file listings overwhelmingly consist of one status character, a space
-    and a path. Only ``C`` and ``E`` can represent warning causes. Avoid running
-    the complete regular-expression chain for all other item statuses.
-    """
-    candidate = line.lstrip()
-    if candidate[:7].casefold() == "remote:":
-        candidate = candidate[7:].lstrip()
-    return (
-        len(candidate) >= 2
-        and candidate[0] in _NON_WARNING_ITEM_STATUSES
-        and candidate[1].isspace()
-    )
-
-
 def _can_skip_item_line_bytes(line: bytes) -> bool:
     candidate = line.lstrip()
     if candidate[:7].lower() == b"remote:":

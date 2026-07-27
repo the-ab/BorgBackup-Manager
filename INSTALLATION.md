@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.0.90
+# Installation and Operations — BorgBackup Manager 1.1.3
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.0.90.zip
+BorgBackup-Manager-1.1.3.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.0.90.zip
+unzip /path/BorgBackup-Manager-1.1.3.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.0.90.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.1.3.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -359,6 +359,8 @@ Queue reasons are displayed explicitly:
 
 A controlled cancellation first signals the remote Borg process group and waits for confirmed termination. The manager does not automatically execute `borg break-lock`.
 
+During a backup the live dialog shows processed files, Borg original/compressed/deduplicated volumes, the current source/path and lightweight A/M/C/E counters. When the complete file list is disabled, BBM uses `--list --filter AMCE`: A/M are live counters only, C/E remain available for warning diagnosis, and unchanged U entries are not requested. With a usable source baseline, the run freezes the last known source size and file count when it is queued. Borg O/N are subtracted directly from that frozen baseline. Remaining time is calculated deterministically from remaining bytes using a fixed 1-Gbit/s interface assumption with 80% usable throughput (100 MB/s effective); remaining file count adds only the fixed small-file factor. Measured network throughput, short-term Borg rates, files-cache phases and previous runtimes are not used. If the frozen byte baseline is exceeded, remaining time is suppressed rather than showing a false zero or negative value.
+
 ## 14. Warnings and failures
 
 Borg warning causes are captured while output is streaming and stored separately from the truncated log preview. The UI can identify changed files, missing files, permission errors, I/O errors and general Borg warnings.
@@ -369,18 +371,18 @@ Complete status and path output is stored in `/data/run-logs/run-ID.log`. SQLite
 
 ## 15. Archive overview
 
-Use **Archives** to:
+The archive list is cached persistently per repository below `/data/archive-cache`. Opening the archive view does not run Borg automatically.
 
-- load or refresh archives,
-- filter by device,
-- show checkpoint archives when required,
-- view archive details,
-- rename archives,
-- delete one or multiple archives,
-- optionally compact once after a deletion batch,
-- open restore/export workflows.
+1. Select the repository.
+2. Optionally enable incomplete checkpoint archives.
+3. Choose **Show Archives**. This reads only the existing persistent cache and returns immediately.
+4. If no cache exists yet, or if the repository changed outside BBM, choose **Reload from Repository**. BBM queues a normal background run and returns a run ID immediately; `borg info`/`borg list` therefore no longer depend on the HTTP or reverse-proxy timeout.
+5. The previous cached list remains visible while a refresh is running and is replaced atomically only after a successful scan.
+6. Optionally filter the cached archives by an identified device, select individual archives, or use **Select visible archives** for batch deletion.
 
-Checkpoint archives may be incomplete and should be handled deliberately.
+Backup, prune, rename and delete operations invalidate only the affected repository cache. Archive listing, archive details and browsing do not require a backup job. Managed repositories are read locally; external repositories are opened by the manager with the centrally stored Borg/SSH repository credentials.
+
+The list is always sorted newest first regardless of Borg output order. Device filtering uses cached archive metadata and never starts another repository scan. Checkpoint archives may be incomplete and should be handled deliberately.
 
 ## 16. Archive browser and export
 
@@ -431,6 +433,8 @@ A cache backup is a separate `borgbackup-manager-cache-v...` artifact and may in
 At least one cache group must be selected. `lock.exclusive` and `lock.roster` are excluded. Client caches are streamed directly over verified controller SSH. Disabled devices are recorded as skipped, a missing cache is allowed, and failure to reach an enabled device aborts cache creation. Symbolic links are rejected. No run may be queued or active while a cache backup is created.
 
 Cache encryption is enabled and recommended by default but may be disabled deliberately. Encrypted cache artifacts use streaming AES-256-GCM/scrypt and `.bbm`; unencrypted cache artifacts use `.zip`. Compression and passphrase are independent from the manager backup. Live progress reports the current device/repository, `Client x/y`, transferred bytes, manager-cache file/byte progress, and the encryption phase when enabled.
+
+Under **Manage Borg cache**, manager and client state can be scanned on demand. Client scans can target all devices or a selected subset. BBM checks its managed client cache `$HOME/.cache/borgbackup-manager/`, the normal Borg cache `$HOME/.cache/borg/` or `BORG_CACHE_DIR`, alternate historical cache roots derived from XDG/SSH-user settings, and Borg security state below `$HOME/.config/borg/security/` or `BORG_SECURITY_DIR`. Restore safety copies remain separate. Unknown regular Borg/security directories are never preselected, and every destructive cleanup performs a fresh association check first. Manager-side `/data/borg-cache` and `/data/borg-security` use the same conservative checks.
 
 ### Upload
 

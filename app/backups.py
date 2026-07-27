@@ -695,13 +695,6 @@ def _read_any_backup_manifest(archive: zipfile.ZipFile) -> dict:
     return manifest
 
 
-def _read_backup_manifest(archive: zipfile.ZipFile) -> dict:
-    manifest = _read_any_backup_manifest(archive)
-    if manifest.get("format") != BACKUP_FORMAT:
-        raise ValueError("Datei ist kein BorgBackup-Manager-Vollbackup")
-    return manifest
-
-
 def _read_cache_backup_manifest(archive: zipfile.ZipFile, *, allow_legacy_combined: bool = True) -> dict:
     manifest = _read_any_backup_manifest(archive)
     if manifest.get("format") == CACHE_BACKUP_FORMAT:

@@ -1,5 +1,3 @@
-import json
-
 from app.backup_eta import (
     ASSUMED_TRANSFER_BYTES_PER_SECOND,
     estimate_fixed_baseline_remaining,
@@ -51,9 +49,7 @@ def test_fixed_eta_uses_frozen_bytes_and_nominal_1g_assumption():
     current = 8 * tib
     result = estimate_fixed_baseline_remaining(
         progress={"original_bytes": current, "files": 50, "path": "srv/a"},
-        history=[],
         source_paths=["/srv"],
-        source_detail_json="{}",
         total_bytes=total,
         total_files=100,
         total_origin="backup",
@@ -74,9 +70,7 @@ def test_fixed_eta_applies_small_file_penalty_from_remaining_file_count():
     current = 50 * gib
     result = estimate_fixed_baseline_remaining(
         progress={"original_bytes": current, "files": 500_000, "path": "srv/a"},
-        history=[],
         source_paths=["/srv"],
-        source_detail_json="{}",
         total_bytes=total,
         total_files=1_000_000,
         total_origin="scan",
@@ -90,9 +84,7 @@ def test_fixed_eta_applies_small_file_penalty_from_remaining_file_count():
 def test_progress_percent_is_simple_average_of_bytes_and_files():
     result = estimate_fixed_baseline_remaining(
         progress={"original_bytes": 7500, "files": 500, "path": "srv/a"},
-        history=[],
         source_paths=["/srv"],
-        source_detail_json="{}",
         total_bytes=10_000,
         total_files=1000,
         total_origin="scan",
@@ -102,36 +94,23 @@ def test_progress_percent_is_simple_average_of_bytes_and_files():
     assert result["estimated_remaining_files"] == 500
 
 
-def test_fixed_eta_does_not_depend_on_recent_borg_rates_or_runtime():
+def test_fixed_eta_depends_only_on_current_progress_and_frozen_baseline():
     progress = {"original_bytes": 8_000_000_000, "files": 8000, "path": "srv/a"}
-    slow_history = _history([
-        (0, 7_900_000_000, 7900, 0, "srv/a"),
-        (3600, 8_000_000_000, 8000, 0, "srv/a"),
-    ])
-    fast_history = _history([
-        (0, 1_000_000_000, 1000, 0, "srv/a"),
-        (1, 8_000_000_000, 8000, 0, "srv/a"),
-    ])
     common = dict(
         progress=progress,
         source_paths=["/srv"],
-        source_detail_json="{}",
         total_bytes=10_000_000_000,
         total_files=10_000,
         total_origin="backup",
     )
-    slow = estimate_fixed_baseline_remaining(history=slow_history, **common)
-    fast = estimate_fixed_baseline_remaining(history=fast_history, **common)
-    assert slow["estimated_eta_seconds"] == fast["estimated_eta_seconds"]
-    assert slow["estimate_file_factor"] == fast["estimate_file_factor"]
-
+    first = estimate_fixed_baseline_remaining(**common)
+    second = estimate_fixed_baseline_remaining(**common)
+    assert first == second
 
 def test_eta_is_unavailable_when_frozen_byte_baseline_is_exceeded():
     result = estimate_fixed_baseline_remaining(
         progress={"original_bytes": 11_000, "files": 80, "path": "srv/new-large-file"},
-        history=[],
         source_paths=["/srv"],
-        source_detail_json="{}",
         total_bytes=10_000,
         total_files=100,
         total_origin="backup",
@@ -147,9 +126,7 @@ def test_eta_is_unavailable_when_frozen_byte_baseline_is_exceeded():
 def test_eta_stays_unavailable_without_known_source_size():
     result = estimate_fixed_baseline_remaining(
         progress={"original_bytes": 1000, "files": 10, "path": "srv/a"},
-        history=[],
         source_paths=["/srv"],
-        source_detail_json="{}",
         total_bytes=None,
         total_files=None,
         total_origin=None,
@@ -159,24 +136,10 @@ def test_eta_stays_unavailable_without_known_source_size():
     assert result["estimated_remaining_bytes"] is None
 
 
-def test_source_progress_remains_available_without_affecting_eta_math():
-    detail = json.dumps({
-        "quality": "high",
-        "sources": [
-            {"path": "/srv", "size_bytes": 6000, "file_count": 60},
-            {"path": "/mnt/nas", "size_bytes": 4000, "file_count": 40},
-        ],
-    })
-    history = _history([
-        (0, 1000, 10, 10, "srv/a"),
-        (30, 5000, 50, 20, "srv/b"),
-        (60, 7000, 70, 30, "mnt/nas/c"),
-    ])
+def test_current_source_is_derived_from_current_path_only():
     result = estimate_fixed_baseline_remaining(
-        progress=history[-1],
-        history=history,
+        progress={"original_bytes": 7000, "files": 70, "path": "mnt/nas/c"},
         source_paths=["/srv", "/mnt/nas"],
-        source_detail_json=detail,
         total_bytes=10_000,
         total_files=100,
         total_origin="scan",

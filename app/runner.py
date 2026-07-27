@@ -25,8 +25,8 @@ from app.config import (
 from app.external_repository import storage_probe_target_from_location
 from app.models import Host, Job, Repository
 from app.repository_cache import manager_repository_cache_dir
-from app.schemas import DEFAULT_CREATE_OPTIONS, validate_create_options
-from app.vault import get_repository_secret, get_system_secret, load_repository_environment, repository_secret_exists
+from app.schemas import validate_create_options
+from app.vault import get_repository_secret, get_system_secret, load_repository_environment
 
 
 @dataclass
@@ -537,12 +537,6 @@ def _manager_repository_command(repository: Repository, parts: list[str], *, ver
         stdin_controlled_cancel=payload is not None,
         manager_cache_repository_id=(int(repository.id) if not repository.storage_path else None),
     )
-
-
-def _local_repository_command(repository: Repository, parts: list[str]) -> Command:
-    if not repository.storage_path:
-        raise ValueError("Repository is not locally managed")
-    return _manager_repository_command(repository, parts)
 
 
 def repository_access_command(repository: Repository, parts: list[str], *, fallback_host: Host | None = None, verbose_ssh: bool = False) -> Command:
@@ -2212,15 +2206,6 @@ def repository_init_command(repository: Repository) -> Command:
         preview=f"borg --lock-wait 600 init --encryption={encryption} {shlex.quote(repository.storage_path)}",
         stdin_data=(secret + "\n").encode() if secret is not None else None,
         env=env,
-    )
-
-
-def repository_cache_delete_command(repository: Repository) -> Command:
-    """Delete only Borg's local manager cache for an external repository."""
-    return repository_access_command(
-        repository,
-        ["borg", "--lock-wait", "30", "delete", "--cache-only"],
-        verbose_ssh=False,
     )
 
 

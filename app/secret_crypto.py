@@ -68,5 +68,3 @@ def decrypt_value(value: str) -> str:
     raise ValueError("Geheimnis kann weder mit dem Master-Key noch mit dem alten BBM_SECRET_KEY entschlüsselt werden")
 
 
-def value_needs_migration(value: str | None) -> bool:
-    return bool(value) and not value.startswith(_MASTER_PREFIX)

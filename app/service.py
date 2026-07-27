@@ -4,8 +4,6 @@ import asyncio
 import json
 import os
 import re
-import shutil
-import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -206,19 +204,6 @@ def _repository_chain_snapshot() -> tuple[dict[str, dict[str, object]], dict[int
 def _track_maintenance_task(task: asyncio.Task) -> None:
     _maintenance_chain_tasks.add(task)
     task.add_done_callback(_maintenance_chain_tasks.discard)
-
-
-def _append_unique_line(path: Path, line: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _key_file_lock:
-        existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-        if line not in existing:
-            with path.open("a", encoding="utf-8", newline="\n") as handle:
-                handle.write(line + "\n")
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
 
 
 def trust_host_key(line: str) -> None:
