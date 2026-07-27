@@ -2265,9 +2265,11 @@ body.run-dialog-open { overflow: hidden; }
   display: flex;
   flex: 0 1 auto;
   min-width: 0;
-  max-width: min(720px, 52vw);
+  max-width: min(1040px, 64vw);
   gap: 6px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
 .header-network-monitor.hidden { display: none; }
 .header-network-chip {
@@ -2341,7 +2343,7 @@ body.run-dialog-open { overflow: hidden; }
 .header-network-interface-option small { display: block; color: var(--muted); font-size: .68rem; }
 
 @media (max-width: 1100px) {
-  .header-network-monitor { max-width: min(520px, 46vw); }
+  .header-network-monitor { max-width: min(680px, 54vw); }
   .header-network-chip { min-width: 132px; max-width: 190px; }
 }
 

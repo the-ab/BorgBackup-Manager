@@ -1,6 +1,6 @@
 <article class="panel help-guide" data-i18n-skip>
   <header class="help-hero">
-    <div><p class="eyebrow">Betriebshandbuch</p><h2>BorgBackup Manager vollständig bedienen</h2><p>Diese Anleitung beschreibt den vollständigen Funktionsumfang von Version 1.0.94 – von Installation und Anmeldung über Geräte, Repositories, Jobs und Zeitpläne bis zu Archivverwaltung, Wiederherstellung, Benutzerrechten und Diagnose.</p></div>
+    <div><p class="eyebrow">Betriebshandbuch</p><h2>BorgBackup Manager vollständig bedienen</h2><p>Diese Anleitung beschreibt den vollständigen Funktionsumfang von Version 1.0.95 – von Installation und Anmeldung über Geräte, Repositories, Jobs und Zeitpläne bis zu Archivverwaltung, Wiederherstellung, Benutzerrechten und Diagnose.</p></div>
     <div class="help-version">Debian 13 · Borg 1.2–1.4 · Europe/Berlin</div>
   </header>
   <nav class="help-toc" aria-label="Inhaltsübersicht">
@@ -91,7 +91,8 @@
   <section id="help-settings" class="help-section"><h3>14. Systemeinstellungen</h3>
     <table class="help-table"><thead><tr><th>Einstellung</th><th>Wirkung</th></tr></thead><tbody>
       <tr><td>Darstellungsdichte</td><td>Komfortable oder kompakte Abstände für Tabellen, Formulare, Karten und Navigation. Die Dichte bleibt systemweit, Sprache und Farbschema sind benutzerbezogen.</td></tr>
-      <tr><td>Interface-Anzeige in der Kopfzeile</td><td>Optionaler Live-Netzwerkmonitor für das BBM-Hostsystem oder ein ausgewähltes verwaltetes Gerät. Automatische oder manuelle Auswahl von maximal drei Interfaces; angezeigt werden IPv4-Adresse sowie aktuelle Download-/Uploadrate. Intervall: 2 bis 60 Sekunden. Entfernte Geräte werden über Controller-SSH abgefragt.</td></tr>
+      <tr><td>Interface-Anzeige in der Kopfzeile</td><td>Optionaler Live-Netzwerkmonitor für das BBM-Hostsystem oder ein ausgewähltes verwaltetes Gerät. Automatische oder manuelle Auswahl von maximal fünf Interfaces; angezeigt werden IPv4-Adresse sowie aktuelle Download-/Uploadrate. Intervall: 2 bis 60 Sekunden. Entfernte Geräte werden über Controller-SSH abgefragt.</td></tr>
+      <tr><td>Sitzung</td><td>Konfigurierbares Inaktivitäts-Timeout für WebUI-Sitzungen. Standard sind 60 Minuten. Die absolute maximale Sitzungsdauer bleibt durch <code>BBM_SESSION_TTL_SECONDS</code> begrenzt; eine Änderung greift ohne Container-Neustart.</td></tr>
       <tr><td>Parallelitätsgrenzen</td><td>Globale Obergrenze, Repository-Grenzen und gemeinsame Mount-Grenzen. <code>0</code> bedeutet bei globaler beziehungsweise Mount-Grenze unbegrenzt. Manuelle Quellenstatistiken zählen gegen die globale Grenze und besitzen zusätzlich eine eigene Obergrenze (Standard 1), ohne Repository oder Mount zu reservieren. Einzelne Zeitpläne können ihre Läufe zusätzlich begrenzen.</td></tr>
       <tr><td>Aktualisierung</td><td>Aktionen werden bis zum tatsächlichen Abschluss verfolgt. Das Intervall ist nur eine zusätzliche Hintergrundaktualisierung.</td></tr>
       <tr><td>Updateprüfung</td><td>Prüft standardmäßig alle 24 Stunden das neueste Release von <code>the-ab/BorgBackup-Manager</code> auf GitHub. Die Prüfung kann deaktiviert oder auf 1 bis 720 Stunden eingestellt werden. In der Seitenleiste steht der Status direkt unter dem Systemstatus und über der installierten Version; bei einem Update öffnet ein Klick das zugehörige GitHub-Release in einem neuen Fenster.</td></tr>

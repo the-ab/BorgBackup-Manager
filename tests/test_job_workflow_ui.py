@@ -225,3 +225,14 @@ def test_disabled_repository_changes_effective_job_and_schedule_status():
     assert "runnable_job_count" in javascript
     assert "repository_disabled_job_count" in javascript
     assert "ausführbar / zugeordnet" in javascript
+
+
+def test_run_delete_action_is_centralized_and_dashboard_receives_retention_protection():
+    root = Path(__file__).resolve().parents[1]
+    javascript = (root / "app/static/app.js").read_text(encoding="utf-8")
+    backend = (root / "app/main.py").read_text(encoding="utf-8")
+    assert javascript.count("bbmAction('deleteExecution', run.id)") == 1
+    assert "run.retention_protected ? protectedHint" in javascript
+    assert 'retention_protected=run.id in protected_run_ids' in backend
+    assert "row.id in retained_run_ids_for_existing_jobs(db)" in backend
+

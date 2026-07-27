@@ -1,5 +1,14 @@
 # Release Notes
 
+## v1.0.95 – 27.07.2026
+
+### Konsistenter Protokollschutz, bis zu fünf Kopfzeilen-Interfaces und Session-Timeout
+
+- **Letzte Aktivitäten** erhält jetzt dieselbe `retention_protected`-Kennzeichnung wie die vollständige Ausführungsprotokollansicht. Der Löschbutton verschwindet damit auch im Dashboard bei dem letzten geschützten Backup-Stand; stattdessen erscheint **Letzter Stand geschützt**. Der DELETE-Endpunkt blockiert diesen Stand weiterhin zusätzlich serverseitig.
+- Die Ausführungsaktionen wurden projektweit abgeglichen: Einzelnes Löschen geschützter Läufe wird ausschließlich zentral über dieselbe Run-Zeile angeboten; **Alle Protokolle löschen** bleibt der einzige Weg, auch die geschützten letzten Stände zu entfernen.
+- Die permanente Interface-Anzeige in der Kopfzeile kann jetzt **1 bis 5 Interfaces** anzeigen. Automatische und manuelle Auswahl sowie Backend-Validierung verwenden dieselbe Obergrenze; bei einer kleineren eingestellten Anzeigegrenze können nicht mehr Interfaces gespeichert werden als tatsächlich angezeigt werden sollen.
+- Unter **System → Einstellungen → Sitzung** ist das Inaktivitäts-Timeout der WebUI-Sitzung nun in Minuten einstellbar. Standard bleiben 60 Minuten. Die absolute maximale Sitzungsdauer aus `BBM_SESSION_TTL_SECONDS` bleibt eine harte Obergrenze. Änderungen gelten ohne Container-Neustart auch für bestehende Sitzungen bei deren nächster Prüfung.
+
 ## v1.0.94 – 27.07.2026
 
 ### Effektiver Status bei deaktivierten Repositorys

@@ -72,7 +72,7 @@ def test_login_rate_limit_is_source_scoped_and_does_not_lock_account(monkeypatch
 
 def test_session_idle_timeout_revokes_stale_session(monkeypatch, tmp_path: Path):
     database = _isolated_security_store(monkeypatch, tmp_path)
-    monkeypatch.setattr(security_store, "SESSION_IDLE_TIMEOUT_SECONDS", 60)
+    monkeypatch.setattr(security_store, "_effective_session_idle_timeout_seconds", lambda: 60)
     user = security_store.authenticate_user("admin", "Security-Test-Password-2026!")
     assert user is not None
     token = security_store.create_session(user, 3600)

@@ -590,6 +590,8 @@ Access complete: OK
 
 The Web API runs as `borg`. Manager-side Borg commands therefore run directly as that user. `runuser` is used only from a root context. The root-only `sshd -t` validation is performed by the entrypoint and exposed through a protected status marker.
 
+WebUI sessions expire after 60 minutes of inactivity by default. The inactivity timeout can be changed later under **System → Settings → Session** without restarting the container. `BBM_SESSION_IDLE_TIMEOUT_SECONDS` provides the initial default, while `BBM_SESSION_TTL_SECONDS` remains the absolute maximum session lifetime.
+
 ## 26. Security rules
 
 - Restrict port 2222 to known clients.

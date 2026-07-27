@@ -1,6 +1,6 @@
 <article class="panel help-guide" data-i18n-skip>
   <header class="help-hero">
-    <div><p class="eyebrow">Operations manual</p><h2>Using BorgBackup Manager</h2><p>This manual covers all features in version 1.0.94, from installation and sign-in through devices, repositories, jobs and schedules to archive management, restore, user permissions and diagnostics.</p></div>
+    <div><p class="eyebrow">Operations manual</p><h2>Using BorgBackup Manager</h2><p>This manual covers all features in version 1.0.95, from installation and sign-in through devices, repositories, jobs and schedules to archive management, restore, user permissions and diagnostics.</p></div>
     <div class="help-version">Debian 13 · Borg 1.2–1.4 · Europe/Berlin</div>
   </header>
   <nav class="help-toc" aria-label="Table of contents">
@@ -91,7 +91,8 @@
   <section id="help-settings" class="help-section"><h3>14. System settings</h3>
     <table class="help-table"><thead><tr><th>Setting</th><th>Effect</th></tr></thead><tbody>
       <tr><td>Display density</td><td>Comfortable or compact spacing for tables, forms, cards and navigation. Density is system-wide; language and theme are per user.</td></tr>
-      <tr><td>Header interface display</td><td>Optional live network monitor for the BBM host system or one selected managed device. Automatically or manually select up to three interfaces and show IPv4 address plus current download/upload rate. Interval: 2 to 60 seconds. Remote devices are queried over controller SSH.</td></tr>
+      <tr><td>Header interface display</td><td>Optional live network monitor for the BBM host system or one selected managed device. Automatically or manually select up to five interfaces and show IPv4 address plus current download/upload rate. Interval: 2 to 60 seconds. Remote devices are queried over controller SSH.</td></tr>
+      <tr><td>Session</td><td>Configurable inactivity timeout for WebUI sessions. The default is 60 minutes. The absolute maximum session lifetime remains limited by <code>BBM_SESSION_TTL_SECONDS</code>; changes apply without a container restart.</td></tr>
       <tr><td>Concurrency limits</td><td>Global cap for concurrently running manager executions; <code>0</code> means unlimited. Individual schedules may impose a narrower cap on their own runs.</td></tr>
       <tr><td>Refresh</td><td>Actions are tracked to actual completion. The interval is only an additional background refresh.</td></tr>
       <tr><td>Update check</td><td>Checks the latest GitHub release of <code>the-ab/BorgBackup-Manager</code> every 24 hours by default. The check can be disabled or configured from 1 to 720 hours. The sidebar status is shown directly below the system status and above the installed version; when an update exists, clicking it opens that GitHub release in a new window.</td></tr>

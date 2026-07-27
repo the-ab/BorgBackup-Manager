@@ -33,6 +33,17 @@ def test_settings_are_atomic_and_validated(monkeypatch, tmp_path: Path):
     assert not path.with_suffix(".tmp").exists()
 
 
+
+
+def test_session_idle_timeout_is_persisted_as_system_setting(monkeypatch, tmp_path: Path):
+    path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings, "SETTINGS_PATH", path)
+    configured = SettingsIn(session_idle_timeout_seconds=5400)
+    settings.save_settings(configured)
+    loaded = settings.load_settings()
+    assert loaded.session_idle_timeout_seconds == 5400
+    assert json.loads(path.read_text(encoding="utf-8"))["session_idle_timeout_seconds"] == 5400
+
 def test_existing_settings_receive_default_exclusion_template(monkeypatch, tmp_path: Path):
     path = tmp_path / "settings.json"
     path.write_text('{"density":"compact"}', encoding="utf-8")

@@ -1575,6 +1575,7 @@ def dashboard() -> dict:
         runs = db.scalars(
             select(Run).options(joinedload(Run.job)).order_by(Run.id.desc()).limit(settings.dashboard_recent_runs_limit)
         ).all()
+        protected_run_ids = retained_run_ids_for_existing_jobs(db) if runs else set()
         jobs = list(db.scalars(
             select(Job).options(joinedload(Job.host), joinedload(Job.repository)).order_by(Job.id)
         ))
@@ -1645,7 +1646,7 @@ def dashboard() -> dict:
             })
         return {
             "counts": counts,
-            "runs": [run_json(run, include_details=False) for run in runs],
+            "runs": [run_json(run, include_details=False, retention_protected=run.id in protected_run_ids) for run in runs],
             "jobs": dashboard_jobs,
         }
 
@@ -1664,6 +1665,7 @@ def system_info() -> dict:
         "repository_endpoint": f"{REPOSITORY_PUBLIC_HOST}:{REPOSITORY_SSH_PORT}",
         "backup_directory": str(BACKUP_DIR),
         "timezone": APP_TIMEZONE_NAME,
+        "session_ttl_seconds": SESSION_TTL_SECONDS,
     }
 
 
@@ -1764,6 +1766,11 @@ def get_settings() -> SettingsIn:
 
 @app.put("/api/settings", response_model=SettingsIn, dependencies=admin_protected)
 def update_settings(data: SettingsIn) -> SettingsIn:
+    if int(data.session_idle_timeout_seconds) > int(SESSION_TTL_SECONDS):
+        raise HTTPException(
+            400,
+            f"Session-Timeout bei Inaktivität darf die maximale Sitzungsdauer von {SESSION_TTL_SECONDS // 60} Minuten nicht überschreiten",
+        )
     previous = load_settings()
     saved = save_settings(data)
     cleanup_run_history()

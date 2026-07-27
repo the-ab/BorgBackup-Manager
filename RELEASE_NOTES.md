@@ -1,5 +1,14 @@
 # Release Notes
 
+## v1.0.95 – 27.07.2026
+
+### Consistent run-log protection, up to five header interfaces and configurable session timeout
+
+- **Recent activity** now receives the same `retention_protected` state as the full run-log view. The delete button therefore also disappears on the dashboard for the protected latest backup state and is replaced by **Latest state protected**. The DELETE endpoint continues to enforce the protection server-side as well.
+- Run actions were audited across the project: protected single-run deletion is exposed only through the centralized run-row logic; **Delete all logs** remains the only action that also removes protected latest states.
+- The persistent header interface monitor can now display **1 to 5 interfaces**. Automatic/manual selection and backend validation use the same limit, and lowering the configured display count also limits how many manual selections can be stored.
+- **System → Settings → Session** now provides a configurable WebUI inactivity timeout in minutes. The default remains 60 minutes. The absolute lifetime from `BBM_SESSION_TTL_SECONDS` remains a hard ceiling. Changes apply without a container restart and affect existing sessions on their next validation.
+
 ## v1.0.94 – 27.07.2026
 
 ### Effective status for disabled repositories

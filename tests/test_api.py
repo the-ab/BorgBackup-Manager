@@ -45,6 +45,17 @@ def wait_for_run_terminal(client: TestClient, run_id: int, timeout: float = 3.0)
     raise AssertionError(f"run {run_id} did not finish within {timeout} seconds")
 
 
+
+
+def test_settings_session_idle_timeout_must_not_exceed_absolute_session_ttl(monkeypatch):
+    monkeypatch.setattr(main_module, "SESSION_TTL_SECONDS", 3600)
+    payload = main_module.load_settings().model_dump()
+    payload["session_idle_timeout_seconds"] = 7200
+    with TestClient(app) as client:
+        response = client.put("/api/settings", headers=AUTH, json=payload)
+    assert response.status_code == 400
+    assert "maximale Sitzungsdauer" in response.json()["detail"]
+
 def test_health_is_public(monkeypatch):
     monkeypatch.setattr(main_module, "repository_sshd_listening", lambda: True)
     with TestClient(app) as client:
@@ -3327,6 +3338,10 @@ def test_individual_delete_rejects_last_retained_backup_of_existing_job():
         db.add(run); db.commit(); run_id = run.id
 
     with TestClient(app) as client:
+        dashboard = client.get("/api/dashboard", headers=AUTH)
+        assert dashboard.status_code == 200
+        dashboard_run = next(item for item in dashboard.json()["runs"] if item["id"] == run_id)
+        assert dashboard_run["retention_protected"] is True
         response = client.delete(f"/api/runs/{run_id}", headers=AUTH)
     assert response.status_code == 409
     assert "Alle Protokolle löschen" in response.json()["detail"]

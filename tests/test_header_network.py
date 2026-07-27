@@ -18,8 +18,12 @@ def test_header_network_settings_defaults_are_safe_and_disabled():
 
 
 def test_header_network_interface_validation_deduplicates_and_limits():
-    settings = SettingsIn(header_network_interfaces=["eth0", "eth0", "bond0", "vlan.20"])
-    assert settings.header_network_interfaces == ["eth0", "bond0", "vlan.20"]
+    settings = SettingsIn(header_network_interfaces=["eth0", "eth0", "bond0", "vlan.20", "br0", "wg0"], header_network_max_interfaces=5)
+    assert settings.header_network_interfaces == ["eth0", "bond0", "vlan.20", "br0", "wg0"]
+    with __import__("pytest").raises(ValueError):
+        SettingsIn(header_network_interfaces=["eth0", "eth1", "eth2", "eth3", "eth4", "eth5"], header_network_max_interfaces=5)
+    with __import__("pytest").raises(ValueError):
+        SettingsIn(header_network_interfaces=["eth0", "eth1", "eth2"], header_network_max_interfaces=2)
 
 
 def test_header_network_sampler_calculates_individual_rates(monkeypatch):
@@ -71,6 +75,8 @@ def test_header_network_ui_contains_persistent_monitor_and_settings():
     assert 'id="header-network-monitor"' in html
     assert 'name="header_network_source"' in html
     assert 'name="header_network_host_id"' in html
+    assert '<option value="5">5</option>' in html
+    assert 'Math.min(5' in js
     assert 'data-header-network-interface' in js
     assert 'scheduleHeaderNetworkPoll' in js
     assert '@media (max-width: 760px)' in css and '.header-network-monitor' in css

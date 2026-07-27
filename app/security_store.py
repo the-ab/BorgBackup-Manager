@@ -23,6 +23,7 @@ from app.config import (
     SECURITY_EVENT_MAX_ROWS,
     SECURITY_EVENT_RETENTION_DAYS,
     SESSION_IDLE_TIMEOUT_SECONDS,
+    SESSION_TTL_SECONDS,
 )
 from app.secret_crypto import decrypt_value, encrypt_value
 
@@ -367,12 +368,28 @@ def authenticate_user(username: str, password: str, remote_address: str | None =
     record_event("login_success", user_id=user.id, username=user.username, remote_address=remote_address)
     return user
 
+
+
+def _effective_session_idle_timeout_seconds() -> int:
+    """Return the live idle-session timeout from persistent settings.
+
+    ``BBM_SESSION_IDLE_TIMEOUT_SECONDS`` remains the bootstrap/default value.
+    Keeping the lookup here means an administrator change applies to existing
+    sessions on their next validation without restarting the container.
+    """
+    try:
+        from app.settings import load_settings
+        configured = int(load_settings().session_idle_timeout_seconds)
+    except Exception:
+        configured = int(SESSION_IDLE_TIMEOUT_SECONDS)
+    return max(60, min(int(SESSION_TTL_SECONDS), configured))
+
 def cleanup_expired_sessions(connection: sqlite3.Connection | None = None) -> int:
     own = connection is None
     connection = connection or _connect()
     try:
         now = _utcnow()
-        idle_cutoff = _iso(now - timedelta(seconds=SESSION_IDLE_TIMEOUT_SECONDS))
+        idle_cutoff = _iso(now - timedelta(seconds=_effective_session_idle_timeout_seconds()))
         cursor = connection.execute(
             "DELETE FROM sessions WHERE expires_at < ? OR last_seen_at < ?",
             (_iso(now), idle_cutoff),
@@ -417,7 +434,7 @@ def get_session_user(token: str | None, touch: bool = True) -> AuthUser | None:
         except ValueError:
             last_seen = datetime.min.replace(tzinfo=timezone.utc)
         now = _utcnow()
-        if expires < now or now - last_seen > timedelta(seconds=SESSION_IDLE_TIMEOUT_SECONDS):
+        if expires < now or now - last_seen > timedelta(seconds=_effective_session_idle_timeout_seconds()):
             connection.execute("DELETE FROM sessions WHERE id=?", (int(row["session_id"]),))
             connection.commit()
             return None
@@ -474,7 +491,7 @@ def get_session_user_by_reload_token(token: str | None, user_agent: str | None =
             last_seen = datetime.fromisoformat(str(row["last_seen_at"]))
         except ValueError:
             last_seen = datetime.min.replace(tzinfo=timezone.utc)
-        if min(session_expires, reload_expires) < now or now - last_seen > timedelta(seconds=SESSION_IDLE_TIMEOUT_SECONDS):
+        if min(session_expires, reload_expires) < now or now - last_seen > timedelta(seconds=_effective_session_idle_timeout_seconds()):
             connection.execute("DELETE FROM sessions WHERE id=?", (int(row["session_id"]),))
             connection.commit()
             return None

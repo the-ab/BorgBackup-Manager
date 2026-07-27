@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.94
+# BorgBackup Manager 1.0.95
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -34,7 +34,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.0.94.zip
+BorgBackup-Manager-1.0.95.zip
 ```
 
 ## Sicherheit und Härtung
@@ -42,7 +42,7 @@ BorgBackup-Manager-1.0.94.zip
 - FastAPI und die vollständig aufgelösten Laufzeitabhängigkeiten sind auf feste Versionen gesperrt; die eingesetzte Starlette-Version enthält die Korrektur für die Range-Header-DoS-Schwachstelle.
 - Browseränderungen benötigen den anwendungsinternen Header `X-BBM-Request: 1`; vorhandene `Origin`-Header müssen zur tatsächlichen Manager-URL passen.
 - Anmeldungen werden persistent pro Quelladresse und pro Kombination aus Quelle und Benutzer begrenzt. Ein Angreifer kann dadurch kein Konto systemweit sperren.
-- Sitzungen laufen standardmäßig nach 24 Stunden absolut oder nach 60 Minuten Inaktivität ab.
+- Sitzungen laufen standardmäßig nach 24 Stunden absolut oder nach 60 Minuten Inaktivität ab. Das Inaktivitäts-Timeout ist unter **System → Einstellungen → Sitzung** einstellbar; die absolute Obergrenze bleibt `BBM_SESSION_TTL_SECONDS`.
 - `Forwarded`- und `X-Forwarded-*`-Header werden ausschließlich von explizit vertrauenswürdigen Proxy-Netzen ausgewertet.
 - Neue Manager-Backups sind immer AES-256-GCM-verschlüsselt und benötigen mindestens zwölf Zeichen. Vor jedem WebUI-Restore wird ein eigenes verschlüsseltes Sicherheitsbackup erzeugt. Alte ZIP-Backups bleiben lesbar.
 - Restore-Pakete werden auf Pfadausbruch, symbolische Links, doppelte Einträge, Dateianzahl, Gesamtgröße und Kompressionsverhältnis geprüft.
@@ -530,7 +530,7 @@ Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin. Aktive 
 
 Passphrasenfehler werden erst nach Abschluss eines fehlgeschlagenen Borg-Laufs diagnostiziert. Vorläufige Live-Fragmente können daher keine kurzzeitig eingeblendete falsche Meldung „Passphrase abgelehnt“ mehr erzeugen.
 
-Unter **System → Einstellungen → Anzeige und Aktualisierung → Interface-Anzeige in der Kopfzeile** kann zusätzlich ein permanenter Netzwerkmonitor aktiviert werden. Als Quelle dient wahlweise das BBM-Hostsystem oder ein einzelnes aktiviertes verwaltetes Gerät. Automatisch werden bis zu drei aktive Interfaces bevorzugt; alternativ können nach einer Interface-Erkennung bis zu drei Einträge manuell gewählt werden. Angezeigt werden Interface-Name, primäre IPv4-Adresse und die aus Kernel-RX/TX-Zählern berechnete aktuelle Download-/Uploadrate. Das Intervall ist von 2 bis 60 Sekunden einstellbar. Für entfernte Geräte läuft nur eine kurze Controller-SSH-Netzwerkabfrage, kein Borg-Befehl. Die Werte werden nicht gespeichert. Auf Docker-Installationen nutzt die Standardquelle read-only eingebundene Host-Netzwerkstatistiken; falls diese nicht verfügbar sind, kennzeichnet die WebUI den Fallback auf die Container-Sicht.
+Unter **System → Einstellungen → Anzeige und Aktualisierung → Interface-Anzeige in der Kopfzeile** kann zusätzlich ein permanenter Netzwerkmonitor aktiviert werden. Als Quelle dient wahlweise das BBM-Hostsystem oder ein einzelnes aktiviertes verwaltetes Gerät. Automatisch werden bis zu fünf aktive Interfaces berücksichtigt; alternativ können nach einer Interface-Erkennung bis zu fünf Einträge manuell gewählt werden. Die tatsächlich angezeigte Anzahl ist zwischen 1 und 5 einstellbar. Angezeigt werden Interface-Name, primäre IPv4-Adresse und die aus Kernel-RX/TX-Zählern berechnete aktuelle Download-/Uploadrate. Das Intervall ist von 2 bis 60 Sekunden einstellbar. Für entfernte Geräte läuft nur eine kurze Controller-SSH-Netzwerkabfrage, kein Borg-Befehl. Die Werte werden nicht gespeichert. Auf Docker-Installationen nutzt die Standardquelle read-only eingebundene Host-Netzwerkstatistiken; falls diese nicht verfügbar sind, kennzeichnet die WebUI den Fallback auf die Container-Sicht.
 
 ### Archive
 
@@ -706,7 +706,7 @@ Release Notes werden passend zur persönlichen Spracheinstellung auf Deutsch ode
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.94.zip
+unzip /pfad/BorgBackup-Manager-1.0.95.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh

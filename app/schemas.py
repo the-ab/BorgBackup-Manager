@@ -425,11 +425,12 @@ class SettingsIn(BaseModel):
     run_retention_days: int = Field(default=90, ge=0, le=3650)
     run_log_max_mib: int = Field(default=50, ge=1, le=2048)
     run_log_view_kib: int = Field(default=2048, ge=256, le=65536)
+    session_idle_timeout_seconds: int = Field(default=3600, ge=60, le=604800)
     header_network_enabled: bool = False
     header_network_source: str = Field(default="manager", pattern=r"^(manager|host)$")
     header_network_host_id: int | None = Field(default=None, ge=1)
     header_network_interfaces: list[str] = Field(default_factory=list)
-    header_network_max_interfaces: int = Field(default=3, ge=1, le=3)
+    header_network_max_interfaces: int = Field(default=3, ge=1, le=5)
     header_network_interval_seconds: int = Field(default=5, ge=2, le=60)
     exclude_templates: list[ExcludeTemplate] = Field(
         default_factory=lambda: [ExcludeTemplate.model_validate(item) for item in DEFAULT_EXCLUDE_TEMPLATES],
@@ -462,9 +463,15 @@ class SettingsIn(BaseModel):
                 raise ValueError("header network interface name is invalid")
             if name not in normalized:
                 normalized.append(name)
-        if len(normalized) > 3:
-            raise ValueError("at most three header network interfaces are allowed")
+        if len(normalized) > 5:
+            raise ValueError("at most five header network interfaces are allowed")
         return normalized
+
+    @model_validator(mode="after")
+    def header_network_selection_within_limit(self):
+        if len(self.header_network_interfaces) > int(self.header_network_max_interfaces):
+            raise ValueError("selected header network interfaces exceed configured display limit")
+        return self
 
     @field_validator("exclude_templates")
     @classmethod

@@ -738,7 +738,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.94`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.95`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -1631,7 +1631,8 @@ function renderHeaderNetwork() {
     target.title = payload.error;
     return;
   }
-  const interfaces = Array.isArray(payload.interfaces) ? payload.interfaces.slice(0, 3) : [];
+  const headerLimit = Math.max(1, Math.min(5, Number(state.settings?.header_network_max_interfaces) || 3));
+  const interfaces = Array.isArray(payload.interfaces) ? payload.interfaces.slice(0, headerLimit) : [];
   if (!interfaces.length) {
     target.innerHTML = `<div class="header-network-chip header-network-error"><strong>${english ? 'No interface data' : 'Keine Interface-Daten'}</strong><span class="header-network-ip">${esc(payload.host_name || '')}</span></div>`;
     return;
@@ -1698,7 +1699,7 @@ function renderHeaderNetworkInterfaceOptions(interfaces, selectedNames = []) {
 }
 
 function selectedHeaderNetworkInterfaces() {
-  return $$('[data-header-network-interface]:checked').map((input) => input.dataset.headerNetworkInterface).filter(Boolean).slice(0, 3);
+  return $$('[data-header-network-interface]:checked').map((input) => input.dataset.headerNetworkInterface).filter(Boolean).slice(0, 5);
 }
 
 function syncHeaderNetworkSettingsUi() {
@@ -1883,6 +1884,16 @@ function renderSettings() {
   if (!state.settings) return;
   const form = $('#settings-form');
   for (const name of ['density', 'dashboard_recent_runs_limit', 'runs_list_limit', 'auto_refresh_seconds', 'list_max_height', 'run_retention_days', 'run_log_max_mib', 'run_log_view_kib', 'storage_guard_threshold_percent', 'max_parallel_runs', 'source_stats_parallel_limit', 'update_check_interval_hours']) form.elements[name].value = state.settings[name];
+  const sessionTimeoutMinutes = Math.max(1, Math.round(Number(state.settings.session_idle_timeout_seconds || 3600) / 60));
+  if (form.elements.session_idle_timeout_minutes) {
+    form.elements.session_idle_timeout_minutes.value = String(sessionTimeoutMinutes);
+    const maximumMinutes = Math.max(1, Math.floor(Number(state.system?.session_ttl_seconds || 86400) / 60));
+    form.elements.session_idle_timeout_minutes.max = String(maximumMinutes);
+    const sessionHint = $('#session-timeout-hint');
+    if (sessionHint) sessionHint.textContent = currentLanguage() === 'en'
+      ? `After this inactivity period, sign-in is required again. Absolute maximum session duration: ${maximumMinutes} minutes.`
+      : `Nach dieser Inaktivitätsdauer ist eine erneute Anmeldung erforderlich. Absolute maximale Sitzungsdauer: ${maximumMinutes} Minuten.`;
+  }
   form.elements.update_check_enabled.checked = Boolean(state.settings.update_check_enabled);
   form.elements.update_check_interval_hours.disabled = !state.settings.update_check_enabled;
   $('#check-updates-now').disabled = !state.settings.update_check_enabled;
@@ -4816,11 +4827,17 @@ $('#refresh-header-network-interfaces').onclick = async (event) => {
 $('#header-network-interface-list').onchange = (event) => {
   const input = event.target.closest?.('[data-header-network-interface]');
   if (!input || !input.checked) return;
+  const configuredLimit = Math.max(1, Math.min(5, Number($('#settings-form').elements.header_network_max_interfaces?.value) || 3));
   const checked = $$('[data-header-network-interface]:checked');
-  if (checked.length > 3) {
+  if (checked.length > configuredLimit) {
     input.checked = false;
-    toast(currentLanguage() === 'en' ? 'A maximum of three interfaces can be selected' : 'Es können maximal drei Interfaces ausgewählt werden', true);
+    toast(currentLanguage() === 'en' ? `A maximum of ${configuredLimit} interfaces can be selected` : `Es können maximal ${configuredLimit} Interfaces ausgewählt werden`, true);
   }
+};
+$('#settings-form').elements.header_network_max_interfaces.onchange = (event) => {
+  const limit = Math.max(1, Math.min(5, Number(event.target.value) || 3));
+  const checked = $$('[data-header-network-interface]:checked');
+  checked.slice(limit).forEach((input) => { input.checked = false; });
 };
 $('#settings-form').onsubmit = async (event) => {
   event.preventDefault(); const release = markButtonBusy(event.submitter, 'Wird gespeichert …'); setSyncState('Einstellungen werden gespeichert …', 'pending', true); const form = new FormData(event.target);
@@ -4840,7 +4857,7 @@ $('#settings-form').onsubmit = async (event) => {
     release();
     return;
   }
-  const payload = {appearance: state.settings.appearance || 'auto', density: form.get('density'), dashboard_recent_runs_limit: +form.get('dashboard_recent_runs_limit'), runs_list_limit: +form.get('runs_list_limit'), auto_refresh_seconds: +form.get('auto_refresh_seconds'), list_max_height: +form.get('list_max_height'), run_retention_days: +form.get('run_retention_days'), run_log_max_mib: +form.get('run_log_max_mib'), run_log_view_kib: +form.get('run_log_view_kib'), max_parallel_runs: +form.get('max_parallel_runs'), source_stats_parallel_limit: +form.get('source_stats_parallel_limit'), update_check_enabled: form.get('update_check_enabled') === 'on', update_check_interval_hours: +form.get('update_check_interval_hours'), mount_parallel_limits: collectMountParallelLimits(), repository_size_after_run: form.get('repository_size_after_run') === 'on', compact_after_prune: form.get('compact_after_prune') === 'on', storage_guard_enabled: form.get('storage_guard_enabled') === 'on', storage_guard_threshold_percent: +form.get('storage_guard_threshold_percent'), header_network_enabled: headerNetworkEnabled, header_network_source: headerNetworkSource, header_network_host_id: headerNetworkHostId, header_network_interfaces: headerNetworkInterfaces, header_network_max_interfaces: Number(event.target.elements.header_network_max_interfaces.value) || 3, header_network_interval_seconds: Number(event.target.elements.header_network_interval_seconds.value) || 5, exclude_templates: collectExcludeTemplates()};
+  const payload = {appearance: state.settings.appearance || 'auto', density: form.get('density'), dashboard_recent_runs_limit: +form.get('dashboard_recent_runs_limit'), runs_list_limit: +form.get('runs_list_limit'), auto_refresh_seconds: +form.get('auto_refresh_seconds'), list_max_height: +form.get('list_max_height'), run_retention_days: +form.get('run_retention_days'), run_log_max_mib: +form.get('run_log_max_mib'), run_log_view_kib: +form.get('run_log_view_kib'), session_idle_timeout_seconds: Math.max(60, Number(form.get('session_idle_timeout_minutes') || 60) * 60), max_parallel_runs: +form.get('max_parallel_runs'), source_stats_parallel_limit: +form.get('source_stats_parallel_limit'), update_check_enabled: form.get('update_check_enabled') === 'on', update_check_interval_hours: +form.get('update_check_interval_hours'), mount_parallel_limits: collectMountParallelLimits(), repository_size_after_run: form.get('repository_size_after_run') === 'on', compact_after_prune: form.get('compact_after_prune') === 'on', storage_guard_enabled: form.get('storage_guard_enabled') === 'on', storage_guard_threshold_percent: +form.get('storage_guard_threshold_percent'), header_network_enabled: headerNetworkEnabled, header_network_source: headerNetworkSource, header_network_host_id: headerNetworkHostId, header_network_interfaces: headerNetworkInterfaces, header_network_max_interfaces: Number(event.target.elements.header_network_max_interfaces.value) || 3, header_network_interval_seconds: Number(event.target.elements.header_network_interval_seconds.value) || 5, exclude_templates: collectExcludeTemplates()};
   try { state.settings = await api('/settings', {method: 'PUT', body: JSON.stringify(payload)}); if (state.system) state.system.update_status = await api('/update-status'); state.headerNetwork = null; renderSettings(); renderSystem(); scheduleRefresh(); scheduleHeaderNetworkPoll(0); setSyncState('Einstellungen übernommen', 'success'); toast('Einstellungen gespeichert'); }
   catch (error) { setSyncState('Einstellungen konnten nicht gespeichert werden', 'error'); toast(error.message, true); }
   finally { release(); }

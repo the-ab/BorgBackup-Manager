@@ -41,6 +41,7 @@ def default_settings() -> SettingsIn:
         storage_guard_enabled=os.getenv("BBM_STORAGE_GUARD_ENABLED", "1").lower()
         not in {"0", "false", "no"},
         storage_guard_threshold_percent=_environment_percent("BBM_STORAGE_GUARD_THRESHOLD_PERCENT", 95),
+        session_idle_timeout_seconds=_environment_limit("BBM_SESSION_IDLE_TIMEOUT_SECONDS", 3600, 60, 604800),
     )
 
 
