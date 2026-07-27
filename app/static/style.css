@@ -1044,15 +1044,24 @@ body.compact .settings-section { gap: 8px; padding-top: 11px; }
 #repo-operation-status.success-state { border-color: color-mix(in srgb, var(--success) 55%, var(--line)); }
 .repository-table-scroll { overflow-x: hidden; }
 .repositories-table { width: 100%; table-layout: fixed; }
-.repositories-table th:nth-child(1) { width: 12%; }
-.repositories-table th:nth-child(2) { width: 7%; }
-.repositories-table th:nth-child(3) { width: 15%; }
-.repositories-table th:nth-child(4) { width: 22%; }
-.repositories-table th:nth-child(5) { width: 9%; }
+.repositories-table th:nth-child(1) { width: 10%; }
+.repositories-table th:nth-child(2) { width: 17%; }
+.repositories-table th:nth-child(3) { width: 14%; }
+.repositories-table th:nth-child(4) { width: 19%; }
+.repositories-table th:nth-child(5) { width: 8%; }
 .repositories-table th:nth-child(6) { width: 14%; }
-.repositories-table th:nth-child(7) { width: 21%; }
+.repositories-table th:nth-child(7) { width: 18%; }
 .repositories-table td { min-width: 0; overflow-wrap: anywhere; }
 .repo-status-cell .badge { max-width: 100%; }
+
+.repo-status-id { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 7px; }
+.repo-status-id code { white-space: nowrap; }
+.repository-storage-summary { display: grid; gap: 3px; min-width: 0; }
+.repository-storage-summary b { white-space: nowrap; }
+.repository-storage-summary small { display: block; margin: 0; line-height: 1.3; overflow-wrap: anywhere; }
+.repository-storage-summary.blocked b { color: var(--danger); }
+.repository-storage-summary.unavailable b { color: var(--muted); }
+.repo-storage-cell { min-width: 0; }
 .repo-id-cell { white-space: nowrap; }
 .repo-id-cell code {
   display: inline-block;
@@ -1241,13 +1250,13 @@ body.compact .settings-section { gap: 8px; padding-top: 11px; }
 .repository-size-grid b { text-align: left; }
 
 @media (min-width: 1181px) {
-  .repositories-table th:nth-child(1) { width: 8%; }
-  .repositories-table th:nth-child(2) { width: 5%; }
-  .repositories-table th:nth-child(3) { width: 14%; }
-  .repositories-table th:nth-child(4) { width: 21%; }
-  .repositories-table th:nth-child(5) { width: 8%; }
-  .repositories-table th:nth-child(6) { width: 17%; }
-  .repositories-table th:nth-child(7) { width: 27%; }
+  .repositories-table th:nth-child(1) { width: 9%; }
+  .repositories-table th:nth-child(2) { width: 17%; }
+  .repositories-table th:nth-child(3) { width: 13%; }
+  .repositories-table th:nth-child(4) { width: 18%; }
+  .repositories-table th:nth-child(5) { width: 7%; }
+  .repositories-table th:nth-child(6) { width: 15%; }
+  .repositories-table th:nth-child(7) { width: 21%; }
   .repositories-table th:nth-child(1),
   .repositories-table td:nth-child(1) { padding-right: 4px; }
   .repositories-table th:nth-child(2),
@@ -2249,4 +2258,112 @@ body.run-dialog-open { overflow: hidden; }
     min-height: 44px !important;
     padding: 9px 12px !important;
   }
+}
+
+/* 1.0.92: optional persistent header interface monitor */
+.header-network-monitor {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(720px, 52vw);
+  gap: 6px;
+  overflow: hidden;
+}
+.header-network-monitor.hidden { display: none; }
+.header-network-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "identity rates" "ip rates";
+  align-items: center;
+  column-gap: 10px;
+  min-width: 150px;
+  max-width: 230px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  line-height: 1.12;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--shadow-color, #000) 10%, transparent);
+}
+.header-network-chip strong {
+  grid-area: identity;
+  min-width: 0;
+  overflow: hidden;
+  font-size: .72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.header-network-chip .header-network-ip {
+  grid-area: ip;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: .64rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.header-network-chip .header-network-rates {
+  grid-area: rates;
+  display: grid;
+  gap: 1px;
+  text-align: right;
+  color: var(--text);
+  font-size: .66rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.header-network-chip.header-network-error {
+  grid-template-columns: 1fr;
+  grid-template-areas: "identity" "ip";
+  max-width: 300px;
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+}
+.header-network-settings { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.header-network-settings h3 { margin: 0; font-size: .96rem; }
+.header-network-interface-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px;
+  margin-top: 7px;
+}
+.header-network-interface-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.header-network-interface-option span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header-network-interface-option small { display: block; color: var(--muted); font-size: .68rem; }
+
+@media (max-width: 1100px) {
+  .header-network-monitor { max-width: min(520px, 46vw); }
+  .header-network-chip { min-width: 132px; max-width: 190px; }
+}
+
+@media (max-width: 760px) {
+  .header-network-monitor {
+    order: -2;
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 1px;
+    scrollbar-width: thin;
+  }
+  .header-network-chip {
+    flex: 0 0 auto;
+    min-width: 138px;
+    max-width: 178px;
+    padding: 5px 7px;
+  }
+  .header-network-chip strong { font-size: .69rem; }
+  .header-network-chip .header-network-ip,
+  .header-network-chip .header-network-rates { font-size: .61rem; }
+  .header-network-interface-list { grid-template-columns: 1fr; }
 }

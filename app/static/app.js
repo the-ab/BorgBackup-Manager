@@ -12,6 +12,7 @@ const state = {
   excludeTemplateDrafts: null, excludeTemplateSelection: -1, excludeTemplateSettingsSignature: '',
   managerBackupTask: null, managerBackupTimer: null,
   systemHealth: null, systemHealthTimer: null, systemHealthRequestPending: false,
+  headerNetwork: null, headerNetworkTimer: null, headerNetworkRequestPending: false, headerNetworkInterfacesSignature: '',
 };
 
 const SORT_DEFAULTS = {
@@ -59,7 +60,12 @@ function sortedDashboardJobs(items) {
   const comparators = {
     'name-asc': (a, b) => compareText(a.name, b.name), 'name-desc': (a, b) => compareText(b.name, a.name),
     'host-asc': (a, b) => compareText(a.host_name, b.host_name), 'repository-asc': (a, b) => compareText(a.repository_name, b.repository_name),
-    'status-active': (a, b) => Number(b.enabled) - Number(a.enabled) || compareText(a.name, b.name),
+    'status-active': (a, b) => {
+      const aHost = state.hosts.find((item) => item.id === a.host_id); const aRepo = state.repos.find((item) => item.id === a.repository_id);
+      const bHost = state.hosts.find((item) => item.id === b.host_id); const bRepo = state.repos.find((item) => item.id === b.repository_id);
+      const rank = (job, host, repo) => jobOperationalStatus(job, host, repo).label === 'aktiv' ? 2 : (job.enabled ? 1 : 0);
+      return rank(b, bHost, bRepo) - rank(a, aHost, aRepo) || compareText(a.name, b.name);
+    },
     'last-newest': (a, b) => timestamp(b) - timestamp(a), 'last-oldest': (a, b) => timestamp(a) - timestamp(b),
     'size-desc': (a, b) => backupSize(b) - backupSize(a) || compareText(a.name, b.name),
   };
@@ -82,7 +88,7 @@ function sortedJobs(items) {
 function sortedRepositories(items) {
   const mode = state.sorts.repositories || SORT_DEFAULTS.repositories;
   const jobCount = (repo) => state.jobs.filter((job) => job.repository_id === repo.id).length;
-  const ready = (repo) => Number(Boolean(repo.initialized && (!repo.managed || repo.repository_present)));
+  const ready = (repo) => Number(Boolean(repo.enabled && repo.initialized && (!repo.managed || repo.repository_present)));
   const size = (repo) => Number(repo.deduplicated_size_bytes ?? repo.size_bytes ?? -1);
   const comparators = {
     'name-asc': (a, b) => compareText(a.name, b.name), 'name-desc': (a, b) => compareText(b.name, a.name),
@@ -467,6 +473,7 @@ async function submitLogin(event) {
     if (verifiedUser.must_change_password) { openPasswordDialog(true); return; }
     await loadAll();
     scheduleSystemHealthPoll(0);
+    scheduleHeaderNetworkPoll(0);
   } catch (error) {
     state.currentUser = null;
     storeReloadSessionToken('');
@@ -731,7 +738,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.0.86`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.0.94`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -1050,11 +1057,16 @@ function dashboardJobTable(jobs) {
       ? `<span class="dashboard-size-stack"><span><span class="dashboard-size-label">Dedupliziert${sizeSource}</span><b>${formatBytes(deduplicated)}</b></span><span><span class="dashboard-size-label">Original</span><b>${formatBytes(original)}</b></span><span><span class="dashboard-size-label">Komprimiert</span><b>${formatBytes(compressed)}</b></span></span>`
       : '<span class="dashboard-size-stack"><span><span class="dashboard-size-label">Statistik</span><b>–</b></span><small>keine Statistik gespeichert</small></span>';
     const accessBlocked = job.repository_managed && !job.repository_access_ready;
-    const startTitle = !job.enabled ? 'Backup-Job ist deaktiviert' : !job.host_enabled ? 'Gerät ist deaktiviert' : accessBlocked ? 'Repository-Zugang zuerst im Backup-Job einrichten' : 'Backup jetzt manuell starten';
+    const startTitle = !job.enabled ? 'Backup-Job ist deaktiviert' : !job.host_enabled ? 'Gerät ist deaktiviert' : !job.repository_enabled ? 'Repository ist deaktiviert' : accessBlocked ? 'Repository-Zugang zuerst im Backup-Job einrichten' : 'Backup jetzt manuell starten';
     const startAction = admin
-      ? `<button ${bbmAction('action', job.id, 'backup')} ${job.enabled && job.host_enabled && !accessBlocked ? '' : 'disabled'} title="${esc(startTitle)}">Starten</button>`
+      ? `<button ${bbmAction('action', job.id, 'backup')} ${job.enabled && job.host_enabled && job.repository_enabled && !accessBlocked ? '' : 'disabled'} title="${esc(startTitle)}">Starten</button>`
       : '<span class="muted">Nur Ansicht</span>';
-    return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span></td><td data-label="Job"><button class="entity-link" ${bbmAction('goToView', 'jobs')}>${esc(job.name)}</button></td><td data-label="Gerät">${esc(job.host_name)}</td><td data-label="Repository">${esc(job.repository_name)}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, false)}</td><td data-label="Zeitplan">${esc(schedule)}</td><td data-label="Letzter Job">${lastRun}</td><td data-label="Größe letzte Sicherung">${size}</td><td data-label="Aktion">${startAction}</td></tr>`;
+    const dashboardStatus = !job.enabled
+      ? {label: 'inaktiv', badgeClass: 'inactive'}
+      : (!job.host_enabled || !job.repository_enabled)
+        ? {label: 'blockiert', badgeClass: 'warning'}
+        : {label: 'aktiv', badgeClass: 'success'};
+    return `<tr><td data-label="Status"><span class="badge ${dashboardStatus.badgeClass}">${dashboardStatus.label}</span></td><td data-label="Job"><button class="entity-link" ${bbmAction('goToView', 'jobs')}>${esc(job.name)}</button></td><td data-label="Gerät">${esc(job.host_name)}</td><td data-label="Repository">${esc(job.repository_name)}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, false)}</td><td data-label="Zeitplan">${esc(schedule)}</td><td data-label="Letzter Job">${lastRun}</td><td data-label="Größe letzte Sicherung">${size}</td><td data-label="Aktion">${startAction}</td></tr>`;
   }).join('');
   return `<div class="table-scroll dashboard-jobs-scroll"><table class="data-table dashboard-jobs-table"><thead><tr><th>Status</th><th>Job</th><th>Gerät</th><th>Repository</th><th>Quellen</th><th>Zeitplan</th><th>Letzter Job</th><th>Größe letzte Sicherung</th><th>Aktion</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -1140,9 +1152,15 @@ function renderRepos() {
     const keyInfo = !repo.managed && repo.external_ssh_public_key
       ? `<small>Manager-SSH-Key · ${esc(repo.external_host_fingerprint || 'Hostkey gespeichert')}</small>` : '';
     const mountLimit = repo.mount_path ? Number(state.settings?.mount_parallel_limits?.[repo.mount_path] || 0) : 0;
-    const guardInfo = repo.managed
-      ? `<small>Speicher-Sperre: ${repo.storage_guard_effective_enabled ? `ab ${repo.storage_guard_effective_threshold_percent} % (${repo.storage_guard_source === 'repository' ? 'Repository' : 'global'})` : 'deaktiviert'} · Parallel: Repo max. ${repo.parallel_limit || 1}${repo.mount_path ? ` · Mount ${esc(repo.mount_path)} ${mountLimit ? `max. ${mountLimit}` : 'unbegrenzt'}` : ''}</small>`
-      : `<small>Parallel: Repo max. ${repo.parallel_limit || 1}</small>`;
+    const guardSourceLabel = repo.storage_guard_source === 'repository' ? 'Repository' : repo.storage_guard_source === 'global' ? 'global' : 'externer Standard';
+    const guardInfo = `<small>Parallel: Repo max. ${repo.parallel_limit || 1}${repo.mount_path ? ` · Mount ${esc(repo.mount_path)} ${mountLimit ? `max. ${mountLimit}` : 'unbegrenzt'}` : ''}</small>`;
+    const storageKnown = repo.storage_usage_percent != null && repo.storage_usage_total_bytes != null;
+    const storageGuardText = repo.storage_guard_effective_enabled
+      ? `Sperre ab ${repo.storage_guard_effective_threshold_percent} % (${guardSourceLabel})`
+      : 'Speicher-Sperre deaktiviert';
+    const storageInfo = storageKnown
+      ? `<div class="repository-storage-summary ${repo.storage_guard_blocked ? 'blocked' : ''}"><b>${Number(repo.storage_usage_percent).toFixed(1)} % belegt</b><small>${formatBytes(repo.storage_usage_used_bytes)} / ${formatBytes(repo.storage_usage_total_bytes)} · ${formatBytes(repo.storage_usage_free_bytes)} frei</small><small>${esc(storageGuardText)}</small><small>${repo.storage_usage_path ? `Dateisystem: ${esc(repo.storage_usage_path)} · ` : ''}${repo.storage_usage_checked_at ? `Letzter erfolgreicher Stand ${esc(formatDate(repo.storage_usage_checked_at))}` : 'noch nicht erfolgreich aktualisiert'}</small>${repo.storage_usage_error ? `<small class="repository-error-summary">Letzte Aktualisierung fehlgeschlagen: ${esc(repo.storage_usage_error)}</small>` : ''}</div>`
+      : `<div class="repository-storage-summary unavailable"><b>${repo.storage_guard_effective_enabled ? 'Belegung nicht ermittelbar' : 'Noch keine Belegung'}</b><small>${esc(storageGuardText)}</small>${repo.storage_usage_error ? `<small class="repository-error-summary">${esc(repo.storage_usage_error)}</small>` : `<small>${repo.managed ? 'Lokale Dateisystemabfrage steht noch aus.' : 'Externe SSH-Dateisystemabfrage steht noch aus.'}</small>`}</div>`;
     const detailsButton = repo.validation_details
       ? `<button type="button" class="inline-action" ${bbmAction('showRepositoryDiagnostic', repo.id)}>Details</button>` : '';
     const errorInfo = repo.validation_error
@@ -1158,9 +1176,11 @@ function renderRepos() {
       ? `<div class="repository-size-grid">${sizeRows}</div><small>${repo.size_checked_at ? `Stand ${esc(formatDate(repo.size_checked_at))}` : 'noch nicht aktualisiert'}</small>`
       : `<span>nicht berechnet</span><small>Borg-Statistik${repo.managed ? ' und Dateisystembelegung' : ''}</small>`;
     const repositoryMissing = Boolean(repo.managed && repo.initialized && !repo.repository_present);
-    const repositoryReady = Boolean(repo.initialized && (!repo.managed || repo.repository_present));
+    const repositoryReady = Boolean(repo.enabled && repo.initialized && (!repo.managed || repo.repository_present));
     const sizeButton = `<button class="secondary" ${bbmAction('refreshRepoSize', repo.id)} ${repositoryReady ? '' : 'disabled'}>Größe berechnen</button>`;
-    const status = repositoryMissing
+    const status = !repo.enabled
+      ? {className: 'inactive', label: 'deaktiviert'}
+      : repositoryMissing
       ? {className: 'warning', label: 'nicht verfügbar'}
       : repo.validation_error
         ? {className: 'warning', label: 'Prüfung fehlgeschlagen'}
@@ -1172,23 +1192,23 @@ function renderRepos() {
     const initButton = repo.managed && !repo.repository_present
       ? repositoryMissing
         ? `<button class="danger ghost" title="Nur verwenden, wenn das Repository tatsächlich gelöscht wurde – nicht bei einem nur ausgehängten Mount." ${bbmAction('resetRepositoryState', repo.id)}>Zurücksetzen</button>`
-        : `<button class="secondary" ${bbmAction('initRepository', repo.id)}>Initialisieren</button>`
+        : `<button class="secondary" ${bbmAction('initRepository', repo.id)} ${repo.enabled ? '' : 'disabled'}>Initialisieren</button>`
       : '';
     const cacheButton = state.currentUser?.role === 'admin'
       ? `<button class="secondary" ${bbmAction('clearRepositoryCache', repo.id)} ${repo.managed && !repositoryReady ? 'disabled' : ''}>Cache löschen</button>` : '';
     const compactButton = state.currentUser?.role === 'admin'
       ? `<button class="secondary" ${bbmAction('compactRepository', repo.id)} ${repositoryReady ? '' : 'disabled'}>Compact</button>` : '';
     return `<tr>
-      <td data-label="Status" class="repo-status-cell"><span class="badge ${status.className}">${status.label}</span>${errorInfo}</td>
-      <td data-label="ID" class="repo-id-cell"><code title="Manager-Repository-ID">#${repo.id}</code></td>
+      <td data-label="Status / ID" class="repo-status-cell"><div class="repo-status-id"><span class="badge ${status.className}">${status.label}</span><code title="Manager-Repository-ID">#${repo.id}</code></div>${errorInfo}</td>
+      <td data-label="Belegung" class="repo-storage-cell">${storageInfo}</td>
       <td data-label="Repository"><button class="entity-link" ${bbmAction('editRepository', repo.id)}>${esc(repo.name)}</button><small>${repo.managed ? 'verwaltet' : 'extern'} · ${esc(repo.encryption_mode)}</small>${keyInfo}${guardInfo}</td>
-      <td data-label="Pfad/Zugriff"><code class="repo-location">${esc(repo.location)}</code><small>direkt im Manager-Container</small></td>
+      <td data-label="Pfad/Zugriff"><code class="repo-location">${esc(repo.location)}</code><small>${repo.managed ? 'direkt im Manager-Container' : 'Managerzugriff per SSH'}</small></td>
       <td data-label="Nutzung">${jobs.length} Job(s)<small>${hosts} Gerät(e)</small></td>
       <td data-label="Größe" class="repo-size-cell">${sizeInfo}</td>
-      <td data-label="Aktionen"><div class="table-actions repo-table-actions">${initButton}<button class="secondary" ${bbmAction('testRepository', repo.id)}>Verbindung prüfen</button>${cacheButton}${!repo.managed && repo.external_ssh_public_key ? `<button class="secondary" ${bbmAction('copyRepositoryPublicKey', repo.id)}>Public Key</button>` : ''}${sizeButton}${compactButton}<button class="secondary" ${bbmAction('openRepositoryArchives', repo.id)} ${repositoryReady ? '' : 'disabled'}>Archive</button><button class="secondary" ${bbmAction('editRepository', repo.id)}>Bearbeiten</button><button class="danger ghost" ${bbmAction('removeEntity', 'repositories', repo.id)}>Löschen</button></div></td>
+      <td data-label="Aktionen"><div class="table-actions repo-table-actions">${initButton}<button class="secondary" ${bbmAction('testRepository', repo.id)} ${repo.enabled ? '' : 'disabled'}>Verbindung prüfen</button>${cacheButton}${!repo.managed && repo.external_ssh_public_key ? `<button class="secondary" ${bbmAction('copyRepositoryPublicKey', repo.id)}>Public Key</button>` : ''}${sizeButton}${compactButton}<button class="secondary" ${bbmAction('openRepositoryArchives', repo.id)} ${repositoryReady ? '' : 'disabled'}>Archive</button><button class="secondary" ${bbmAction('editRepository', repo.id)}>Bearbeiten</button><button class="${repo.enabled ? 'danger ghost' : 'secondary'}" ${bbmAction('setRepositoryEnabled', repo.id, !repo.enabled)}>${repo.enabled ? 'Deaktivieren' : 'Aktivieren'}</button><button class="danger ghost" ${bbmAction('removeEntity', 'repositories', repo.id)}>Löschen</button></div></td>
     </tr>`;
   }).join('');
-  $('#repo-list').innerHTML = `<div class="table-scroll repository-table-scroll"><table class="data-table repositories-table"><thead><tr><th>Status</th><th>ID</th><th>Repository</th><th>Pfad/Zugriff</th><th>Nutzung</th><th>Größe</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  $('#repo-list').innerHTML = `<div class="table-scroll repository-table-scroll"><table class="data-table repositories-table"><thead><tr><th>Status / ID</th><th>Belegung</th><th>Repository</th><th>Pfad/Zugriff</th><th>Nutzung</th><th>Größe</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function showRepositoryDiagnostic(id) {
@@ -1196,6 +1216,23 @@ function showRepositoryDiagnostic(id) {
   if (!repo) return;
   showTextDialog(`Repository-Diagnose · ${repo.name}`, repo.validation_details || repo.validation_error || 'Keine technischen Details gespeichert.');
 }
+
+async function setRepositoryEnabled(id, enabled) {
+  const repo = state.repos.find((item) => item.id === Number(id));
+  if (!repo) return;
+  const prompt = currentLanguage() === 'en'
+    ? `Really ${enabled ? 'enable' : 'disable'} repository “${repo.name}”? ${enabled ? 'Existing jobs remain unchanged.' : 'Jobs and schedules using it will no longer run until the repository is enabled again.'}`
+    : `Repository „${repo.name}“ wirklich ${enabled ? 'aktivieren' : 'deaktivieren'}? ${enabled ? 'Vorhandene Jobs bleiben unverändert.' : 'Jobs und Zeitpläne mit diesem Repository werden bis zur erneuten Aktivierung nicht ausgeführt.'}`;
+  if (!confirm(prompt)) return;
+  const release = markButtonBusy(actionButton(), enabled ? 'Wird aktiviert …' : 'Wird deaktiviert …');
+  try {
+    await api(`/repositories/${id}/enabled`, {method: 'PUT', body: JSON.stringify({enabled: Boolean(enabled)})});
+    toast(`Repository ${enabled ? 'aktiviert' : 'deaktiviert'}`);
+    await refreshAreas(['repositories', 'jobs', 'schedules', 'dashboard']);
+  } catch (error) { toast(error.message, true); }
+  finally { release(); }
+}
+
 
 async function copyRepositoryPublicKey(id) {
   const repo = state.repos.find((item) => item.id === id);
@@ -1246,13 +1283,24 @@ async function setJobEnabled(id, enabled) {
 }
 
 
+function jobOperationalStatus(job, host, repo) {
+  if (!job.enabled) return {label: 'inaktiv', badgeClass: 'inactive'};
+  if (!repo?.enabled) return {label: 'blockiert', badgeClass: 'warning'};
+  if (!host?.enabled) return {label: 'blockiert', badgeClass: 'warning'};
+  return {label: 'aktiv', badgeClass: 'success'};
+}
+
 function renderJobs() {
   const list = $('#job-list');
   const query = state.jobSearch.trim().toLocaleLowerCase(currentLocale());
   const jobs = sortedJobs(state.jobs.filter((job) => {
     const host = state.hosts.find((item) => item.id === job.host_id);
     const repo = state.repos.find((item) => item.id === job.repository_id);
-    const matchesStatus = state.jobStatus === 'all' || (state.jobStatus === 'active' ? job.enabled : !job.enabled);
+    const operational = jobOperationalStatus(job, host, repo);
+    const matchesStatus = state.jobStatus === 'all'
+      || (state.jobStatus === 'active' && operational.label === 'aktiv')
+      || (state.jobStatus === 'blocked' && operational.label === 'blockiert')
+      || (state.jobStatus === 'inactive' && operational.label === 'inaktiv');
     const haystack = `${job.name} ${host?.name || ''} ${repo?.name || ''} ${job.source_paths.join(' ')}`.toLocaleLowerCase(currentLocale());
     return matchesStatus && (!query || haystack.includes(query));
   }));
@@ -1268,24 +1316,27 @@ function renderJobs() {
     const relocationButton = admin ? `<button class="secondary" ${bbmAction('confirmRepositoryLocation', job.id)}>Geänderten Repository-Standort bestätigen</button>` : '';
     const accessRequired = Boolean(repo?.managed);
     const accessReady = !accessRequired || job.repository_access_ready;
-    const repositoryReady = Boolean(repo?.initialized && (!repo.managed || repo.repository_present));
+    const repositoryReady = Boolean(repo?.enabled && repo?.initialized && (!repo.managed || repo.repository_present));
+    const operationalStatus = jobOperationalStatus(job, host, repo);
     const accessSection = admin && accessRequired
-      ? `<section class="job-action-group"><div class="job-action-heading"><h4>Repository-Zugang</h4><span class="badge ${accessReady ? 'success' : 'warning'}">${accessReady ? 'eingerichtet' : 'fehlt'}</span></div><p class="job-action-note">Nur für dieses Gerät und Repository.</p><div class="job-action-buttons"><button class="secondary" ${bbmAction('bootstrapJob', job.id)}>${accessReady ? 'Zugang erneuern' : 'Zugang einrichten'}</button></div></section>`
+      ? `<section class="job-action-group"><div class="job-action-heading"><h4>Repository-Zugang</h4><span class="badge ${accessReady ? 'success' : 'warning'}">${accessReady ? 'eingerichtet' : 'fehlt'}</span></div><p class="job-action-note">Nur für dieses Gerät und Repository.</p><div class="job-action-buttons"><button class="secondary" ${bbmAction('bootstrapJob', job.id)} ${repo?.enabled ? '' : 'disabled'}>${accessReady ? 'Zugang erneuern' : 'Zugang einrichten'}</button></div></section>`
       : '';
-    const startDisabled = !job.enabled || !host?.enabled || !accessReady || !repositoryReady;
+    const startDisabled = !job.enabled || !host?.enabled || !repo?.enabled || !accessReady || !repositoryReady;
     const startTitle = !job.enabled
       ? 'Backup-Job ist deaktiviert'
       : !host?.enabled
         ? 'Gerät ist deaktiviert'
+      : !repo?.enabled
+        ? 'Repository ist deaktiviert'
       : !repositoryReady
         ? 'Repository fehlt oder ist nicht initialisiert'
         : !accessReady
           ? 'Repository-Zugang zuerst einrichten'
           : 'Backup jetzt starten';
     if (!admin) {
-      return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span>${!repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><span class="muted">Nur Ansicht</span></td></tr>`;
+      return `<tr><td data-label="Status"><span class="badge ${operationalStatus.badgeClass}">${operationalStatus.label}</span>${!repo?.enabled ? '<small class="warning-text">Repository ist deaktiviert</small>' : !repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><span class="muted">Nur Ansicht</span></td></tr>`;
     }
-    return `<tr><td data-label="Status"><span class="badge ${job.enabled ? 'success' : 'inactive'}">${job.enabled ? 'aktiv' : 'inaktiv'}</span>${!repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><div class="table-actions"><button ${bbmAction('action', job.id, 'backup')} ${startDisabled ? 'disabled' : ''} title="${esc(startTitle)}">Starten</button><button class="secondary" ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button><button class="secondary" ${bbmAction('editJob', job.id)}>Bearbeiten</button><button class="secondary" data-job-toggle="${job.id}" ${bbmAction('toggleJobActions', job.id)}>${open ? 'Weniger' : 'Mehr'}</button></div></td></tr><tr class="job-detail-row ${open ? '' : 'hidden'}" data-job-detail="${job.id}"><td colspan="7"><div class="job-more-grid"><section class="job-action-group job-action-group-wide"><div class="job-action-heading"><h4>Prüfen</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'probe')} ${accessReady && repositoryReady ? '' : 'disabled'}>Verbindung</button><button ${bbmAction('action', job.id, 'info')} ${accessReady && repositoryReady ? '' : 'disabled'}>Job-Info</button><button ${bbmAction('action', job.id, 'version')}>Borg-Version</button><button ${bbmAction('action', job.id, 'source-stats')} ${host?.enabled ? '' : 'disabled'}>Quellenstatistik</button><button ${bbmAction('action', job.id, 'check')} ${accessReady && repositoryReady ? '' : 'disabled'}>Repository</button><button ${bbmAction('action', job.id, 'verify')} ${accessReady && repositoryReady ? '' : 'disabled'}>Vollprüfung</button>${relocationButton}</div></section>${accessSection}<section class="job-action-group"><div class="job-action-heading"><h4>Speicherpflege</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'prune')} ${accessReady && repositoryReady ? '' : 'disabled'}>Aufbewahrung</button><button ${bbmAction('action', job.id, 'compact')} ${accessReady && repositoryReady ? '' : 'disabled'}>Compact</button><button ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button></div></section>${manageSection}</div></td></tr>`;
+    return `<tr><td data-label="Status"><span class="badge ${operationalStatus.badgeClass}">${operationalStatus.label}</span>${!repo?.enabled ? '<small class="warning-text">Repository ist deaktiviert</small>' : !repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><div class="table-actions"><button ${bbmAction('action', job.id, 'backup')} ${startDisabled ? 'disabled' : ''} title="${esc(startTitle)}">Starten</button><button class="secondary" ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button><button class="secondary" ${bbmAction('editJob', job.id)}>Bearbeiten</button><button class="secondary" data-job-toggle="${job.id}" ${bbmAction('toggleJobActions', job.id)}>${open ? 'Weniger' : 'Mehr'}</button></div></td></tr><tr class="job-detail-row ${open ? '' : 'hidden'}" data-job-detail="${job.id}"><td colspan="7"><div class="job-more-grid"><section class="job-action-group job-action-group-wide"><div class="job-action-heading"><h4>Prüfen</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'probe')} ${accessReady && repositoryReady ? '' : 'disabled'}>Verbindung</button><button ${bbmAction('action', job.id, 'info')} ${accessReady && repositoryReady ? '' : 'disabled'}>Job-Info</button><button ${bbmAction('action', job.id, 'version')} ${repo?.enabled ? '' : 'disabled'}>Borg-Version</button><button ${bbmAction('action', job.id, 'source-stats')} ${host?.enabled && repo?.enabled ? '' : 'disabled'}>Quellenstatistik</button><button ${bbmAction('action', job.id, 'check')} ${accessReady && repositoryReady ? '' : 'disabled'}>Repository</button><button ${bbmAction('action', job.id, 'verify')} ${accessReady && repositoryReady ? '' : 'disabled'}>Vollprüfung</button>${relocationButton}</div></section>${accessSection}<section class="job-action-group"><div class="job-action-heading"><h4>Speicherpflege</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'prune')} ${accessReady && repositoryReady ? '' : 'disabled'}>Aufbewahrung</button><button ${bbmAction('action', job.id, 'compact')} ${accessReady && repositoryReady ? '' : 'disabled'}>Compact</button><button ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button></div></section>${manageSection}</div></td></tr>`;
   }).join('');
   list.innerHTML = `<div class="table-scroll"><table class="data-table jobs-table"><thead><tr><th>Status</th><th>Job</th><th>Gerät</th><th>Repository</th><th>Quellen</th><th>Zeitplan</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -1324,6 +1375,22 @@ function scheduleTargetSummary(schedule) {
   return names.join(', ');
 }
 
+function scheduleOperationalState(schedule) {
+  if (!schedule.enabled) return {label: 'inaktiv', badgeClass: 'inactive', detail: ''};
+  const assigned = Number(schedule.assigned_job_count || 0);
+  const runnable = Number(schedule.runnable_job_count ?? assigned);
+  const repoDisabled = Number(schedule.repository_disabled_job_count || 0);
+  if (assigned > 0 && runnable === 0) {
+    const reason = repoDisabled ? (repoDisabled === 1 ? '1 Job durch deaktiviertes Repository blockiert' : `${repoDisabled} Jobs durch deaktivierte Repositorys blockiert`) : 'Kein zugeordneter Job ist aktuell ausführbar';
+    return {label: 'blockiert', badgeClass: 'warning', detail: reason};
+  }
+  if (assigned > 0 && runnable < assigned) {
+    const reason = repoDisabled ? `${runnable} von ${assigned} Jobs ausführbar · ${repoDisabled} durch deaktivierte Repositorys blockiert` : `${runnable} von ${assigned} Jobs ausführbar`;
+    return {label: 'teilweise blockiert', badgeClass: 'warning', detail: reason};
+  }
+  return {label: 'aktiv', badgeClass: 'success', detail: assigned ? `${runnable} von ${assigned} Jobs ausführbar` : ''};
+}
+
 function renderSchedules() {
   const list = $('#schedule-list');
   $('#schedule-count').textContent = `${state.schedules.length} Zeitplan${state.schedules.length === 1 ? '' : 'e'}`;
@@ -1332,8 +1399,11 @@ function renderSchedules() {
     return;
   }
   const admin = state.currentUser?.role === 'admin';
-  const rows = state.schedules.map((schedule) => `<tr><td data-label="Status"><span class="badge ${schedule.enabled ? 'success' : 'inactive'}">${schedule.enabled ? 'aktiv' : 'inaktiv'}</span></td><td data-label="Zeitplan"><b>${esc(schedule.name)}</b><small>${esc(scheduleSummary(schedule.expressions))} · Europe/Berlin</small></td><td data-label="Zuordnung">${esc(scheduleTargetSummary(schedule))}</td><td data-label="Jobs"><span class="badge">${schedule.assigned_job_count}</span></td><td data-label="Parallelität">${schedule.parallel_limit ? `max. ${schedule.parallel_limit}` : 'globale Grenze'}</td><td data-label="Aktionen">${admin ? `<div class="table-actions"><button class="secondary" ${bbmAction('editSchedule', schedule.id)}>Bearbeiten</button><button class="danger ghost" ${bbmAction('deleteSchedule', schedule.id)}>Löschen</button></div>` : '–'}</td></tr>`).join('');
-  list.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Status</th><th>Zeitplan</th><th>Zielgruppe</th><th>Zugeordnete Jobs</th><th>Parallelität</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const rows = state.schedules.map((schedule) => {
+    const operational = scheduleOperationalState(schedule);
+    return `<tr><td data-label="Status"><span class="badge ${operational.badgeClass}">${operational.label}</span>${operational.detail ? `<small class="${operational.badgeClass === 'warning' ? 'warning-text' : 'muted'}">${esc(operational.detail)}</small>` : ''}</td><td data-label="Zeitplan"><b>${esc(schedule.name)}</b><small>${esc(scheduleSummary(schedule.expressions))} · Europe/Berlin</small></td><td data-label="Zuordnung">${esc(scheduleTargetSummary(schedule))}</td><td data-label="Jobs"><span class="badge">${schedule.runnable_job_count ?? schedule.assigned_job_count} / ${schedule.assigned_job_count}</span><small>ausführbar / zugeordnet</small></td><td data-label="Parallelität">${schedule.parallel_limit ? `max. ${schedule.parallel_limit}` : 'globale Grenze'}</td><td data-label="Aktionen">${admin ? `<div class="table-actions"><button class="secondary" ${bbmAction('editSchedule', schedule.id)}>Bearbeiten</button><button class="danger ghost" ${bbmAction('deleteSchedule', schedule.id)}>Löschen</button></div>` : '–'}</td></tr>`;
+  }).join('');
+  list.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Status</th><th>Zeitplan</th><th>Zielgruppe</th><th>Jobs</th><th>Parallelität</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function resetScheduleForm() {
@@ -1540,6 +1610,134 @@ function scheduleSystemHealthPoll(delay = 0) {
   }, Math.max(0, delay));
 }
 
+function renderHeaderNetwork() {
+  const target = $('#header-network-monitor');
+  if (!target) return;
+  const enabled = Boolean(state.settings?.header_network_enabled);
+  const payload = state.headerNetwork;
+  if (!enabled) {
+    target.classList.add('hidden');
+    target.innerHTML = '';
+    return;
+  }
+  target.classList.remove('hidden');
+  const english = currentLanguage() === 'en';
+  if (!payload) {
+    target.innerHTML = `<div class="header-network-chip"><strong>${english ? 'Network' : 'Netzwerk'}</strong><span class="header-network-ip">${english ? 'Loading …' : 'Wird geladen …'}</span><span class="header-network-rates"><span>↓ –</span><span>↑ –</span></span></div>`;
+    return;
+  }
+  if (payload.error) {
+    target.innerHTML = `<div class="header-network-chip header-network-error"><strong>${english ? 'Network unavailable' : 'Netzwerk nicht verfügbar'}</strong><span class="header-network-ip">${esc(payload.error)}</span></div>`;
+    target.title = payload.error;
+    return;
+  }
+  const interfaces = Array.isArray(payload.interfaces) ? payload.interfaces.slice(0, 3) : [];
+  if (!interfaces.length) {
+    target.innerHTML = `<div class="header-network-chip header-network-error"><strong>${english ? 'No interface data' : 'Keine Interface-Daten'}</strong><span class="header-network-ip">${esc(payload.host_name || '')}</span></div>`;
+    return;
+  }
+  const containerFallback = payload.source !== 'host' && interfaces.some((item) => item.scope === 'container');
+  target.title = `${english ? 'Source' : 'Quelle'}: ${payload.host_name || (payload.source === 'host' ? '–' : 'BBM')}${containerFallback ? (english ? ' · container view (host metrics unavailable)' : ' · Container-Sicht (Host-Metriken nicht verfügbar)') : ''}`;
+  target.innerHTML = interfaces.map((item) => {
+    const ip = item.ip_address || '–';
+    return `<div class="header-network-chip"><strong>${esc(item.interface || '–')}</strong><span class="header-network-ip">${esc(ip)}</span><span class="header-network-rates"><span>↓ ${esc(formatBitRate(item.download_bits_per_second))}</span><span>↑ ${esc(formatBitRate(item.upload_bits_per_second))}</span></span></div>`;
+  }).join('');
+}
+
+async function loadHeaderNetwork() {
+  if (!state.currentUser || !state.settings?.header_network_enabled || state.headerNetworkRequestPending) {
+    renderHeaderNetwork();
+    return;
+  }
+  state.headerNetworkRequestPending = true;
+  try {
+    state.headerNetwork = await api('/header-network');
+  } catch (error) {
+    state.headerNetwork = {enabled: true, interfaces: [], error: error.message || String(error)};
+  } finally {
+    state.headerNetworkRequestPending = false;
+    renderHeaderNetwork();
+  }
+}
+
+function scheduleHeaderNetworkPoll(delay = 0) {
+  clearTimeout(state.headerNetworkTimer);
+  renderHeaderNetwork();
+  if (!state.currentUser || !state.settings?.header_network_enabled) return;
+  const interval = Math.max(2, Math.min(60, Number(state.settings.header_network_interval_seconds) || 5));
+  state.headerNetworkTimer = setTimeout(async () => {
+    if (!document.hidden) await loadHeaderNetwork();
+    scheduleHeaderNetworkPoll(interval * 1000);
+  }, Math.max(0, delay));
+}
+
+function renderHeaderNetworkHostOptions() {
+  const form = $('#settings-form');
+  const select = form?.elements?.header_network_host_id;
+  if (!select) return;
+  const current = String(state.settings?.header_network_host_id || select.value || '');
+  const hosts = sortedHosts((state.hosts || []).filter((host) => host.enabled));
+  select.innerHTML = `<option value="">${currentLanguage() === 'en' ? 'Select device' : 'Gerät auswählen'}</option>` + hosts.map((host) => `<option value="${host.id}">${esc(host.name)} · ${esc(host.address)}</option>`).join('');
+  if ([...select.options].some((option) => option.value === current)) select.value = current;
+}
+
+function renderHeaderNetworkInterfaceOptions(interfaces, selectedNames = []) {
+  const target = $('#header-network-interface-list');
+  if (!target) return;
+  const selected = new Set((selectedNames || []).map(String));
+  if (!interfaces?.length) {
+    target.innerHTML = `<div class="empty">${currentLanguage() === 'en' ? 'No usable interfaces found.' : 'Keine nutzbaren Interfaces gefunden.'}</div>`;
+    return;
+  }
+  target.innerHTML = interfaces.map((item) => {
+    const name = String(item.interface || '');
+    const checked = selected.has(name) ? ' checked' : '';
+    return `<label class="header-network-interface-option"><input type="checkbox" data-header-network-interface="${esc(name)}"${checked}/><span><b>${esc(name)}</b><small>${esc(item.ip_address || (currentLanguage() === 'en' ? 'no IPv4 address' : 'keine IPv4-Adresse'))}</small></span></label>`;
+  }).join('');
+  syncHeaderNetworkSettingsUi();
+}
+
+function selectedHeaderNetworkInterfaces() {
+  return $$('[data-header-network-interface]:checked').map((input) => input.dataset.headerNetworkInterface).filter(Boolean).slice(0, 3);
+}
+
+function syncHeaderNetworkSettingsUi() {
+  const form = $('#settings-form');
+  if (!form) return;
+  const enabled = Boolean(form.elements.header_network_enabled?.checked);
+  const source = form.elements.header_network_source?.value || 'manager';
+  const automatic = Boolean($('#header-network-auto')?.checked);
+  const hostLabel = $('#header-network-host-label');
+  if (hostLabel) hostLabel.classList.toggle('hidden', source !== 'host');
+  if (form.elements.header_network_host_id) form.elements.header_network_host_id.disabled = source !== 'host';
+  $$('[data-header-network-interface]').forEach((input) => { input.disabled = automatic; });
+  const refresh = $('#refresh-header-network-interfaces');
+  if (refresh) refresh.disabled = source === 'host' && !form.elements.header_network_host_id?.value;
+}
+
+async function refreshHeaderNetworkInterfaceOptions(showToast = false) {
+  const form = $('#settings-form');
+  if (!form) return;
+  const source = form.elements.header_network_source?.value || 'manager';
+  const hostId = form.elements.header_network_host_id?.value || '';
+  const target = $('#header-network-interface-list');
+  if (source === 'host' && !hostId) {
+    if (target) target.innerHTML = `<div class="empty">${currentLanguage() === 'en' ? 'Select a device first.' : 'Zuerst ein Gerät auswählen.'}</div>`;
+    return;
+  }
+  const prior = selectedHeaderNetworkInterfaces().length ? selectedHeaderNetworkInterfaces() : (state.settings?.header_network_interfaces || []);
+  if (target) target.innerHTML = `<div class="empty">${currentLanguage() === 'en' ? 'Reading interfaces …' : 'Interfaces werden gelesen …'}</div>`;
+  try {
+    const query = `source=${encodeURIComponent(source)}${source === 'host' ? '&host_id=' + encodeURIComponent(hostId) : ''}`;
+    const payload = await api(`/header-network/interfaces?${query}`);
+    renderHeaderNetworkInterfaceOptions(payload.interfaces || [], prior);
+    if (showToast) toast(currentLanguage() === 'en' ? 'Interfaces refreshed' : 'Interfaces aktualisiert');
+  } catch (error) {
+    if (target) target.innerHTML = `<div class="empty error-text">${esc(error.message)}</div>`;
+    if (showToast) toast(error.message, true);
+  }
+}
+
 function renderUpdateCheckInfo() {
   const info = $('#update-check-info');
   if (!info || !state.settings) return;
@@ -1691,6 +1889,27 @@ function renderSettings() {
   form.elements.repository_size_after_run.checked = state.settings.repository_size_after_run;
   form.elements.compact_after_prune.checked = state.settings.compact_after_prune;
   form.elements.storage_guard_enabled.checked = state.settings.storage_guard_enabled;
+  form.elements.header_network_enabled.checked = Boolean(state.settings.header_network_enabled);
+  form.elements.header_network_source.value = state.settings.header_network_source || 'manager';
+  form.elements.header_network_max_interfaces.value = String(state.settings.header_network_max_interfaces || 3);
+  form.elements.header_network_interval_seconds.value = String(state.settings.header_network_interval_seconds || 5);
+  renderHeaderNetworkHostOptions();
+  if (state.settings.header_network_host_id && [...form.elements.header_network_host_id.options].some((option) => Number(option.value) === Number(state.settings.header_network_host_id))) {
+    form.elements.header_network_host_id.value = String(state.settings.header_network_host_id);
+  }
+  const configuredHeaderInterfaces = Array.isArray(state.settings.header_network_interfaces) ? state.settings.header_network_interfaces : [];
+  $('#header-network-auto').checked = configuredHeaderInterfaces.length === 0;
+  const networkSignature = `${state.settings.header_network_source || 'manager'}:${state.settings.header_network_host_id || ''}:${configuredHeaderInterfaces.join(',')}`;
+  if (state.headerNetworkInterfacesSignature !== networkSignature) {
+    state.headerNetworkInterfacesSignature = networkSignature;
+    if (configuredHeaderInterfaces.length) {
+      renderHeaderNetworkInterfaceOptions(configuredHeaderInterfaces.map((name) => ({interface: name, ip_address: ''})), configuredHeaderInterfaces);
+    } else {
+      $('#header-network-interface-list').innerHTML = '<div class="empty">Interfaces werden automatisch ausgewählt.</div>';
+    }
+    if (hashView() === 'settings') setTimeout(() => refreshHeaderNetworkInterfaceOptions(false), 0);
+  }
+  syncHeaderNetworkSettingsUi();
   const storage = state.runStorage;
   const info = $('#run-storage-info');
   if (info && storage) {
@@ -2825,7 +3044,7 @@ async function deleteHostSshAction(id) {
 function resetRepositoryForm() {
   const form = $('#repo-form'); form.reset(); form.elements.id.value = ''; form.elements.import_directory.value = '';
   form.elements.managed.disabled = false; form.elements.encryption_mode.disabled = false; form.elements.generate_external_ssh_key.checked = true; form.elements.scan_external_host_key.checked = true; form.elements.external_ssh_private_key.value = ''; form.elements.external_known_hosts.value = '';
-  form.elements.storage_guard_mode.value = 'inherit'; form.elements.storage_guard_threshold_percent.value = ''; form.elements.parallel_limit.value = '1';
+  form.elements.storage_guard_mode.value = 'inherit'; form.elements.storage_guard_threshold_percent.value = ''; form.elements.parallel_limit.value = '1'; form.dataset.lastManagedMode = 'true';
   $('#repo-form-title').textContent = 'Repository hinzufügen'; $('#cancel-repo-edit').classList.add('hidden');
   $('#repo-manager-key-info').classList.add('hidden'); $('#repo-manager-key-info').innerHTML = '';
   clearRepositoryStatus();
@@ -2923,10 +3142,18 @@ function toggleRepositoryMode() {
   const editing = Boolean(form.elements.id.value);
   const importing = Boolean(form.elements.import_directory.value);
   $('#repo-external-fields').classList.toggle('hidden', managed);
-  $('#repo-storage-guard-fields').classList.toggle('hidden', !managed);
-  $('#repo-storage-guard-help').classList.toggle('hidden', !managed);
-  form.elements.storage_guard_mode.disabled = !managed;
-  form.elements.storage_guard_threshold_percent.disabled = !managed;
+  $('#repo-storage-guard-fields').classList.remove('hidden');
+  $('#repo-storage-guard-help').classList.remove('hidden');
+  form.elements.storage_guard_mode.disabled = false;
+  form.elements.storage_guard_threshold_percent.disabled = false;
+  const guardDefaultOption = form.elements.storage_guard_mode.querySelector('option[value="inherit"]');
+  if (guardDefaultOption) guardDefaultOption.textContent = managed ? 'Globale Einstellung übernehmen' : 'Externer Standard: deaktiviert';
+  const previousManagedMode = form.dataset.lastManagedMode;
+  if (!editing && previousManagedMode && previousManagedMode !== String(managed)) {
+    if (!managed && form.elements.storage_guard_mode.value === 'inherit') form.elements.storage_guard_mode.value = 'disabled';
+    else if (managed && form.elements.storage_guard_mode.value === 'disabled') form.elements.storage_guard_mode.value = 'inherit';
+  }
+  form.dataset.lastManagedMode = String(managed);
   $('#repo-passphrase-field').classList.toggle('hidden', unencrypted);
   const existingRepository = state.repos.find((item) => String(item.id) === String(form.elements.id.value));
   const needsKeyfile = mode.startsWith('keyfile') && (importing || !managed) && !(editing && existingRepository?.has_keyfile);
@@ -3034,11 +3261,11 @@ bindForm('#repo-form', (form) => {
   const existing = state.repos.find((item) => String(item.id) === String(id));
   const managed = existing ? existing.managed : form.get('managed') === 'true';
   const encryption = existing && $('#repo-form').elements.encryption_mode.disabled ? existing.encryption_mode : form.get('encryption_mode');
-  const guardMode = managed ? form.get('storage_guard_mode') : 'inherit';
+  const guardMode = form.get('storage_guard_mode');
   const guardEnabled = guardMode === 'inherit' ? null : guardMode === 'enabled';
-  const guardThreshold = managed && form.get('storage_guard_threshold_percent') ? +form.get('storage_guard_threshold_percent') : null;
-  if (importDirectory) return api('/repositories/import', {method: 'POST', body: JSON.stringify({name: form.get('name'), directory_name: importDirectory, encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, storage_guard_enabled: guardEnabled, storage_guard_threshold_percent: guardThreshold, parallel_limit: +form.get('parallel_limit') || 1})});
-  return api(id ? `/repositories/${id}` : '/repositories', {method: id ? 'PUT' : 'POST', body: JSON.stringify({name: form.get('name'), managed, location: managed ? null : form.get('location'), external_ssh_private_key: managed ? null : (form.get('external_ssh_private_key') || null), external_known_hosts: managed ? null : (form.get('external_known_hosts') || null), generate_external_ssh_key: managed ? false : form.get('generate_external_ssh_key') === 'on', scan_external_host_key: managed ? false : form.get('scan_external_host_key') === 'on', encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, passphrase_env: null, extra_env: {}, storage_guard_enabled: managed ? guardEnabled : null, storage_guard_threshold_percent: managed ? guardThreshold : null, parallel_limit: +form.get('parallel_limit') || 1})});
+  const guardThreshold = form.get('storage_guard_threshold_percent') ? +form.get('storage_guard_threshold_percent') : null;
+  if (importDirectory) return api('/repositories/import', {method: 'POST', body: JSON.stringify({name: form.get('name'), enabled: true, directory_name: importDirectory, encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, storage_guard_enabled: guardEnabled, storage_guard_threshold_percent: guardThreshold, parallel_limit: +form.get('parallel_limit') || 1})});
+  return api(id ? `/repositories/${id}` : '/repositories', {method: id ? 'PUT' : 'POST', body: JSON.stringify({name: form.get('name'), enabled: existing ? Boolean(existing.enabled) : true, managed, location: managed ? null : form.get('location'), external_ssh_private_key: managed ? null : (form.get('external_ssh_private_key') || null), external_known_hosts: managed ? null : (form.get('external_known_hosts') || null), generate_external_ssh_key: managed ? false : form.get('generate_external_ssh_key') === 'on', scan_external_host_key: managed ? false : form.get('scan_external_host_key') === 'on', encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, passphrase_env: null, extra_env: {}, storage_guard_enabled: guardEnabled, storage_guard_threshold_percent: guardThreshold, parallel_limit: +form.get('parallel_limit') || 1})});
 }, ['dashboard', 'repositories', 'jobs']);
 
 bindForm('#job-form', (form) => {
@@ -3849,8 +4076,15 @@ $('#load-diagnostics').onclick = async () => {
     const diagnostics = await api('/system/diagnostics'); const storage = diagnostics.repository_storage; const checks = diagnostics.repository_server_checks || {};
     const filesystems = diagnostics.repository_storage_filesystems || (storage ? [storage] : []);
     const filesystemRows = filesystems.map((item) => {
-      const repositories = item.repositories?.length ? item.repositories.map((repo) => `${esc(repo.name)} · ${repo.guard_enabled ? `Sperre ab ${repo.guard_threshold_percent} %${repo.guard_source === 'repository' ? ' (Repository)' : ' (global)'}` : 'Sperre deaktiviert'}${repo.guard_blocked ? ' · BLOCKIERT' : ''}`).join('<br>') : `Keine direkte Repository-Zuordnung · globale Sperre ${item.guard_enabled ? 'ab ' + item.guard_threshold_percent + ' %' : 'deaktiviert'}`;
-      return `<tr><td data-label="Mount"><code>${esc(item.path)}</code></td><td data-label="Belegung">${formatBytes(item.used)} / ${formatBytes(item.total)}<small>${item.percent} % · ${formatBytes(item.free)} frei</small></td><td data-label="Repositories">${repositories}</td><td data-label="Status"><span class="badge ${item.guard_blocked ? 'failed' : 'success'}">${item.guard_blocked ? 'Backups blockiert' : 'OK'}</span></td></tr>`;
+      const repositories = item.repositories?.length ? item.repositories.map((repo) => `${esc(repo.name)}${repo.external ? ' · extern' : ''} · ${repo.guard_enabled ? `Sperre ab ${repo.guard_threshold_percent} %${repo.guard_source === 'repository' ? ' (Repository)' : repo.guard_source === 'global' ? ' (global)' : ''}` : 'Sperre deaktiviert'}${repo.guard_blocked ? ' · BLOCKIERT' : ''}`).join('<br>') : `Keine direkte Repository-Zuordnung · globale Sperre ${item.guard_enabled ? 'ab ' + item.guard_threshold_percent + ' %' : 'deaktiviert'}`;
+      const usageKnown = item.used != null && item.total != null && item.percent != null;
+      const usage = usageKnown
+        ? `${formatBytes(item.used)} / ${formatBytes(item.total)}<small>${Number(item.percent).toFixed(1)} % · ${formatBytes(item.free)} frei${item.checked_at ? ` · Stand ${esc(formatDate(item.checked_at))}` : ''}</small>`
+        : `<span>nicht ermittelbar</span>${item.error ? `<small class="repository-error-summary">${esc(item.error)}</small>` : ''}`;
+      const failed = Boolean(item.error && !usageKnown);
+      const statusClass = item.guard_blocked ? 'failed' : failed ? 'warning' : 'success';
+      const statusLabel = item.guard_blocked ? 'Backups blockiert' : failed ? 'Prüfung fehlgeschlagen' : 'OK';
+      return `<tr><td data-label="Mount"><code>${esc(item.path)}</code>${item.external ? '<small>Externes Repository-Dateisystem</small>' : ''}</td><td data-label="Belegung">${usage}</td><td data-label="Repositories">${repositories}</td><td data-label="Status"><span class="badge ${statusClass}">${statusLabel}</span>${item.error && usageKnown ? `<small class="repository-error-summary">Letzte Aktualisierung fehlgeschlagen: ${esc(item.error)}</small>` : ''}</td></tr>`;
     }).join('');
     const inactiveAccess = Number(checks.repository_access_inactive_rows || 0);
     const accessDetail = currentLanguage() === 'en'
@@ -3982,7 +4216,10 @@ window.BBMI18n?.setLanguage?.(currentLanguage(), false);
 async function logout(callServer = true) {
   clearTimeout(state.refreshTimer);
   clearTimeout(state.systemHealthTimer);
+  clearTimeout(state.headerNetworkTimer);
   state.systemHealth = null;
+  state.headerNetwork = null;
+  renderHeaderNetwork();
   renderSystemHealthStatus();
   state.currentUser = null; state.users = [];
   if (callServer) {
@@ -4560,10 +4797,51 @@ $('#settings-form').elements.list_max_height.oninput = (event) => {
   const value = Math.min(1200, Math.max(240, Number(event.target.value) || 520));
   document.documentElement.style.setProperty('--list-max-height', value + 'px');
 };
+$('#settings-form').elements.header_network_enabled.onchange = () => syncHeaderNetworkSettingsUi();
+$('#settings-form').elements.header_network_source.onchange = async () => {
+  $$('[data-header-network-interface]').forEach((input) => { input.checked = false; });
+  syncHeaderNetworkSettingsUi();
+  await refreshHeaderNetworkInterfaceOptions(false);
+};
+$('#settings-form').elements.header_network_host_id.onchange = async () => {
+  $$('[data-header-network-interface]').forEach((input) => { input.checked = false; });
+  syncHeaderNetworkSettingsUi();
+  await refreshHeaderNetworkInterfaceOptions(false);
+};
+$('#header-network-auto').onchange = () => syncHeaderNetworkSettingsUi();
+$('#refresh-header-network-interfaces').onclick = async (event) => {
+  const release = markButtonBusy(event.currentTarget, currentLanguage() === 'en' ? 'Loading …' : 'Lade …');
+  try { await refreshHeaderNetworkInterfaceOptions(true); } finally { release(); syncHeaderNetworkSettingsUi(); }
+};
+$('#header-network-interface-list').onchange = (event) => {
+  const input = event.target.closest?.('[data-header-network-interface]');
+  if (!input || !input.checked) return;
+  const checked = $$('[data-header-network-interface]:checked');
+  if (checked.length > 3) {
+    input.checked = false;
+    toast(currentLanguage() === 'en' ? 'A maximum of three interfaces can be selected' : 'Es können maximal drei Interfaces ausgewählt werden', true);
+  }
+};
 $('#settings-form').onsubmit = async (event) => {
   event.preventDefault(); const release = markButtonBusy(event.submitter, 'Wird gespeichert …'); setSyncState('Einstellungen werden gespeichert …', 'pending', true); const form = new FormData(event.target);
-  const payload = {appearance: state.settings.appearance || 'auto', density: form.get('density'), dashboard_recent_runs_limit: +form.get('dashboard_recent_runs_limit'), runs_list_limit: +form.get('runs_list_limit'), auto_refresh_seconds: +form.get('auto_refresh_seconds'), list_max_height: +form.get('list_max_height'), run_retention_days: +form.get('run_retention_days'), run_log_max_mib: +form.get('run_log_max_mib'), run_log_view_kib: +form.get('run_log_view_kib'), max_parallel_runs: +form.get('max_parallel_runs'), source_stats_parallel_limit: +form.get('source_stats_parallel_limit'), update_check_enabled: form.get('update_check_enabled') === 'on', update_check_interval_hours: +form.get('update_check_interval_hours'), mount_parallel_limits: collectMountParallelLimits(), repository_size_after_run: form.get('repository_size_after_run') === 'on', compact_after_prune: form.get('compact_after_prune') === 'on', storage_guard_enabled: form.get('storage_guard_enabled') === 'on', storage_guard_threshold_percent: +form.get('storage_guard_threshold_percent'), exclude_templates: collectExcludeTemplates()};
-  try { state.settings = await api('/settings', {method: 'PUT', body: JSON.stringify(payload)}); if (state.system) state.system.update_status = await api('/update-status'); renderSettings(); renderSystem(); scheduleRefresh(); setSyncState('Einstellungen übernommen', 'success'); toast('Einstellungen gespeichert'); }
+  const headerNetworkEnabled = form.get('header_network_enabled') === 'on';
+  const headerNetworkSource = String(form.get('header_network_source') || 'manager');
+  const headerNetworkHostId = form.get('header_network_host_id') ? Number(form.get('header_network_host_id')) : null;
+  const headerNetworkInterfaces = $('#header-network-auto')?.checked ? [] : selectedHeaderNetworkInterfaces();
+  if (headerNetworkEnabled && headerNetworkSource === 'host' && !headerNetworkHostId) {
+    setSyncState('Einstellungen konnten nicht gespeichert werden', 'error');
+    toast('Für die Interface-Anzeige muss ein Gerät ausgewählt werden', true);
+    release();
+    return;
+  }
+  if (headerNetworkEnabled && !$('#header-network-auto')?.checked && !headerNetworkInterfaces.length) {
+    setSyncState('Einstellungen konnten nicht gespeichert werden', 'error');
+    toast('Mindestens ein Interface auswählen oder automatische Auswahl aktivieren', true);
+    release();
+    return;
+  }
+  const payload = {appearance: state.settings.appearance || 'auto', density: form.get('density'), dashboard_recent_runs_limit: +form.get('dashboard_recent_runs_limit'), runs_list_limit: +form.get('runs_list_limit'), auto_refresh_seconds: +form.get('auto_refresh_seconds'), list_max_height: +form.get('list_max_height'), run_retention_days: +form.get('run_retention_days'), run_log_max_mib: +form.get('run_log_max_mib'), run_log_view_kib: +form.get('run_log_view_kib'), max_parallel_runs: +form.get('max_parallel_runs'), source_stats_parallel_limit: +form.get('source_stats_parallel_limit'), update_check_enabled: form.get('update_check_enabled') === 'on', update_check_interval_hours: +form.get('update_check_interval_hours'), mount_parallel_limits: collectMountParallelLimits(), repository_size_after_run: form.get('repository_size_after_run') === 'on', compact_after_prune: form.get('compact_after_prune') === 'on', storage_guard_enabled: form.get('storage_guard_enabled') === 'on', storage_guard_threshold_percent: +form.get('storage_guard_threshold_percent'), header_network_enabled: headerNetworkEnabled, header_network_source: headerNetworkSource, header_network_host_id: headerNetworkHostId, header_network_interfaces: headerNetworkInterfaces, header_network_max_interfaces: Number(event.target.elements.header_network_max_interfaces.value) || 3, header_network_interval_seconds: Number(event.target.elements.header_network_interval_seconds.value) || 5, exclude_templates: collectExcludeTemplates()};
+  try { state.settings = await api('/settings', {method: 'PUT', body: JSON.stringify(payload)}); if (state.system) state.system.update_status = await api('/update-status'); state.headerNetwork = null; renderSettings(); renderSystem(); scheduleRefresh(); scheduleHeaderNetworkPoll(0); setSyncState('Einstellungen übernommen', 'success'); toast('Einstellungen gespeichert'); }
   catch (error) { setSyncState('Einstellungen konnten nicht gespeichert werden', 'error'); toast(error.message, true); }
   finally { release(); }
 };
@@ -4592,7 +4870,7 @@ document.addEventListener('bbm-language-changed', (event) => {
 const BBM_ACTION_HANDLERS = Object.freeze({
   removeEntity, action, showRun, resetRepositoryState, initRepository, compactRepository, goToView, goToRuns,
   toggleJobActions, cancelExecution, retryExecution, deleteExecution, refreshRepoSize, testRepository,
-  clearRepositoryCache, editHost, checkHostVersion, setHostEnabled, editHostSshAction, runHostSshAction, deleteHostSshAction, editRepository, copyRepositoryPublicKey, editJob, setJobEnabled,
+  clearRepositoryCache, setRepositoryEnabled, editHost, checkHostVersion, setHostEnabled, editHostSshAction, runHostSshAction, deleteHostSshAction, editRepository, copyRepositoryPublicKey, editJob, setJobEnabled,
   bootstrapJob, confirmRepositoryLocation, editSchedule, deleteSchedule, openRepositoryArchives,
   editUser, resetUserPassword, deleteUser, showRepositoryDiagnostic, showRepositoryStatusDetails,
 });
@@ -4632,7 +4910,7 @@ document.addEventListener('click', (event) => {
 
 Object.assign(window, {
   removeEntity, action, showRun, openActiveRun, resetRepositoryState, initRepository, compactRepository, goToView, goToRuns, toggleJobActions, cancelExecution, retryExecution, deleteExecution, cleanupRunHistory,
-  refreshRepoSize, testRepository, clearRepositoryCache, downloadBackup, deleteBackup, rotateControllerKey, editHost, setHostEnabled, editHostSshAction, runHostSshAction, deleteHostSshAction, editRepository, editJob, setJobEnabled, editSchedule, deleteSchedule, prepareRepositoryImport,
+  refreshRepoSize, testRepository, clearRepositoryCache, setRepositoryEnabled, downloadBackup, deleteBackup, rotateControllerKey, editHost, setHostEnabled, editHostSshAction, runHostSshAction, deleteHostSshAction, editRepository, editJob, setJobEnabled, editSchedule, deleteSchedule, prepareRepositoryImport,
   openRepositoryArchives, archiveInfo, renameArchive, deleteArchive, deleteSelectedArchives, openArchiveBrowser, prepareRestore, exportBrowserSelection, editUser, resetUserPassword, deleteUser,
   showRepositoryDiagnostic, showRepositoryStatusDetails,
 });
@@ -4652,6 +4930,7 @@ async function restoreBrowserSession() {
     if (current.must_change_password) { openPasswordDialog(true); return; }
     await loadAll();
     scheduleSystemHealthPoll(0);
+    scheduleHeaderNetworkPoll(0);
   } catch (error) {
     if (!loginInProgress && !state.currentUser) {
       const detail = error instanceof ApiError && error.status === 401

@@ -5,7 +5,7 @@ import base64
 import hashlib
 import re
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -15,6 +15,51 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 class ExternalSshTarget:
     host: str
     port: int
+
+
+@dataclass(frozen=True)
+class ExternalStorageProbeTarget:
+    host: str
+    port: int
+    username: str
+    repository_path: str
+
+
+def storage_probe_target_from_location(location: str) -> ExternalStorageProbeTarget | None:
+    """Resolve an external Borg SSH location to a shell-visible repository path.
+
+    Borg's ``ssh://host/./repo`` notation means a path relative to the remote
+    login directory. SCP-style ``user@host:repo`` locations are relative as
+    well. Absolute ssh:// paths remain absolute. The function does not contact
+    the remote host; it only derives the destination used by the optional
+    filesystem probe.
+    """
+    parsed = urlsplit(location)
+    if parsed.scheme == "ssh" and parsed.hostname and parsed.username:
+        raw_path = unquote(parsed.path or "")
+        if raw_path.startswith("/./"):
+            repository_path = "./" + raw_path[3:]
+        elif raw_path == "/.":
+            repository_path = "."
+        elif raw_path.startswith("/~/"):
+            repository_path = "./" + raw_path[3:]
+        elif raw_path == "/~":
+            repository_path = "."
+        else:
+            repository_path = raw_path or "."
+        return ExternalStorageProbeTarget(
+            host=parsed.hostname, port=parsed.port or 22, username=unquote(parsed.username),
+            repository_path=repository_path,
+        )
+
+    match = re.match(r"^(?P<user>[^/@:]+)@(?P<host>\[[^\]]+\]|[^/:]+):(?P<path>.+)$", location)
+    if not match:
+        return None
+    host = match.group("host").strip("[]")
+    path = unquote(match.group("path"))
+    return ExternalStorageProbeTarget(
+        host=host, port=22, username=match.group("user"), repository_path=path or ".",
+    )
 
 
 def repository_location_uses_ssh(location: str) -> bool:

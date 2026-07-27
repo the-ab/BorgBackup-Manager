@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any
@@ -166,6 +167,7 @@ class HostScanIn(BaseModel):
 
 class RepositoryIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    enabled: bool = True
     location: str | None = Field(default=None, max_length=500)
     passphrase_env: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]*$")
     passphrase: SecretStr | None = None
@@ -195,8 +197,6 @@ class RepositoryIn(BaseModel):
             raise ValueError("keyfile must be non-empty")
         if self.managed and self.location:
             raise ValueError("managed repository locations are generated automatically")
-        if not self.managed and (self.storage_guard_enabled is not None or self.storage_guard_threshold_percent is not None):
-            raise ValueError("storage guard overrides are only available for managed repositories")
         if self.passphrase_env:
             raise ValueError("Passwort-Umgebungsvariablen werden aus Sicherheitsgründen nicht mehr unterstützt")
         if self.managed and self.encryption_mode == "none" and self.passphrase:
@@ -273,6 +273,7 @@ class RepositoryIn(BaseModel):
 class RepositoryOut(BaseModel):
     id: int
     name: str
+    enabled: bool = True
     location: str
     passphrase_env: str | None = None
     encryption_mode: str
@@ -305,11 +306,16 @@ class RepositoryOut(BaseModel):
     storage_usage_used_bytes: int | None = None
     storage_usage_free_bytes: int | None = None
     storage_usage_percent: float | None = None
+    storage_usage_path: str | None = None
+    storage_usage_checked_at: Any | None = None
+    storage_usage_error: str | None = None
+    storage_usage_source: str | None = None
     storage_guard_blocked: bool = False
 
 
 class RepositoryImportIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    enabled: bool = True
     directory_name: str = Field(min_length=1, max_length=255)
     passphrase: SecretStr | None = None
     encryption_mode: str = "repokey-blake2"
@@ -419,6 +425,12 @@ class SettingsIn(BaseModel):
     run_retention_days: int = Field(default=90, ge=0, le=3650)
     run_log_max_mib: int = Field(default=50, ge=1, le=2048)
     run_log_view_kib: int = Field(default=2048, ge=256, le=65536)
+    header_network_enabled: bool = False
+    header_network_source: str = Field(default="manager", pattern=r"^(manager|host)$")
+    header_network_host_id: int | None = Field(default=None, ge=1)
+    header_network_interfaces: list[str] = Field(default_factory=list)
+    header_network_max_interfaces: int = Field(default=3, ge=1, le=3)
+    header_network_interval_seconds: int = Field(default=5, ge=2, le=60)
     exclude_templates: list[ExcludeTemplate] = Field(
         default_factory=lambda: [ExcludeTemplate.model_validate(item) for item in DEFAULT_EXCLUDE_TEMPLATES],
         max_length=50,
@@ -440,6 +452,20 @@ class SettingsIn(BaseModel):
                 normalized[path] = limit
         return normalized
 
+    @field_validator("header_network_interfaces")
+    @classmethod
+    def safe_header_network_interfaces(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for raw in values:
+            name = str(raw or "").strip().split("@", 1)[0]
+            if not name or name == "lo" or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", name):
+                raise ValueError("header network interface name is invalid")
+            if name not in normalized:
+                normalized.append(name)
+        if len(normalized) > 3:
+            raise ValueError("at most three header network interfaces are allowed")
+        return normalized
+
     @field_validator("exclude_templates")
     @classmethod
     def unique_template_names(cls, values: list[ExcludeTemplate]) -> list[ExcludeTemplate]:
@@ -459,6 +485,7 @@ class RunCleanupIn(BaseModel):
 
 class RepositoryUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    enabled: bool | None = None
     location: str | None = Field(default=None, max_length=500)
     passphrase_env: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]*$")
     passphrase: SecretStr | None = None
@@ -518,8 +545,6 @@ class RepositoryUpdate(BaseModel):
             raise ValueError("keyfile must be non-empty")
         if self.encryption_mode == "none" and (self.passphrase or self.passphrase_env):
             raise ValueError("unencrypted repositories must not define a passphrase")
-        if not self.managed and (self.storage_guard_enabled is not None or self.storage_guard_threshold_percent is not None):
-            raise ValueError("storage guard overrides are only available for managed repositories")
         return self
 
 
@@ -635,6 +660,7 @@ class JobIn(BaseModel):
 
 class JobOut(JobIn):
     id: int
+    repository_enabled: bool = True
     archive_prefix: str
     archive_prefixes: list[str] = Field(default_factory=list)
     schedule_mode: str = "manual"
@@ -698,6 +724,8 @@ class BackupScheduleOut(BackupScheduleIn):
     id: int
     assigned_job_ids: list[int] = Field(default_factory=list)
     assigned_job_count: int = 0
+    runnable_job_count: int = 0
+    repository_disabled_job_count: int = 0
 
 
 class LoginIn(BaseModel):

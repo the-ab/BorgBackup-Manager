@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-TEST_DATA_DIR = Path(tempfile.gettempdir()) / f"bbm-test-data-{os.getpid()}"
+TEST_DATA_DIR = Path(os.environ.get("BBM_DATA_DIR", str(Path(tempfile.gettempdir()) / f"bbm-test-data-{os.getpid()}")))
 shutil.rmtree(TEST_DATA_DIR, ignore_errors=True)
 os.environ.setdefault("BBM_ADMIN_TOKEN", "test-token")
 os.environ.setdefault("BBM_ALLOW_LEGACY_TOKEN_AUTH", "1")
@@ -1320,7 +1320,7 @@ def test_external_repository_can_list_archives_without_backup_job(monkeypatch):
     assert payload["archives"][0]["deduplicated_size"] == 2_000
     assert payload["repository_statistics"]["deduplicated_size"] == 3_000
     assert any("--glob-archives" in call for call in calls)
-    assert len(calls) == 2  # connection test + one repository-wide archive statistics call
+    assert len(calls) == 3  # connection test + external filesystem probe + one archive statistics call
 
 def test_external_repository_browser_works_without_job(monkeypatch):
     from uuid import uuid4
@@ -1448,6 +1448,182 @@ def test_external_repository_failure_is_concise_and_details_are_persistent(monke
     assert "SSH-Anmeldung abgelehnt" in stored["validation_error"]
     assert "Permission denied" in stored["validation_details"]
     assert "KEX algorithms" not in stored["validation_details"]
+
+
+def test_external_repository_refresh_size_persists_successful_storage_probe(monkeypatch):
+    from uuid import uuid4
+
+    suffix = uuid4().hex[:8]
+
+    async def repository_command(repository_id, command):
+        return 0, json.dumps({
+            "repository": {"id": "a" * 64, "location": "ssh://u123@example:23/./repo"},
+            "cache": {"stats": {
+                "total_size": 3_000_000,
+                "total_csize": 2_000_000,
+                "unique_size": 1_800_000,
+                "unique_csize": 1_234_567,
+            }},
+        }), ""
+
+    async def storage_command(command, **_kwargs):
+        assert "df -m" in command.preview
+        return 0, (
+            "Filesystem 1M-blocks Used Avail Capacity Mounted on\n"
+            "u123 1024000 800000 224000 79% /home\n"
+        ), ""
+
+    monkeypatch.setattr(main_module, "execute_interactive", repository_command)
+    monkeypatch.setattr(service, "execute", storage_command)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/repositories", headers=AUTH,
+            json={
+                "name": f"storage-probe-{suffix}",
+                "managed": False,
+                "location": "ssh://u123@example:23/./repo",
+                "generate_external_ssh_key": True,
+                "scan_external_host_key": False,
+                "external_known_hosts": "[example]:23 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEUdWrG3dnKa9pj3X6CSpTSHZ2jwzp1UgSyGgtyY+XJf",
+                "encryption_mode": "none",
+            },
+        ).json()
+        with SessionLocal() as db:
+            repository = db.get(Repository, created["id"])
+            repository.initialized = True
+            db.commit()
+
+        result = client.post(f"/api/repositories/{created['id']}/refresh-size", headers=AUTH)
+        listed = client.get("/api/repositories", headers=AUTH)
+
+    assert result.status_code == 200, result.text
+    assert result.json()["storage_usage"]["percent"] == 79.0
+    assert result.json()["storage_usage"]["guard_enabled"] is False
+    assert listed.status_code == 200, listed.text
+    stored = next(item for item in listed.json() if item["id"] == created["id"])
+    assert stored["storage_usage_percent"] == 79.0
+    assert stored["storage_usage_path"] == "/home"
+    assert stored["storage_usage_error"] is None
+
+
+def test_external_storage_guard_edit_preserves_initialized_state_and_last_usage(monkeypatch):
+    from uuid import uuid4
+
+    suffix = uuid4().hex[:8]
+
+    async def repository_command(repository_id, command):
+        return 0, json.dumps({
+            "repository": {"id": "b" * 64, "location": "ssh://u123@example:23/./repo"},
+            "cache": {"stats": {
+                "total_size": 3_000_000,
+                "total_csize": 2_000_000,
+                "unique_size": 1_800_000,
+                "unique_csize": 1_234_567,
+            }},
+        }), ""
+
+    async def storage_command(command, **_kwargs):
+        return 0, (
+            "Filesystem 1M-blocks Used Avail Capacity Mounted on\n"
+            "u123 1024000 800000 224000 79% /home\n"
+        ), ""
+
+    monkeypatch.setattr(main_module, "execute_interactive", repository_command)
+    monkeypatch.setattr(service, "execute", storage_command)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/repositories", headers=AUTH,
+            json={
+                "name": f"storage-guard-edit-{suffix}",
+                "managed": False,
+                "location": "ssh://u123@example:23/./repo",
+                "generate_external_ssh_key": True,
+                "scan_external_host_key": False,
+                "external_known_hosts": "[example]:23 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEUdWrG3dnKa9pj3X6CSpTSHZ2jwzp1UgSyGgtyY+XJf",
+                "encryption_mode": "none",
+            },
+        ).json()
+        with SessionLocal() as db:
+            repository = db.get(Repository, created["id"])
+            repository.initialized = True
+            repository.validation_error = None
+            repository.validation_details = "previous successful check"
+            db.commit()
+
+        refreshed = client.post(f"/api/repositories/{created['id']}/refresh-size", headers=AUTH)
+        assert refreshed.status_code == 200, refreshed.text
+
+        updated = client.put(
+            f"/api/repositories/{created['id']}", headers=AUTH,
+            json={
+                "name": created["name"],
+                "managed": False,
+                "location": created["location"],
+                "generate_external_ssh_key": False,
+                "scan_external_host_key": False,
+                "encryption_mode": "none",
+                "storage_guard_enabled": True,
+                "storage_guard_threshold_percent": 90,
+                "parallel_limit": 1,
+            },
+        )
+
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["initialized"] is True
+    assert body["storage_guard_effective_enabled"] is True
+    assert body["storage_guard_effective_threshold_percent"] == 90
+    assert body["storage_usage_percent"] == 79.0
+    assert body["storage_usage_path"] == "/home"
+
+
+def test_external_connection_change_still_requires_repository_recheck():
+    from uuid import uuid4
+
+    suffix = uuid4().hex[:8]
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/repositories", headers=AUTH,
+            json={
+                "name": f"external-recheck-{suffix}",
+                "managed": False,
+                "location": "ssh://u123@example:23/./repo",
+                "generate_external_ssh_key": True,
+                "scan_external_host_key": False,
+                "external_known_hosts": "[example]:23 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEUdWrG3dnKa9pj3X6CSpTSHZ2jwzp1UgSyGgtyY+XJf",
+                "encryption_mode": "none",
+            },
+        ).json()
+        with SessionLocal() as db:
+            repository = db.get(Repository, created["id"])
+            repository.initialized = True
+            repository.external_storage_total_bytes = 1_000_000
+            repository.external_storage_used_bytes = 500_000
+            repository.external_storage_free_bytes = 500_000
+            repository.external_storage_usage_percent = 50.0
+            repository.external_storage_path = "/home"
+            db.commit()
+
+        updated = client.put(
+            f"/api/repositories/{created['id']}", headers=AUTH,
+            json={
+                "name": created["name"],
+                "managed": False,
+                "location": "ssh://u123@example:23/./other-repo",
+                "generate_external_ssh_key": False,
+                "scan_external_host_key": False,
+                "encryption_mode": "none",
+                "storage_guard_enabled": True,
+                "storage_guard_threshold_percent": 90,
+                "parallel_limit": 1,
+            },
+        )
+
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["initialized"] is False
+    assert body["storage_usage_percent"] is None
+    assert body["storage_usage_path"] is None
 
 
 def test_external_repository_size_uses_borg_info_without_backup_job(monkeypatch):
@@ -3154,3 +3330,212 @@ def test_individual_delete_rejects_last_retained_backup_of_existing_job():
         response = client.delete(f"/api/runs/{run_id}", headers=AUTH)
     assert response.status_code == 409
     assert "Alle Protokolle löschen" in response.json()["detail"]
+
+
+
+def test_repository_can_be_disabled_without_disabling_jobs_and_blocks_execution():
+    suffix = str(time.time_ns())
+    with TestClient(app) as client:
+        host = client.post(
+            "/api/hosts", headers=AUTH,
+            json={"name": f"repo-disable-host-{suffix}", "address": "10.77.0.1", "port": 22, "username": "backup", "host_key": HOST_KEY, "enabled": True},
+        )
+        assert host.status_code == 201
+        repository = client.post(
+            "/api/repositories", headers=AUTH,
+            json={"name": f"repo-disable-target-{suffix}", "managed": False, "location": f"/tmp/repo-disable-target-{suffix}", "extra_env": {}},
+        )
+        assert repository.status_code == 201
+        job = client.post(
+            "/api/jobs", headers=AUTH,
+            json={
+                "name": f"repo-disable-job-{suffix}", "host_id": host.json()["id"],
+                "repository_id": repository.json()["id"], "source_paths": ["/home"],
+                "exclude_patterns": [], "archive_template": "{hostname}-{now}",
+                "compression": "zstd,6", "prune_options": {}, "create_options": {}, "enabled": True,
+            },
+        )
+        assert job.status_code == 201
+        disabled = client.put(
+            f"/api/repositories/{repository.json()['id']}/enabled", headers=AUTH, json={"enabled": False},
+        )
+        assert disabled.status_code == 200
+        assert disabled.json()["enabled"] is False
+        listed_job = next(item for item in client.get("/api/jobs", headers=AUTH).json() if item["id"] == job.json()["id"])
+        assert listed_job["enabled"] is True
+        assert listed_job["repository_enabled"] is False
+        blocked = client.post(f"/api/jobs/{job.json()['id']}/actions/backup", headers=AUTH)
+        assert blocked.status_code == 400
+        assert "deaktiviert" in blocked.text
+
+
+def test_system_diagnostics_include_enabled_external_repository_and_skip_disabled(monkeypatch):
+    suffix = str(time.time_ns())
+    active_name = f"diag-external-active-{suffix}"
+    inactive_name = f"diag-external-inactive-{suffix}"
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            active = Repository(
+                name=active_name, enabled=True, location="ssh://diag@example.invalid:23/./repo",
+                encryption_mode="none", initialized=True, external_storage_total_bytes=1000,
+                external_storage_used_bytes=400, external_storage_free_bytes=600,
+                external_storage_usage_percent=40.0, external_storage_path="/home",
+            )
+            inactive = Repository(
+                name=inactive_name, enabled=False, location="ssh://diag2@example.invalid:23/./repo",
+                encryption_mode="none", initialized=True, external_storage_total_bytes=1000,
+                external_storage_used_bytes=900, external_storage_free_bytes=100,
+                external_storage_usage_percent=90.0, external_storage_path="/home",
+            )
+            db.add_all([active, inactive]); db.commit(); active_id = active.id; inactive_id = inactive.id
+
+        calls = []
+        async def fake_refresh(repository_id: int):
+            calls.append(repository_id)
+            return {"total": 1000, "used": 400, "free": 600, "percent": 40.0, "mount_point": "/home"}
+        monkeypatch.setattr(main_module, "refresh_external_repository_storage", fake_refresh)
+        response = client.get("/api/system/diagnostics", headers=AUTH)
+        assert response.status_code == 200, response.text
+        filesystems = response.json()["repository_storage_filesystems"]
+        external_names = {
+            repo["name"] for item in filesystems for repo in item.get("repositories", []) if repo.get("external")
+        }
+        assert active_name in external_names
+        assert inactive_name not in external_names
+        assert active_id in calls
+        assert inactive_id not in calls
+
+
+def test_system_diagnostics_group_external_repositories_on_same_remote_filesystem(monkeypatch):
+    suffix = str(time.time_ns())
+    names = [f"diag-storagebox-a-{suffix}", f"diag-storagebox-b-{suffix}"]
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            repos = [
+                Repository(
+                    name=name, enabled=True,
+                    location=f"ssh://u123@box.example:23/./repo-{index}",
+                    encryption_mode="none", initialized=True,
+                    external_storage_total_bytes=10 * 1024**4,
+                    external_storage_used_bytes=5 * 1024**4,
+                    external_storage_free_bytes=5 * 1024**4,
+                    external_storage_usage_percent=50.0, external_storage_path="/home",
+                )
+                for index, name in enumerate(names, start=1)
+            ]
+            db.add_all(repos); db.commit(); ids = [repo.id for repo in repos]
+
+        async def fake_refresh(repository_id: int):
+            if repository_id not in ids:
+                raise ValueError("unrelated external repository")
+            return {
+                "total": 10 * 1024**4, "used": 5 * 1024**4, "free": 5 * 1024**4,
+                "percent": 50.0, "mount_point": "/home",
+            }
+        monkeypatch.setattr(main_module, "refresh_external_repository_storage", fake_refresh)
+        response = client.get("/api/system/diagnostics", headers=AUTH)
+        assert response.status_code == 200, response.text
+        rows = [
+            item for item in response.json()["repository_storage_filesystems"]
+            if item.get("external") and "u123@box.example:23" in item.get("path", "")
+        ]
+        assert len(rows) == 1
+        assert rows[0]["path"] == "u123@box.example:23 · /home"
+        assert [repo["name"] for repo in rows[0]["repositories"]] == sorted(names)
+
+
+def test_header_network_endpoint_uses_saved_manager_configuration(monkeypatch):
+    from app.schemas import SettingsIn
+
+    previous = main_module.load_settings()
+    try:
+        main_module.save_settings(SettingsIn(
+            **{
+                **previous.model_dump(),
+                "header_network_enabled": True,
+                "header_network_source": "manager",
+                "header_network_interfaces": ["enp3s0"],
+                "header_network_max_interfaces": 1,
+                "header_network_interval_seconds": 4,
+            }
+        ))
+        captured = {}
+
+        def sample(**kwargs):
+            captured.update(kwargs)
+            return [{
+                "interface": "enp3s0", "ip_address": "192.168.178.10",
+                "download_bits_per_second": 1000.0, "upload_bits_per_second": 2000.0,
+                "scope": "host",
+            }]
+
+        monkeypatch.setattr(main_module, "sample_header_network_interfaces", sample)
+        with TestClient(app) as client:
+            response = client.get("/api/header-network", headers=AUTH)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["enabled"] is True
+        assert payload["host_name"] == "BBM-Hostsystem"
+        assert payload["interval_seconds"] == 4
+        assert payload["interfaces"][0]["interface"] == "enp3s0"
+        assert captured["selected"] == ["enp3s0"]
+        assert captured["maximum"] == 1
+    finally:
+        main_module.save_settings(previous)
+
+
+def test_header_network_discovery_can_query_selected_managed_host(monkeypatch):
+    with SessionLocal() as db:
+        host = Host(name="header-net-client", address="192.0.2.55", port=22, username="root", enabled=True, host_key=HOST_KEY)
+        db.add(host)
+        db.commit()
+        host_id = host.id
+
+    observed = {}
+
+    def discover(*, host=None):
+        observed["host"] = host
+        return [{"interface": "eth0", "ip_address": "192.0.2.55", "scope": "host"}]
+
+    monkeypatch.setattr(main_module, "discover_header_network_interfaces", discover)
+    with TestClient(app) as client:
+        response = client.get(f"/api/header-network/interfaces?source=host&host_id={host_id}", headers=AUTH)
+    assert response.status_code == 200, response.text
+    assert response.json()["interfaces"][0]["interface"] == "eth0"
+    assert observed["host"].id == host_id
+
+
+def test_schedule_status_counts_reflect_disabled_repository():
+    suffix = str(time.time_ns())
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            host_a = Host(name=f"schedule-repo-active-host-{suffix}", address="10.80.0.1", port=22, username="backup", enabled=True, host_key=HOST_KEY)
+            host_b = Host(name=f"schedule-repo-disabled-host-{suffix}", address="10.80.0.2", port=22, username="backup", enabled=True, host_key=HOST_KEY)
+            repo_a = Repository(name=f"schedule-repo-active-{suffix}", location=f"/tmp/schedule-active-{suffix}", initialized=True, enabled=True)
+            repo_b = Repository(name=f"schedule-repo-disabled-{suffix}", location=f"/tmp/schedule-disabled-{suffix}", initialized=True, enabled=False)
+            db.add_all([host_a, host_b, repo_a, repo_b]); db.flush()
+            job_a = Job(
+                name=f"schedule-repo-active-job-{suffix}", host_id=host_a.id, repository_id=repo_a.id,
+                source_paths_json='["/srv/a"]', exclude_patterns_json="[]",
+                archive_template="{hostname}-{now:%Y-%m-%dT%H:%M:%S}", archive_prefix=f"bbm-{suffix}-a-",
+                compression="zstd,6", prune_options_json="{}", create_options_json="{}", enabled=True,
+            )
+            job_b = Job(
+                name=f"schedule-repo-disabled-job-{suffix}", host_id=host_b.id, repository_id=repo_b.id,
+                source_paths_json='["/srv/b"]', exclude_patterns_json="[]",
+                archive_template="{hostname}-{now:%Y-%m-%dT%H:%M:%S}", archive_prefix=f"bbm-{suffix}-b-",
+                compression="zstd,6", prune_options_json="{}", create_options_json="{}", enabled=True,
+            )
+            db.add_all([job_a, job_b]); db.flush()
+            schedule = BackupSchedule(
+                name=f"schedule-repo-mixed-{suffix}", expressions="0 2 * * *", target_mode="hosts",
+                target_host_ids_json=json.dumps([host_a.id, host_b.id]), enabled=True,
+            )
+            db.add(schedule); db.commit(); schedule_id = schedule.id
+
+        response = client.get("/api/schedules", headers=AUTH)
+        assert response.status_code == 200, response.text
+        item = next(row for row in response.json() if row["id"] == schedule_id)
+        assert item["assigned_job_count"] == 2
+        assert item["runnable_job_count"] == 1
+        assert item["repository_disabled_job_count"] == 1

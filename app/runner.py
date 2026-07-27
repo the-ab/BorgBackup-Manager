@@ -22,6 +22,7 @@ from app.config import (
     MANAGER_BORG_SECURITY_DIR,
     REPOSITORY_KEYFILES_PATH,
 )
+from app.external_repository import storage_probe_target_from_location
 from app.models import Host, Job, Repository
 from app.repository_cache import manager_repository_cache_dir
 from app.schemas import DEFAULT_CREATE_OPTIONS, validate_create_options
@@ -193,6 +194,125 @@ def _secret_payload(env: dict[str, str], *, required: bool = False) -> bytes | N
     if not required and not any(value is not None for value in values):
         return None
     return b"".join(_payload_line(value) for value in values)
+
+
+_EXTERNAL_STORAGE_SSH_WRAPPER = r'''
+set -eu
+umask 077
+port="$1"
+destination="$2"
+remote_with_path="$3"
+allow_pathless_fallback="$4"
+tmpdir=$(mktemp -d /tmp/bbm-storage-probe.XXXXXX)
+trap 'rm -rf -- "$tmpdir"' EXIT HUP INT TERM
+IFS= read -r ssh_key_b64 || exit 90
+IFS= read -r known_hosts_b64 || exit 91
+ssh_key="$tmpdir/id_ed25519"
+known_hosts="$tmpdir/known_hosts"
+printf '%s' "$ssh_key_b64" | base64 -d > "$ssh_key"
+printf '%s' "$known_hosts_b64" | base64 -d > "$known_hosts"
+chmod 600 "$ssh_key" "$known_hosts"
+run_ssh() {
+  ssh \
+    -i "$ssh_key" \
+    -p "$port" \
+    -o BatchMode=yes \
+    -o ConnectTimeout=10 \
+    -o ConnectionAttempts=1 \
+    -o ServerAliveInterval=10 \
+    -o ServerAliveCountMax=2 \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="$known_hosts" \
+    "$destination" "$1"
+}
+
+# Restricted SSH services such as Hetzner Storage Box expose `df` directly but
+# do not provide a full remote shell. Avoid environment assignments, pipes and
+# redirects. `df -m` is both restricted-shell friendly and machine-readable.
+if run_ssh "$remote_with_path"; then
+  exit 0
+fi
+
+# For relative Borg locations (for example ./borg on Storage Box) a pathless
+# `df -m` still refers to the account/home filesystem containing the repository.
+# Never use this fallback for absolute repository paths because that could report
+# an unrelated login filesystem on a normal server.
+if [ "$allow_pathless_fallback" = "1" ]; then
+  run_ssh "df -m"
+  exit $?
+fi
+exit 1
+'''.strip()
+
+
+def external_repository_storage_command(repository: Repository) -> Command:
+    """Query the filesystem containing an external SSH repository.
+
+    This uses a separate SSH connection rather than Borg so the remote
+    filesystem can be checked before and while ``borg create`` is running.
+    Targets that intentionally expose only ``borg serve`` will reject the
+    command; callers can then show that filesystem monitoring is unavailable.
+    """
+    if repository.storage_path:
+        raise ValueError("Filesystem SSH probe is only used for external repositories")
+    target = storage_probe_target_from_location(repository.location)
+    if target is None:
+        raise ValueError("Externe Dateisystemprüfung benötigt ein SSH-Repository mit Benutzer und Host")
+    ssh_key = get_repository_secret(repository, "external_ssh_private_key")
+    known_hosts = get_repository_secret(repository, "external_known_hosts")
+    if not ssh_key:
+        raise ValueError("External repository has no manager SSH key configured")
+    if not known_hosts:
+        raise ValueError("External repository has no manager known_hosts entry configured")
+    repository_path = target.repository_path
+    if repository_path.startswith("-"):
+        repository_path = "./" + repository_path
+    allow_pathless_fallback = "1" if not repository_path.startswith("/") else "0"
+    remote_with_path = f"df -m {shlex.quote(repository_path)}"
+    payload = _payload_line(ssh_key) + _payload_line(known_hosts)
+    ssh_host = f"[{target.host}]" if ":" in target.host and not target.host.startswith("[") else target.host
+    destination = f"{target.username}@{ssh_host}"
+    return Command(
+        argv=manager_borg_argv([
+            "sh", "-c", _EXTERNAL_STORAGE_SSH_WRAPPER, "--",
+            str(target.port), destination, remote_with_path, allow_pathless_fallback,
+        ]),
+        preview=(
+            f"[direkt im Manager] ssh -p {target.port} {shlex.quote(destination)} "
+            f"-- df -m {shlex.quote(target.repository_path)}"
+            + (" (Fallback: df -m)" if allow_pathless_fallback == "1" else "")
+        ),
+        stdin_data=payload,
+        timeout_seconds=20,
+    )
+
+
+def parse_external_repository_storage(output: str, repository_path: str) -> dict[str, int | float | str]:
+    """Parse ``df -m`` output from an external repository probe."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    for line in reversed(lines):
+        parts = line.split()
+        percent_index = next((i for i, value in enumerate(parts) if re.fullmatch(r"\d+%", value)), None)
+        if percent_index is None or percent_index < 3:
+            continue
+        try:
+            total_blocks = int(parts[percent_index - 3])
+            used_blocks = int(parts[percent_index - 2])
+            free_blocks = int(parts[percent_index - 1])
+            percent = float(parts[percent_index].rstrip("%"))
+        except ValueError:
+            continue
+        mount_point = " ".join(parts[percent_index + 1:]) or repository_path
+        return {
+            "total": total_blocks * 1024 * 1024,
+            "used": used_blocks * 1024 * 1024,
+            "free": free_blocks * 1024 * 1024,
+            "percent": round(percent, 1),
+            "path": repository_path,
+            "mount_point": mount_point,
+        }
+    raise ValueError("Dateisystemausgabe des externen Repositorys konnte nicht ausgewertet werden")
 
 
 _SECRET_WRAPPER = r'''
@@ -2160,6 +2280,8 @@ async def execute(
     on_output: Callable[[str, str], Awaitable[None] | None] | None = None,
     capture_limit_bytes: int | None = None,
     on_output_bytes: Callable[[str, bytes], Awaitable[bytes | None] | bytes | None] | None = None,
+    abort_event: asyncio.Event | None = None,
+    abort_reason: Callable[[], str] | None = None,
 ) -> tuple[int, str, str]:
     process_env = {**os.environ, **command.env} if command.env else None
     temporary_directory: tempfile.TemporaryDirectory[str] | None = None
@@ -2188,6 +2310,30 @@ async def execute(
             return True
         except TimeoutError:
             return False
+
+    async def stop_process_gracefully() -> tuple[bool, bool]:
+        """Stop a Borg command while giving the remote wrapper time to clean up."""
+        forced = False
+        wrapper_confirmed = False
+        if command.stdin_controlled_cancel and process is not None and process.stdin:
+            if not process.stdin.is_closing():
+                process.stdin.close()
+                try:
+                    await process.stdin.wait_closed()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            try:
+                await asyncio.wait_for(asyncio.shield(process_tasks), timeout=25)
+                wrapper_confirmed = True
+            except TimeoutError:
+                wrapper_confirmed = False
+        if not wrapper_confirmed:
+            if not await wait_after_signal(signal.SIGINT, 20):
+                forced = True
+                if not await wait_after_signal(signal.SIGTERM, 5):
+                    await wait_after_signal(signal.SIGKILL, 5)
+        await asyncio.gather(process_tasks, return_exceptions=True)
+        return forced, wrapper_confirmed
 
     try:
         if command.temp_files:
@@ -2249,11 +2395,24 @@ async def execute(
         stderr_task = asyncio.create_task(pump("stderr", process.stderr))
         wait_task = asyncio.create_task(process.wait())
         process_tasks = asyncio.gather(stdout_task, stderr_task, wait_task)
+        abort_task: asyncio.Task[bool] | None = None
         try:
-            await asyncio.wait_for(
-                asyncio.shield(process_tasks),
-                timeout=command.timeout_seconds if command.timeout_seconds is not None else COMMAND_TIMEOUT,
-            )
+            timeout = command.timeout_seconds if command.timeout_seconds is not None else COMMAND_TIMEOUT
+            if abort_event is None:
+                await asyncio.wait_for(asyncio.shield(process_tasks), timeout=timeout)
+            else:
+                abort_task = asyncio.create_task(abort_event.wait())
+                done, _pending = await asyncio.wait(
+                    {process_tasks, abort_task}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED,
+                )
+                if process_tasks in done:
+                    await process_tasks
+                elif abort_task in done and abort_event.is_set():
+                    await stop_process_gracefully()
+                    reason = abort_reason() if abort_reason is not None else "Command aborted by safety monitor"
+                    return 75, output_parts["stdout"].decode(errors="replace"), reason
+                else:
+                    raise TimeoutError
         except TimeoutError:
             if not await wait_after_signal(signal.SIGTERM, 5):
                 await wait_after_signal(signal.SIGKILL, 5)
@@ -2265,33 +2424,15 @@ async def execute(
             # signal Borg itself and wait for its shutdown. This avoids killing
             # the local ssh client before the remote Borg process has released
             # an external repository lock.
-            forced = False
-            wrapper_confirmed = False
-            if command.stdin_controlled_cancel and process.stdin:
-                if not process.stdin.is_closing():
-                    process.stdin.close()
-                    try:
-                        await process.stdin.wait_closed()
-                    except (BrokenPipeError, ConnectionResetError):
-                        pass
-                try:
-                    await asyncio.wait_for(asyncio.shield(process_tasks), timeout=25)
-                    wrapper_confirmed = True
-                except TimeoutError:
-                    wrapper_confirmed = False
-            if not wrapper_confirmed:
-                # Fallback for commands without the wrapper or a remote wrapper
-                # that no longer responds. SIGINT still comes first so Borg can
-                # perform its normal checkpoint and lock cleanup.
-                if not await wait_after_signal(signal.SIGINT, 20):
-                    forced = True
-                    if not await wait_after_signal(signal.SIGTERM, 5):
-                        await wait_after_signal(signal.SIGKILL, 5)
-            await asyncio.gather(process_tasks, return_exceptions=True)
+            forced, wrapper_confirmed = await stop_process_gracefully()
             raise CommandCancelled(
                 forced=forced,
                 remote_cleanup_confirmed=wrapper_confirmed,
             )
+        finally:
+            if abort_task is not None:
+                abort_task.cancel()
+                await asyncio.gather(abort_task, return_exceptions=True)
         return (
             process.returncode or 0,
             output_parts["stdout"].decode(errors="replace"),

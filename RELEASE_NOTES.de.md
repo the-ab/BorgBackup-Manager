@@ -1,5 +1,85 @@
 # Release Notes
 
+## v1.0.94 – 27.07.2026
+
+### Effektiver Status bei deaktivierten Repositorys
+
+- Ein aktiv konfigurierter Backup-Job wird nicht mehr weiterhin als **aktiv** angezeigt, wenn sein Repository deaktiviert ist. Der effektive Status lautet jetzt **blockiert**, während der konkrete Hinweis **Repository ist deaktiviert** erhalten bleibt.
+- Der Job-Statusfilter kennt deshalb zusätzlich **Blockiert**; **Aktiv** zeigt nur tatsächlich ausführbare aktivierte Jobs. Die Sortierung **Aktive zuerst** berücksichtigt ebenfalls den effektiven Betriebsstatus.
+- Die gleiche effektive Statuslogik gilt in der Dashboard-Jobübersicht, damit ein durch Gerät oder Repository blockierter Job nicht grün als aktiv erscheint.
+- Zentrale Zeitpläne berücksichtigen jetzt auch optisch die tatsächlich ausführbaren Jobs. Bei gemischten Zuordnungen wird **teilweise blockiert** angezeigt, wenn nur ein Teil der Jobs ausgeführt werden kann; sind keine zugeordneten Jobs ausführbar, lautet der Status **blockiert**.
+- In der Zeitplanliste wird zusätzlich **ausführbar / zugeordnet** angezeigt, beispielsweise `1 / 2`. Deaktivierte Repositorys werden separat gezählt, sodass bei mehreren Clients mit unterschiedlichen Repositorys sofort sichtbar ist, warum ein Zeitplan nur teilweise ausführbar ist.
+- Der gespeicherte Aktivstatus von Job und Zeitplan bleibt unverändert. Nach dem erneuten Aktivieren des Repositorys werden die betroffenen Jobs und Zeitpläne ohne zusätzliche Konfigurationsänderung wieder als aktiv beziehungsweise vollständig ausführbar angezeigt.
+
+## v1.0.93 – 27.07.2026
+
+### Externe Repository-Anzeige und Diagnose verbessert
+
+- Die Abschlussmeldung der externen Dateisystemüberwachung verwendet keine rohen Bytewerte mehr. Freier Speicher wird unter 1 GB in MB, unter 1 TB in GB und ab 1 TB in TB ausgegeben; beispielsweise werden `534925803520 Byte` als `498,2 GB frei` dargestellt. Die gleiche lesbare Formatierung gilt auch für die Speicherinformation vor dem Job.
+- Bei Backup-Jobs hat der Zustand **Repository ist deaktiviert** jetzt Vorrang vor der allgemeineren Meldung **Repository fehlt oder ist nicht initialisiert**. Fehlt ein Repository tatsächlich oder wurde es noch nicht initialisiert, bleibt die bisherige Meldung unverändert.
+- Externe Repository-Dateisysteme werden in der Systemdiagnose nach tatsächlichem Remote-Dateisystem zusammengefasst. Mehrere Repositorys derselben SSH-Identität auf demselben von `df` gemeldeten Mount erscheinen nur noch in einer Zeile; unter **Repositories / Sperre** werden die zugehörigen Repositorys mit ihren jeweiligen Speichergrenzen aufgelistet.
+- Die Gruppierung entspricht damit der bereits vorhandenen Darstellung verwalteter Repositorys auf demselben lokalen Mount.
+
+## v1.0.92 – 27.07.2026
+
+### Permanente Interface-Anzeige in der Kopfzeile
+
+- Die Kopfzeile kann optional bis zu drei Netzwerkinterfaces dauerhaft mit Interface-Name, IPv4-Adresse sowie aktueller Download- und Uploadrate anzeigen. Die Anzeige ist standardmäßig deaktiviert.
+- Als Datenquelle kann das **BBM-Hostsystem** oder ein einzelnes aktiviertes verwaltetes Gerät gewählt werden. Entfernte Geräte werden ausschließlich über den vorhandenen Controller-SSH-Zugang abgefragt; dafür wird kein Borg-Prozess gestartet.
+- Für das BBM-Hostsystem werden Host-`/sys` und Host-`/proc/net` read-only in den Container eingebunden, damit nicht nur das Docker-Containerinterface sichtbar ist. Kann die Hostsicht ausnahmsweise nicht verwendet werden, fällt die Anzeige gekennzeichnet auf die Container-Netzwerksicht zurück.
+- Interfaces können automatisch oder manuell gewählt werden. Die Discovery listet mehr als drei vorhandene Interfaces, die Kopfzeile selbst bleibt jedoch strikt auf maximal drei Anzeigen begrenzt. Das Aktualisierungsintervall ist zwischen 2 und 60 Sekunden einstellbar.
+- Die Ratenberechnung verwendet wie die Live-Log-Netzwerkanzeige die RX-/TX-Bytezähler des Kernels und berechnet daraus bit/s zwischen zwei Messpunkten. Die Werte sind reine Livedaten und werden nicht dauerhaft gespeichert.
+- Auf Mobilgeräten liegt die Interface-Anzeige in einem eigenen horizontal scrollbaren, kompakten Bereich der Sticky-Kopfzeile. Sie verändert nicht die Position der übrigen Aktionsbuttons.
+
+## v1.0.91 – 27.07.2026
+
+- Externe Repositorys werden jetzt in der Systemdiagnose unter **Repository-Dateisysteme** zusammen mit verwalteten Repositorys angezeigt. Beim Laden der Diagnose wird die externe Dateisystembelegung frisch per SSH abgefragt; angezeigt werden Gesamt, Belegt, Frei, Prozentwert, Sperrgrenze und Prüfstatus.
+- Repositorys können jetzt **aktiviert/deaktiviert** werden. Deaktivierte Repositorys bleiben vollständig konfiguriert, werden aber von Backup-Jobs, Zeitplänen, Speicher-/Größenprüfungen und der Systemdiagnose nicht berücksichtigt.
+- Verwaltete Repository-Zugänge deaktivierter Repositorys werden nicht in `authorized_keys` freigegeben. Beim erneuten Aktivieren werden vorhandene Zuordnungen wieder verwendet.
+- Ein Repository kann nicht deaktiviert werden, solange dafür eine Ausführung läuft oder wartet.
+- Jobs bleiben beim Deaktivieren eines Repositorys unverändert gespeichert und werden nach dessen Reaktivierung ohne erneute Job-Konfiguration wieder nutzbar.
+
+## v1.0.90 – 27.07.2026
+
+### Externe Speichergrenze setzt Repository-Status nicht mehr zurück
+
+- Beim Bearbeiten eines externen Repositorys setzte v1.0.89 den gespeicherten Repository-Status pauschal auf „nicht initialisiert“. Dadurch führte bereits das reine Aktivieren oder Ändern der Speicherplatz-Sperre dazu, dass ein zuvor erfolgreich geprüftes Repository anschließend als nicht initialisiert erschien.
+- Nicht verbindungsrelevante Änderungen wie Speicherplatz-Sperre, Prozentgrenze, Parallelitätslimit oder Name erhalten jetzt den bestätigten Repository-Status sowie die zuletzt erfolgreich gemessene externe Dateisystembelegung.
+- Nur tatsächliche Änderungen an Repository-Standort, Manager-SSH-Schlüssel oder gespeichertem Hostkey setzen den externen Repository-Status zurück und verlangen anschließend eine erneute Verbindungsprüfung. In diesem Fall werden auch die zum alten Ziel gehörenden gespeicherten Dateisystemwerte verworfen.
+- Neue Regressionstests decken sowohl das reine Ändern der Speichergrenze als auch den Gegenfall einer echten Standortänderung ab.
+
+## v1.0.89 – 27.07.2026
+
+### HTTP 500 nach externer Speicherabfrage behoben
+
+- Eine erfolgreiche externe `df -m`-Abfrage konnte in v1.0.88 anschließend mit **Repository-Aktion fehlgeschlagen · HTTP 500** enden. Ursache war ein fehlender Import von `effective_storage_guard` im Service-Modul.
+- Die Belegungswerte wurden bis zum Fehler bereits ermittelt; beim anschließenden Ermitteln der wirksamen Speicherplatz-Sperre trat jedoch ein `NameError` auf.
+- Der fehlende Import ist ergänzt. Externe Belegungsabfrage, Sperrgrenzenbewertung und Repository-Größenaktualisierung laufen wieder als vollständiger erfolgreicher Ablauf durch.
+- Ein neuer API-Regressionstest bildet ausdrücklich den Ablauf `df -m` erfolgreich → externe Belegung speichern → Sperrstatus bestimmen → Repository-Liste erneut laden ab und verhindert ein erneutes Auftreten dieses Fehlers.
+
+## v1.0.88 – 27.07.2026
+
+### Externe Speicherabfrage für eingeschränkte SSH-Dienste
+
+- Die externe Dateisystemprüfung verwendet jetzt `df -m` statt `LC_ALL=C df -Pk`. Damit benötigt der Zielzugang keine vollständige Remote-Shell und funktioniert auch mit eingeschränkten Diensten wie der Hetzner Storage Box.
+- Für relative Borg-Pfade wie `./borg` versucht der BBM zunächst `df -m <Repository-Pfad>` und fällt bei Ablehnung kontrolliert auf das von Hetzner dokumentierte pfadlose `df -m` zurück. Für absolute Repository-Pfade gibt es bewusst keinen pfadlosen Fallback, damit nicht versehentlich ein anderes Dateisystem überwacht wird.
+- Die Auswertung rechnet die von `df -m` gelieferten MiB-Blöcke korrekt in Bytes um. Die bestehende Prüfung vor dem Job, alle 15 Sekunden während `borg create` und nach Jobende bleibt unverändert.
+- Die SSH-Probe verwendet weiterhin ausschließlich den gespeicherten Repository-Schlüssel und `known_hosts`; Remote-Pipes, Umleitungen, Environment-Zuweisungen und hochgeladene Hilfsskripte sind nicht erforderlich.
+
+## v1.0.87 – 26.07.2026
+
+### Externe Repository-Dateisystembelegung und dynamische Speicherplatz-Sperre
+
+- Externe SSH-Repositories können ihre tatsächliche Dateisystembelegung jetzt über eine separate, host-key-geprüfte `df -Pk`-Abfrage erfassen. Angezeigt werden Belegung in Prozent, belegt/gesamt, freier Speicher, ermittelter Dateisystem-/Mountpfad und Zeitpunkt der letzten erfolgreichen Prüfung.
+- Die Repository-Liste fasst **Status und ID** kompakter in einer Spalte zusammen und zeigt direkt daneben die neue Spalte **Belegung**. Borg-Repository-Größen bleiben davon getrennt in der bisherigen Größenanzeige.
+- Die externe Speicherplatz-Sperre kann pro Repository ausdrücklich aktiviert oder deaktiviert werden. Bestehende externe Repositorys bleiben nach dem Update standardmäßig ohne Sperre; eine leere eigene Prozentgrenze übernimmt bei aktivierter Sperre den globalen Schwellenwert.
+- Vor jedem externen Backup wird die Dateisystembelegung frisch geprüft. Ist die Sperre aktiviert und der Wert nicht ermittelbar oder die Schwelle bereits erreicht, startet Borg nicht.
+- Während eines laufenden `borg create` prüft ein unabhängiger SSH-Monitor alle 15 Sekunden erneut. Erreicht die Belegung die konfigurierte Grenze, wird Borg über den bestehenden kontrollierten SIGINT-/SIGTERM-Pfad beendet und der Lauf mit einer eindeutigen Speicherplatzmeldung als fehlgeschlagen beendet.
+- Bei aktivierter externer Sperre führen zwei aufeinanderfolgende fehlgeschlagene Dateisystemprüfungen ebenfalls zum kontrollierten Abbruch, damit ein Backup nicht unüberwacht weiterläuft, obwohl die Schutzgrenze nicht mehr verifiziert werden kann.
+- Nach Ende des Borg-Prozesses wird der Monitor beendet und unmittelbar eine letzte Dateisystemabfrage durchgeführt, sodass die Repository-Anzeige einen möglichst aktuellen Endstand erhält. Ein fehlgeschlagener letzter Refresh überschreibt nicht den Zeitpunkt der letzten erfolgreichen Messung, sondern wird zusätzlich als Aktualisierungsfehler angezeigt.
+- Die Dateisystemabfrage verwendet den bereits geschützten externen Repository-SSH-Schlüssel und `known_hosts`; Schlüsselmaterial wird weiterhin nicht in Argumenten oder Umgebungsvariablen offengelegt. IPv6-Ziele werden korrekt geklammert.
+- Externe Zugänge, die ausschließlich `borg serve` beziehungsweise einen Forced Command ohne `df` zulassen, werden als **Belegung nicht ermittelbar** ausgewiesen. Bei aktivierter Sperre wird dort aus Sicherheitsgründen kein unüberwachtes Backup gestartet; ohne aktivierte Sperre bleiben normale Borg-Funktionen nutzbar.
+
 ## v1.0.86 – 26.07.2026
 
 ### Borg 1.4.3 Live-Fortschritt korrigiert

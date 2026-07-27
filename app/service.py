@@ -60,18 +60,22 @@ from app.runner import (
     repository_keyfile_path,
     repository_size_command,
     repository_validation_command,
+    external_repository_storage_command,
+    parse_external_repository_storage,
     repository_compact_command,
     source_stats_command,
     rename_archive_command,
     restore_command,
 )
-from app.external_repository import generate_ed25519_keypair
+from app.external_repository import generate_ed25519_keypair, storage_probe_target_from_location
 from app.vault import get_system_secret, set_repository_secret, set_system_secret
 from app.log_filter import extract_error_output, strip_borg_item_lines
 from app.notifications import notify_run_completion
 from app.settings import load_settings
 from app.schedules import schedule_target_job_ids
-from app.storage_guard import mounted_filesystems_below, repository_mount_path, repository_storage_status
+from app.storage_guard import (
+    effective_storage_guard, mounted_filesystems_below, repository_mount_path, repository_storage_status,
+)
 
 
 
@@ -293,7 +297,7 @@ def rebuild_repository_authorized_keys() -> int:
         ).all()
         for access in rows:
             host, repository = access.host, access.repository
-            if not access.public_key or not host.enabled or not repository.storage_path:
+            if not access.public_key or not host.enabled or not repository.enabled or not repository.storage_path:
                 continue
             root = REPOSITORY_ROOT.resolve()
             repository_path = Path(repository.storage_path).resolve()
@@ -329,10 +333,11 @@ def sync_repository_access_assignments() -> None:
         for host_id, repository_id in desired - set(existing):
             db.add(HostRepositoryAccess(host_id=host_id, repository_id=repository_id))
         db.flush()
-        access_rows = db.scalars(select(HostRepositoryAccess)).all()
+        access_rows = db.scalars(select(HostRepositoryAccess).options(joinedload(HostRepositoryAccess.repository))).all()
         by_host: dict[int, list[HostRepositoryAccess]] = {}
         for access in access_rows:
-            by_host.setdefault(access.host_id, []).append(access)
+            if access.repository and access.repository.enabled:
+                by_host.setdefault(access.host_id, []).append(access)
         for host in db.scalars(select(Host)):
             assignments = by_host.get(host.id, [])
             host.repository_ready = bool(assignments) and all(bool(item.public_key) for item in assignments)
@@ -354,10 +359,11 @@ def revoke_host_repository_access(host_id: int) -> None:
 def repository_access_ready(host_id: int, repository_id: int) -> bool:
     with SessionLocal() as db:
         row = db.scalar(
-            select(HostRepositoryAccess).where(
+            select(HostRepositoryAccess).join(Repository, Repository.id == HostRepositoryAccess.repository_id).where(
                 HostRepositoryAccess.host_id == host_id,
                 HostRepositoryAccess.repository_id == repository_id,
                 HostRepositoryAccess.public_key.is_not(None),
+                Repository.enabled.is_(True),
             )
         )
         return row is not None
@@ -850,6 +856,148 @@ async def execute_interactive(repository_id: int | None, command: Command) -> tu
             mount_lock.release()
 
 
+EXTERNAL_STORAGE_POLL_SECONDS = 15
+EXTERNAL_STORAGE_MAX_CONSECUTIVE_FAILURES = 2
+
+
+def format_external_storage_bytes(value: int | float) -> str:
+    """Format remote free-space values for human-readable run logs.
+
+    Keep sub-GB values in MB, sub-TB values in GB and larger values in TB so
+    operators never have to interpret raw byte counters in backup logs.
+    """
+    size = max(0.0, float(value))
+    mib = 1024.0 ** 2
+    gib = 1024.0 ** 3
+    tib = 1024.0 ** 4
+    if size < mib:
+        if size < 1024:
+            return f"{int(size)} Byte"
+        return f"{size / 1024.0:.1f} KB"
+    if size < gib:
+        return f"{size / mib:.1f} MB"
+    if size < tib:
+        return f"{size / gib:.1f} GB"
+    return f"{size / tib:.2f} TB"
+
+
+def _external_storage_error_text(output: str, error: str, code: int) -> str:
+    detail = (error or output or f"SSH/df exit code {code}").strip()
+    detail = re.sub(r"\s+", " ", detail)
+    if len(detail) > 500:
+        detail = detail[:497] + "…"
+    return detail or "Unbekannter Fehler bei der externen Dateisystemprüfung"
+
+
+def _store_external_storage_error(repository_id: int, message: str) -> None:
+    with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        if repository and not repository.storage_path:
+            repository.external_storage_error = message[:2000]
+            # Keep external_storage_checked_at as the timestamp of the last
+            # successful measurement. The UI can then distinguish a stale but
+            # known value from a fresh failed probe.
+            db.commit()
+
+
+def _store_external_storage_usage(repository_id: int, usage: dict) -> dict:
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        if not repository:
+            raise LookupError("Repository not found")
+        if repository.storage_path:
+            raise ValueError("External storage usage can only be stored for external repositories")
+        repository.external_storage_total_bytes = int(usage["total"])
+        repository.external_storage_used_bytes = int(usage["used"])
+        repository.external_storage_free_bytes = int(usage["free"])
+        repository.external_storage_usage_percent = float(usage["percent"])
+        repository.external_storage_path = str(usage.get("mount_point") or usage.get("path") or "")[:500] or None
+        repository.external_storage_checked_at = now
+        repository.external_storage_error = None
+        db.commit()
+        enabled, threshold, source = effective_storage_guard(repository, load_settings())
+    return {
+        **usage,
+        "checked_at": now,
+        "guard_enabled": enabled,
+        "guard_threshold_percent": threshold,
+        "guard_source": source,
+        "guard_blocked": bool(enabled and float(usage["percent"]) >= threshold),
+    }
+
+
+async def refresh_external_repository_storage(repository_id: int) -> dict:
+    """Query and persist the filesystem usage of an external SSH repository."""
+    with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        if not repository:
+            raise LookupError("Repository not found")
+        if repository.storage_path:
+            raise ValueError("Repository ist nicht extern")
+        if not repository.enabled:
+            raise ValueError("Repository ist deaktiviert")
+        target = storage_probe_target_from_location(repository.location)
+        if target is None:
+            message = "Externe Dateisystemprüfung benötigt ein SSH-Repository mit Benutzer und Host"
+            _store_external_storage_error(repository_id, message)
+            raise ValueError(message)
+        try:
+            command = external_repository_storage_command(repository)
+        except ValueError as exc:
+            _store_external_storage_error(repository_id, str(exc))
+            raise
+
+    code, output, error = await execute(command, capture_limit_bytes=64 * 1024)
+    if code != 0:
+        message = _external_storage_error_text(output, error, code)
+        _store_external_storage_error(repository_id, message)
+        raise ValueError(message)
+    try:
+        usage = parse_external_repository_storage(output, target.repository_path)
+    except ValueError as exc:
+        _store_external_storage_error(repository_id, str(exc))
+        raise
+    return _store_external_storage_usage(repository_id, usage)
+
+
+async def _monitor_external_repository_storage(
+    repository_id: int, run_id: int, abort_event: asyncio.Event, abort_state: dict[str, str],
+    log_writer: RunLogWriter, *, guard_enabled: bool, threshold: int,
+) -> None:
+    """Refresh remote filesystem usage while a backup runs and trip the guard."""
+    failures = 0
+    while not abort_event.is_set():
+        await asyncio.sleep(EXTERNAL_STORAGE_POLL_SECONDS)
+        if abort_event.is_set():
+            return
+        try:
+            usage = await refresh_external_repository_storage(repository_id)
+        except (LookupError, ValueError) as exc:
+            failures += 1
+            if guard_enabled and failures >= EXTERNAL_STORAGE_MAX_CONSECUTIVE_FAILURES:
+                message = (
+                    "Externe Speicherplatz-Sperre: Dateisystembelegung konnte während des Backups "
+                    f"{failures}-mal hintereinander nicht geprüft werden: {exc}"
+                )
+                abort_state["reason"] = message
+                log_writer.append("\nSPEICHERPLATZ-SPERRE: " + message + "\n")
+                abort_event.set()
+                return
+            continue
+        failures = 0
+        if guard_enabled and float(usage["percent"]) >= threshold:
+            message = (
+                f"Externer Repository-Speicher ist zu {float(usage['percent']):.1f}% belegt; "
+                f"die konfigurierte {threshold}%-Speicherplatz-Sperre wurde während des Backups erreicht "
+                f"({usage.get('mount_point') or usage.get('path')})."
+            )
+            abort_state["reason"] = message
+            log_writer.append("\nSPEICHERPLATZ-SPERRE: " + message + " Borg wird kontrolliert gestoppt.\n")
+            abort_event.set()
+            return
+
+
 async def clear_repository_cache(repository_id: int) -> dict[str, int | bool | str]:
     """Clear the manager-private Borg cache for one repository record.
 
@@ -879,6 +1027,8 @@ async def refresh_repository_statistics(repository_id: int) -> dict[str, int | N
         repository = db.get(Repository, repository_id)
         if not repository:
             raise LookupError("Repository not found")
+        if not repository.enabled:
+            raise ValueError("Repository ist deaktiviert")
         if not repository.initialized:
             raise ValueError("Repository is not initialized")
         if repository.storage_path and not managed_repository_present(repository):
@@ -887,19 +1037,30 @@ async def refresh_repository_statistics(repository_id: int) -> dict[str, int | N
         command = repository_size_command(repository)
 
     filesystem_size = None
+    external_storage = None
     if managed:
         filesystem_size = await asyncio.to_thread(managed_repository_filesystem_size, repository_id)
+    else:
+        try:
+            external_storage = await refresh_external_repository_storage(repository_id)
+        except (LookupError, ValueError):
+            # Borg statistics remain useful even when the remote SSH account is
+            # intentionally restricted to borg serve and cannot execute df.
+            external_storage = None
     code, output, error = await execute_interactive(repository_id, command)
     if code not in {0, 1}:
         raise ValueError(error.strip() or output.strip() or f"Borg exit code {code}")
     statistics = repository_statistics_from_borg_info(output)
-    return store_repository_statistics(
+    stored = store_repository_statistics(
         repository_id,
         filesystem_size=filesystem_size,
         original_size=statistics.get("original_size"),
         compressed_size=statistics.get("compressed_size"),
         deduplicated_size=statistics.get("deduplicated_size"),
     )
+    if external_storage is not None:
+        stored["external_storage"] = external_storage
+    return stored
 
 
 async def _execute_run_inner(
@@ -1049,6 +1210,10 @@ async def _execute_run_inner(
     repository_lock = None
     manager_lock = _manager_borg_lock(command.manager_cache_repository_id)
     mount_acquired = repository_acquired = manager_acquired = False
+    external_storage_monitor_task: asyncio.Task[None] | None = None
+    external_storage_abort_event: asyncio.Event | None = None
+    external_storage_abort_state: dict[str, str] = {}
+    external_storage_probe_active = False
     last_queue_message = ""
     try:
         while True:
@@ -1101,12 +1266,89 @@ async def _execute_run_inner(
                     "HINWEIS: Verwaiste lokale BBM-Borg-Cache-Sperre des externen Repositorys "
                     "vor dem Manager-Aufruf automatisch bereinigt.\n"
                 )
+
+        # External repositories have no manager-local filesystem that shutil can
+        # inspect. Probe their remote filesystem immediately before borg create
+        # and continue refreshing it in a separate SSH connection while the
+        # backup runs. This keeps the displayed value current and lets an
+        # enabled guard stop a job that crosses the threshold mid-run.
+        if action == "backup" and repository_id:
+            with SessionLocal() as db:
+                repository = db.get(Repository, repository_id)
+                external_repository = bool(
+                    repository and not repository.storage_path
+                    and storage_probe_target_from_location(repository.location) is not None
+                )
+                if external_repository:
+                    guard_enabled, guard_threshold, _guard_source = effective_storage_guard(repository, settings)
+                else:
+                    guard_enabled, guard_threshold = False, int(getattr(settings, "storage_guard_threshold_percent", 95))
+            if external_repository:
+                initial_usage = None
+                try:
+                    initial_usage = await refresh_external_repository_storage(repository_id)
+                except (LookupError, ValueError) as exc:
+                    log_writer.append(
+                        "HINWEIS: Externe Repository-Dateisystembelegung konnte vor dem Backup "
+                        f"nicht aktualisiert werden: {exc}\n"
+                    )
+                    if guard_enabled:
+                        raise ValueError(
+                            "Externe Speicherplatz-Sperre ist aktiviert, aber die aktuelle "
+                            f"Dateisystembelegung konnte nicht geprüft werden: {exc}"
+                        ) from exc
+                if initial_usage is not None:
+                    log_writer.append(
+                        "EXTERNER REPOSITORY-SPEICHER: "
+                        f"{float(initial_usage['percent']):.1f}% belegt · "
+                        f"{format_external_storage_bytes(initial_usage['free'])} frei · "
+                        f"Prüfintervall {EXTERNAL_STORAGE_POLL_SECONDS} s"
+                        + (f" · Sperre ab {guard_threshold}%" if guard_enabled else " · Sperre deaktiviert")
+                        + "\n"
+                    )
+                    if guard_enabled and float(initial_usage["percent"]) >= guard_threshold:
+                        raise ValueError(
+                            f"Externer Repository-Speicher ist zu {float(initial_usage['percent']):.1f}% "
+                            f"belegt; Backup durch die {guard_threshold}%-Speicherplatz-Sperre blockiert "
+                            f"({initial_usage.get('mount_point') or initial_usage.get('path')})"
+                        )
+                if initial_usage is not None:
+                    external_storage_probe_active = True
+                    external_storage_abort_event = asyncio.Event()
+                    external_storage_monitor_task = asyncio.create_task(
+                        _monitor_external_repository_storage(
+                            repository_id, run_id, external_storage_abort_event, external_storage_abort_state,
+                            log_writer, guard_enabled=guard_enabled, threshold=guard_threshold,
+                        )
+                    )
+
         code, output, error = await execute(
             command,
             on_output=append_output,
             on_output_bytes=append_output_bytes,
             capture_limit_bytes=32 * 1024,
+            abort_event=external_storage_abort_event,
+            abort_reason=lambda: external_storage_abort_state.get(
+                "reason", "Backup durch externe Speicherplatz-Sperre beendet"
+            ),
         )
+        if external_storage_monitor_task is not None:
+            external_storage_monitor_task.cancel()
+            await asyncio.gather(external_storage_monitor_task, return_exceptions=True)
+            external_storage_monitor_task = None
+        if external_storage_probe_active and repository_id:
+            try:
+                final_usage = await refresh_external_repository_storage(repository_id)
+                log_writer.append(
+                    "EXTERNER REPOSITORY-SPEICHER NACH JOB: "
+                    f"{float(final_usage['percent']):.1f}% belegt · "
+                    f"{format_external_storage_bytes(final_usage['free'])} frei\n"
+                )
+            except (LookupError, ValueError) as exc:
+                log_writer.append(
+                    "HINWEIS: Externe Repository-Dateisystembelegung konnte nach dem Job "
+                    f"nicht aktualisiert werden: {exc}\n"
+                )
         if progress_filter is not None:
             trailing, progress = progress_filter.finalize()
             if progress is not None:
@@ -1182,6 +1424,9 @@ async def _execute_run_inner(
             # The file-backed log remains authoritative even if a final SQLite
             # preview update fails during shutdown or cancellation.
             pass
+        if external_storage_monitor_task is not None:
+            external_storage_monitor_task.cancel()
+            await asyncio.gather(external_storage_monitor_task, return_exceptions=True)
         live_log_flush_task.cancel()
         await asyncio.gather(live_log_flush_task, return_exceptions=True)
         log_writer.close()
@@ -1426,6 +1671,8 @@ def queue_repository_init(repository_id: int) -> int:
             repository = db.get(Repository, repository_id)
             if not repository:
                 raise LookupError("Repository not found")
+            if not repository.enabled:
+                raise ValueError("Repository ist deaktiviert")
             if repository.initialized:
                 if repository.storage_path and not managed_repository_present(repository):
                     raise ValueError("Repository-Managerstatus ist veraltet; das leere Repository vor der Initialisierung zurücksetzen")
@@ -1472,7 +1719,8 @@ async def bootstrap_host_repository(
         assigned_ids = list(
             db.scalars(
                 select(HostRepositoryAccess.repository_id)
-                .where(HostRepositoryAccess.host_id == host_id)
+                .join(Repository, Repository.id == HostRepositoryAccess.repository_id)
+                .where(HostRepositoryAccess.host_id == host_id, Repository.enabled.is_(True))
                 .order_by(HostRepositoryAccess.repository_id)
             )
         )
@@ -1546,6 +1794,19 @@ async def execute_repository_validation(run_id: int, repository_id: int, command
     await execute_run(
         run_id, command, refresh_size_after=False, terminal_db_hook=persist_validation_state,
     )
+    with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        run = db.get(Run, run_id)
+        should_probe_storage = bool(
+            repository and not repository.storage_path
+            and storage_probe_target_from_location(repository.location) is not None
+            and run and run.status in {"success", "warning"}
+        )
+    if should_probe_storage:
+        try:
+            await refresh_external_repository_storage(repository_id)
+        except (LookupError, ValueError):
+            pass
 
 
 def queue_host_ssh_action(action_id: int) -> int:
@@ -1596,6 +1857,8 @@ def queue_repository_action(
         repository = db.get(Repository, repository_id)
         if not repository:
             raise LookupError("Repository not found")
+        if not repository.enabled:
+            raise ValueError("Repository ist deaktiviert")
         if action != "test" and not repository.initialized:
             raise ValueError("Repository is not initialized")
         if repository.storage_path and not managed_repository_present(repository):
@@ -1671,6 +1934,8 @@ def queue_job_action(
         )
         if not job:
             raise LookupError("Job not found")
+        if not job.repository.enabled:
+            raise ValueError("Repository ist deaktiviert")
         if action == "confirm-location":
             # Relocation approval belongs to the Borg client/repository pair,
             # not to an individual backup job. Reuse an already queued or

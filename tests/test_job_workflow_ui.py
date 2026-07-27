@@ -207,3 +207,21 @@ def test_mobile_live_dialog_resets_desktop_flex_basis_and_separates_run_actions(
     assert '.run-dialog-head-actions {\n    flex: 0 0 auto;\n    min-height: 0;' in mobile
     assert '.runs-table .table-actions {\n    gap: 16px;' in mobile
     assert '.runs-table .table-actions button {\n    min-height: 44px !important;' in mobile
+
+
+def test_disabled_repository_message_takes_precedence_over_not_initialized():
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    admin_status = javascript.split("if (!admin)", 1)[1].split("list.innerHTML", 1)[0]
+    assert "!repo?.enabled ? '<small class=\"warning-text\">Repository ist deaktiviert</small>'" in admin_status
+    assert admin_status.index("Repository ist deaktiviert") < admin_status.index("Repository fehlt oder ist nicht initialisiert")
+
+
+def test_disabled_repository_changes_effective_job_and_schedule_status():
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert "function jobOperationalStatus(job, host, repo)" in javascript
+    assert "if (!repo?.enabled) return {label: 'blockiert', badgeClass: 'warning'};" in javascript
+    assert "function scheduleOperationalState(schedule)" in javascript
+    assert "teilweise blockiert" in javascript
+    assert "runnable_job_count" in javascript
+    assert "repository_disabled_job_count" in javascript
+    assert "ausführbar / zugeordnet" in javascript

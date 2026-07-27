@@ -15,12 +15,26 @@ def _decode_mount_path(value: str) -> str:
 
 
 def effective_storage_guard(repository: Any, settings: Any) -> tuple[bool, int, str]:
-    """Return enabled, threshold and source for a repository storage guard."""
+    """Return enabled, threshold and source for a repository storage guard.
+
+    Managed repositories inherit the global guard by default. External
+    repositories deliberately default to disabled so an upgrade can never
+    start blocking existing remote targets without an explicit per-repository
+    opt-in. An explicitly configured external threshold may still inherit the
+    global percentage value while activation remains repository-scoped.
+    """
     repository_enabled = getattr(repository, "storage_guard_enabled", None)
     repository_threshold = getattr(repository, "storage_guard_threshold_percent", None)
-    enabled = bool(settings.storage_guard_enabled) if repository_enabled is None else bool(repository_enabled)
+    managed = bool(getattr(repository, "storage_path", None))
+    if repository_enabled is None:
+        enabled = bool(settings.storage_guard_enabled) if managed else False
+        source = "global" if managed else "external-default"
+    else:
+        enabled = bool(repository_enabled)
+        source = "repository"
     threshold = int(repository_threshold or settings.storage_guard_threshold_percent)
-    source = "repository" if repository_enabled is not None or repository_threshold is not None else "global"
+    if repository_threshold is not None:
+        source = "repository"
     return enabled, max(1, min(100, threshold)), source
 
 
@@ -128,6 +142,8 @@ def repository_storage_filesystems(
         }
 
     for repository in repositories:
+        if not bool(getattr(repository, "enabled", True)):
+            continue
         storage_path = getattr(repository, "storage_path", None)
         if not storage_path:
             continue

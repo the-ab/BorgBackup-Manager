@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.0.86
+# BorgBackup Manager 1.0.94
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -34,7 +34,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.0.86.zip
+BorgBackup-Manager-1.0.94.zip
 ```
 
 ## Sicherheit und Härtung
@@ -270,7 +270,9 @@ Unter **System → Einstellungen → Speicherplatz-Sperre** werden die globale A
 - die Sperre ausdrücklich aktivieren oder deaktivieren,
 - eine eigene Schwelle verwenden und die globale Schwelle damit überschreiben.
 
-Die Repository-Liste zeigt die wirksame Schwelle. Aktuelle Belegung und Blockierstatus werden gesammelt in der Systemdiagnose angezeigt. Externe Repositories werden nicht mit dieser lokalen Dateisystemprüfung bewertet, weil deren tatsächlicher freier Speicher über Borg nicht zuverlässig abgefragt werden kann.
+Die Repository-Liste zeigt die wirksame Schwelle und direkt daneben die aktuelle Dateisystembelegung mit Prozentwert, belegt/gesamt, freiem Speicher, Dateisystempfad und Prüfzeitpunkt. Bei verwalteten Repositorys stammt dieser Wert vom lokal sichtbaren Repository-Dateisystem.
+
+Externe SSH-Repositories können zusätzlich über eine separate, streng host-key-geprüfte `df -m`-Abfrage auf dem Zielsystem überwacht werden. Für eingeschränkte SSH-Dienste wie die Hetzner Storage Box wird dabei keine vollständige Remote-Shell vorausgesetzt: der Manager verwendet direkt `df -m <Pfad>` und kann bei relativen Repository-Pfaden auf das von Hetzner dokumentierte pfadlose `df -m` zurückfallen. Diese externe Sperre ist nach einem Update standardmäßig deaktiviert und muss pro externem Repository ausdrücklich aktiviert werden; eine leere eigene Schwelle übernimmt weiterhin den globalen Prozentwert. Vor jedem Backup wird ein frischer Wert verlangt. Während `borg create` prüft der Manager alle 15 Sekunden erneut und beendet Borg kontrolliert, sobald die Grenze erreicht wird. Schlägt die laufende Prüfung bei aktivierter Sperre zweimal hintereinander fehl, wird der Job ebenfalls beendet, weil die Grenze sonst nicht mehr zuverlässig überwacht werden könnte. Nach Jobende erfolgt eine letzte Aktualisierung. Ist der externe SSH-Zugang auf `borg serve` beziehungsweise einen anderen Forced Command ohne `df` beschränkt, bleibt die Dateisystembelegung als nicht ermittelbar gekennzeichnet und ein Backup mit aktivierter externer Sperre wird nicht unüberwacht gestartet.
 
 Die Systemdiagnose listet den Repository-Basismount und alle im Container sichtbaren Unter-Mounts unter `/repositories` getrennt auf. Angezeigt werden Gesamtgröße, Belegung, freier Speicher, zugeordnete Repositories, wirksame Sperrwerte und Blockierstatus.
 
@@ -528,6 +530,8 @@ Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin. Aktive 
 
 Passphrasenfehler werden erst nach Abschluss eines fehlgeschlagenen Borg-Laufs diagnostiziert. Vorläufige Live-Fragmente können daher keine kurzzeitig eingeblendete falsche Meldung „Passphrase abgelehnt“ mehr erzeugen.
 
+Unter **System → Einstellungen → Anzeige und Aktualisierung → Interface-Anzeige in der Kopfzeile** kann zusätzlich ein permanenter Netzwerkmonitor aktiviert werden. Als Quelle dient wahlweise das BBM-Hostsystem oder ein einzelnes aktiviertes verwaltetes Gerät. Automatisch werden bis zu drei aktive Interfaces bevorzugt; alternativ können nach einer Interface-Erkennung bis zu drei Einträge manuell gewählt werden. Angezeigt werden Interface-Name, primäre IPv4-Adresse und die aus Kernel-RX/TX-Zählern berechnete aktuelle Download-/Uploadrate. Das Intervall ist von 2 bis 60 Sekunden einstellbar. Für entfernte Geräte läuft nur eine kurze Controller-SSH-Netzwerkabfrage, kein Borg-Befehl. Die Werte werden nicht gespeichert. Auf Docker-Installationen nutzt die Standardquelle read-only eingebundene Host-Netzwerkstatistiken; falls diese nicht verfügbar sind, kennzeichnet die WebUI den Fallback auf die Container-Sicht.
+
 ### Archive
 
 Der Archivbrowser arbeitet ohne FUSE wie ein Dateibrowser. Er zeigt Breadcrumb-Navigation sowie Name, Größe, Typ, POSIX-Rechte, Besitzer/Gruppe und Änderungszeit der Archivobjekte.
@@ -702,7 +706,7 @@ Release Notes werden passend zur persönlichen Spracheinstellung auf Deutsch ode
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.86.zip
+unzip /pfad/BorgBackup-Manager-1.0.94.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh

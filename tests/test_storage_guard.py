@@ -103,3 +103,32 @@ def test_webui_exposes_global_and_repository_storage_guard_controls():
     assert "repository_storage_filesystems" in main
     assert "Repository-Dateisysteme" in javascript
     assert "storage_guard_threshold_percent" in javascript
+
+
+def test_external_repository_guard_defaults_disabled_but_can_be_enabled():
+    external = SimpleNamespace(
+        id=90, name="external", storage_path=None,
+        storage_guard_enabled=None, storage_guard_threshold_percent=None,
+    )
+    assert storage_guard.effective_storage_guard(external, settings(enabled=True, threshold=93)) == (
+        False, 93, "external-default",
+    )
+    external.storage_guard_enabled = True
+    assert storage_guard.effective_storage_guard(external, settings(enabled=False, threshold=93)) == (
+        True, 93, "repository",
+    )
+
+
+def test_webui_exposes_external_storage_usage_and_dynamic_guard_text():
+    project = Path(__file__).resolve().parents[1]
+    html = (project / "app/static/index.html").read_text(encoding="utf-8")
+    javascript = (project / "app/static/app.js").read_text(encoding="utf-8")
+    service = (project / "app/service.py").read_text(encoding="utf-8")
+
+    assert "Externe SSH-Repositorys" in html
+    assert "EXTERNAL_STORAGE_POLL_SECONDS = 15" in service
+    assert "refresh_external_repository_storage" in service
+    assert "SPEICHERPLATZ-SPERRE" in service
+    assert 'data-label="Belegung"' in javascript
+    assert "storage_usage_percent" in javascript
+    assert "Status / ID" in javascript

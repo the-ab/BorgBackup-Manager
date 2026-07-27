@@ -11,7 +11,11 @@ def repository_access_diagnostic(access_rows: Iterable[object], authorized_lines
     authorized_keys and must therefore not turn diagnostics red.
     """
     rows = list(access_rows)
-    active_rows = [row for row in rows if bool(getattr(getattr(row, "host", None), "enabled", False))]
+    active_rows = [
+        row for row in rows
+        if bool(getattr(getattr(row, "host", None), "enabled", False))
+        and bool(getattr(getattr(row, "repository", None), "enabled", True))
+    ]
     ready_rows = [row for row in active_rows if bool(getattr(row, "public_key", None))]
     forced_command_valid = all(
         line.startswith('restrict,command="/usr/local/bin/bbm-borg-serve --repository /repositories/')

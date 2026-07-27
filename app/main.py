@@ -78,9 +78,11 @@ from app.database import Base, SessionLocal, engine, migrate_schema
 from app.external_repository import (
     fingerprint_known_hosts, generate_ed25519_keypair, normalize_known_hosts,
     public_key_from_private, repository_location_uses_ssh, scan_repository_host_key,
+    storage_probe_target_from_location,
 )
 from app.repository_diagnostics import compact_repository_diagnostic
 from app.system_network import sample_manager_network
+from app.header_network import discover_interfaces as discover_header_network_interfaces, sample_interfaces as sample_header_network_interfaces
 from app.system_diagnostics import repository_access_diagnostic
 from app.debug_logging import configure_debug_logging, install_asyncio_exception_handler
 from app.notifications import (
@@ -162,7 +164,7 @@ from app.settings import load_settings, save_settings
 from app.update_check import check_latest_release, load_update_status
 from app.storage_guard import (
     effective_storage_guard, mounted_filesystems_below, repository_mount_path,
-    repository_storage_filesystems,
+    repository_storage_filesystems, repository_storage_status,
 )
 from app.time_utils import APP_TIMEZONE, APP_TIMEZONE_NAME, iso_utc, normalize_borg_timestamp
 from app.schedules import (
@@ -202,6 +204,7 @@ from app.service import (
     queue_host_ssh_action,
     queue_repository_action,
     queue_repository_init,
+    refresh_external_repository_storage,
     reset_managed_repository_state,
     retry_run,
     revoke_host_repository_access,
@@ -276,8 +279,40 @@ def repo_out(row: Repository, *, mounts: list[Path] | None = None) -> Repository
     settings = load_settings()
     effective_enabled, effective_threshold, guard_source = effective_storage_guard(row, settings)
     mount = repository_mount_path(row.storage_path, REPOSITORY_ROOT, mounts=mounts) if row.storage_path else None
+    storage_total = storage_used = storage_free = None
+    storage_percent = None
+    storage_path = None
+    storage_checked_at = None
+    storage_error = None
+    storage_source = None
+    if row.storage_path:
+        try:
+            local_storage = repository_storage_status(row, settings)
+        except OSError as exc:
+            local_storage = None
+            storage_error = str(exc)
+        if local_storage is not None:
+            storage_total = int(local_storage["total"])
+            storage_used = int(local_storage["used"])
+            storage_free = int(local_storage["free"])
+            storage_percent = float(local_storage["percent"])
+            storage_path = str(mount or local_storage["path"])
+            storage_checked_at = datetime.now(timezone.utc)
+            storage_source = "managed"
+    else:
+        storage_total = row.external_storage_total_bytes
+        storage_used = row.external_storage_used_bytes
+        storage_free = row.external_storage_free_bytes
+        storage_percent = row.external_storage_usage_percent
+        storage_path = row.external_storage_path
+        storage_checked_at = row.external_storage_checked_at
+        storage_error = row.external_storage_error
+        storage_source = "external-ssh"
+    guard_blocked = bool(
+        effective_enabled and storage_percent is not None and float(storage_percent) >= effective_threshold
+    )
     return RepositoryOut(
-        id=row.id, name=row.name, location=row.location,
+        id=row.id, name=row.name, enabled=bool(row.enabled), location=row.location,
         passphrase_env=None, extra_env=json.loads(row.extra_env_json or "{}"),
         encryption_mode=row.encryption_mode,
         managed=bool(row.storage_path), initialized=row.initialized,
@@ -303,11 +338,15 @@ def repo_out(row: Repository, *, mounts: list[Path] | None = None) -> Repository
         storage_guard_effective_enabled=effective_enabled,
         storage_guard_effective_threshold_percent=effective_threshold,
         storage_guard_source=guard_source,
-        storage_usage_total_bytes=None,
-        storage_usage_used_bytes=None,
-        storage_usage_free_bytes=None,
-        storage_usage_percent=None,
-        storage_guard_blocked=False,
+        storage_usage_total_bytes=storage_total,
+        storage_usage_used_bytes=storage_used,
+        storage_usage_free_bytes=storage_free,
+        storage_usage_percent=storage_percent,
+        storage_usage_path=storage_path,
+        storage_usage_checked_at=storage_checked_at,
+        storage_usage_error=storage_error,
+        storage_usage_source=storage_source,
+        storage_guard_blocked=guard_blocked,
     )
 
 
@@ -453,7 +492,7 @@ def job_out(
         create_options=json.loads(row.create_options_json or "{}"),
         manual_prune_after_backup=bool(row.manual_prune_after_backup),
         manual_compact_after_prune=bool(row.manual_compact_after_prune),
-        enabled=row.enabled,
+        enabled=row.enabled, repository_enabled=bool(getattr(row.repository, "enabled", True)),
         schedule_mode="scheduled" if names else "manual", schedule_names=names,
         repository_access_ready=repository_access_ready,
         source_size_bytes=row.source_size_bytes,
@@ -465,6 +504,15 @@ def job_out(
 
 def schedule_out(row: BackupSchedule, db) -> BackupScheduleOut:
     job_ids = schedule_target_job_ids(db, row, enabled_jobs_only=False)
+    runnable_job_ids = schedule_target_job_ids(db, row, enabled_jobs_only=True)
+    repository_disabled_job_count = 0
+    if job_ids:
+        repository_disabled_job_count = int(db.scalar(
+            select(func.count())
+            .select_from(Job)
+            .join(Repository, Repository.id == Job.repository_id)
+            .where(Job.id.in_(job_ids), Repository.enabled.is_(False))
+        ) or 0)
     return BackupScheduleOut(
         id=row.id, name=row.name, expressions=row.expressions, target_mode=row.target_mode,
         target_host_ids=json.loads(row.target_host_ids_json or "[]"),
@@ -472,6 +520,8 @@ def schedule_out(row: BackupSchedule, db) -> BackupScheduleOut:
         target_job_ids=json.loads(row.target_job_ids_json or "[]"),
         parallel_limit=row.parallel_limit or 0,
         enabled=row.enabled, assigned_job_ids=job_ids, assigned_job_count=len(job_ids),
+        runnable_job_count=len(runnable_job_ids),
+        repository_disabled_job_count=repository_disabled_job_count,
     )
 
 
@@ -592,6 +642,8 @@ def load_job_with_connections(db, job_id: int, require_client_access: bool = Tru
     )
     if not job:
         raise HTTPException(404, "Job not found")
+    if not job.repository.enabled:
+        raise HTTPException(409, "Repository ist deaktiviert")
     if job.repository.storage_path:
         if not job.repository.initialized or not managed_repository_present(job.repository):
             raise HTTPException(400, "Managed repository is missing or not initialized")
@@ -612,6 +664,8 @@ def load_repository_with_access(db, repository_id: int) -> Repository:
     repository = db.get(Repository, repository_id)
     if not repository:
         raise HTTPException(404, "Repository not found")
+    if not repository.enabled:
+        raise HTTPException(409, "Repository ist deaktiviert")
     if repository.storage_path and (not repository.initialized or not managed_repository_present(repository)):
         raise HTTPException(400, "Verwaltetes Repository fehlt oder ist nicht initialisiert")
     if not repository.initialized and not repository.storage_path:
@@ -1557,7 +1611,8 @@ def dashboard() -> dict:
         }
         ready_access_pairs = set(db.execute(
             select(HostRepositoryAccess.host_id, HostRepositoryAccess.repository_id)
-            .where(HostRepositoryAccess.public_key.is_not(None))
+            .join(Repository, Repository.id == HostRepositoryAccess.repository_id)
+            .where(HostRepositoryAccess.public_key.is_not(None), Repository.enabled.is_(True))
         ).all())
         dashboard_jobs = []
         for job in jobs:
@@ -1572,6 +1627,7 @@ def dashboard() -> dict:
                 "host_enabled": job.host.enabled,
                 "repository_id": job.repository_id,
                 "repository_name": job.repository.name,
+                "repository_enabled": bool(job.repository.enabled),
                 "repository_managed": bool(job.repository.storage_path),
                 "repository_access_ready": access_ready,
                 "source_paths": json.loads(job.source_paths_json or "[]"),
@@ -1627,6 +1683,78 @@ def rotate_system_controller_key(data: ControllerKeyRotateIn) -> dict:
         "controller_public_key": public_key,
         "warning": "Der neue öffentliche Schlüssel muss auf allen Geräten hinterlegt werden.",
     }
+
+
+@app.get("/api/header-network", dependencies=protected)
+def get_header_network() -> dict:
+    settings = load_settings()
+    payload = {
+        "enabled": bool(settings.header_network_enabled),
+        "source": settings.header_network_source,
+        "host_id": settings.header_network_host_id,
+        "host_name": "",
+        "interfaces": [],
+        "interval_seconds": int(settings.header_network_interval_seconds),
+        "error": "",
+    }
+    if not settings.header_network_enabled:
+        return payload
+    host = None
+    sample_key = "manager"
+    if settings.header_network_source == "host":
+        if settings.header_network_host_id is None:
+            payload["error"] = "Kein Gerät als Quelle für die Kopfzeilen-Netzwerkanzeige ausgewählt"
+            return payload
+        with SessionLocal() as db:
+            host = db.get(Host, int(settings.header_network_host_id))
+            if host is None:
+                payload["error"] = "Das ausgewählte Gerät existiert nicht mehr"
+                return payload
+            if not host.enabled:
+                payload["host_name"] = host.name
+                payload["error"] = "Das ausgewählte Gerät ist deaktiviert"
+                return payload
+            # Detach the small host object before the SSH subprocess runs.
+            db.expunge(host)
+        payload["host_name"] = host.name
+        sample_key = f"host:{host.id}"
+    else:
+        payload["host_name"] = "BBM-Hostsystem"
+    try:
+        payload["interfaces"] = sample_header_network_interfaces(
+            sample_key=sample_key,
+            host=host,
+            selected=settings.header_network_interfaces,
+            maximum=settings.header_network_max_interfaces,
+            minimum_interval=max(0.75, min(2.0, settings.header_network_interval_seconds / 2.0)),
+        )
+    except RuntimeError as exc:
+        payload["error"] = str(exc)[:1000]
+    return payload
+
+
+@app.get("/api/header-network/interfaces", dependencies=admin_protected)
+def get_header_network_interfaces(source: str = "manager", host_id: int | None = None) -> dict:
+    if source not in {"manager", "host"}:
+        raise HTTPException(400, "Ungültige Netzwerkquelle")
+    host = None
+    label = "BBM-Hostsystem"
+    if source == "host":
+        if host_id is None:
+            raise HTTPException(400, "Gerät fehlt")
+        with SessionLocal() as db:
+            host = db.get(Host, int(host_id))
+            if host is None:
+                raise HTTPException(404, "Gerät nicht gefunden")
+            if not host.enabled:
+                raise HTTPException(409, "Gerät ist deaktiviert")
+            label = host.name
+            db.expunge(host)
+    try:
+        interfaces = discover_header_network_interfaces(host=host)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"source": source, "host_id": host_id, "host_name": label, "interfaces": interfaces}
 
 
 @app.get("/api/settings", response_model=SettingsIn, dependencies=protected)
@@ -1721,8 +1849,46 @@ def release_notes(language: str = "en") -> dict:
     }
 
 
+def _group_external_repository_filesystems(rows: list[dict]) -> list[dict]:
+    """Merge external repositories that resolve to the same remote filesystem.
+
+    External rows use a display path composed of SSH identity plus the mount
+    returned by ``df``. Repositories on the same Storage Box account and mount
+    therefore share one diagnostics row, matching the managed-repository view.
+    """
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        if not row:
+            continue
+        key = str(row.get("path") or "")
+        current = grouped.get(key)
+        if current is None:
+            grouped[key] = {**row, "repositories": list(row.get("repositories") or [])}
+            continue
+        current["repositories"].extend(row.get("repositories") or [])
+        current["guard_blocked"] = bool(current.get("guard_blocked") or row.get("guard_blocked"))
+
+        # Prefer the newest successful measurement when multiple repository
+        # paths on one remote filesystem were probed independently.
+        row_known = all(row.get(name) is not None for name in ("total", "used", "free", "percent"))
+        current_known = all(current.get(name) is not None for name in ("total", "used", "free", "percent"))
+        row_checked = row.get("checked_at")
+        current_checked = current.get("checked_at")
+        newer = bool(row_checked and (not current_checked or row_checked > current_checked))
+        if row_known and (not current_known or newer):
+            for name in ("total", "used", "free", "percent", "checked_at"):
+                current[name] = row.get(name)
+
+        errors = [value for value in (current.get("error"), row.get("error")) if value]
+        current["error"] = " | ".join(dict.fromkeys(errors)) if errors else None
+
+    for row in grouped.values():
+        row["repositories"] = sorted(row["repositories"], key=lambda item: str(item.get("name") or ""))
+    return sorted(grouped.values(), key=lambda item: str(item.get("path") or ""))
+
+
 @app.get("/api/system/diagnostics", dependencies=admin_protected)
-def system_diagnostics() -> dict:
+async def system_diagnostics() -> dict:
     try:
         borg_version = subprocess.run(
             ["borg", "--version"], capture_output=True, text=True, timeout=10, check=False,
@@ -1732,9 +1898,56 @@ def system_diagnostics() -> dict:
     settings = load_settings()
     with SessionLocal() as db:
         managed_repositories = list(db.scalars(
-            select(Repository).where(Repository.storage_path.is_not(None)).order_by(Repository.name)
+            select(Repository).where(
+                Repository.storage_path.is_not(None), Repository.enabled.is_(True)
+            ).order_by(Repository.name)
+        ))
+        external_repositories = list(db.scalars(
+            select(Repository).where(
+                Repository.storage_path.is_(None), Repository.enabled.is_(True)
+            ).order_by(Repository.name)
         ))
     filesystems = repository_storage_filesystems(managed_repositories, REPOSITORY_ROOT, settings)
+
+    async def external_filesystem_row(repository: Repository) -> dict:
+        try:
+            usage = await refresh_external_repository_storage(repository.id)
+            error = None
+        except (LookupError, ValueError) as exc:
+            usage = None
+            error = str(exc)
+        with SessionLocal() as db:
+            stored = db.get(Repository, repository.id)
+            if not stored:
+                return {}
+            enabled, threshold, source = effective_storage_guard(stored, settings)
+            total = stored.external_storage_total_bytes
+            used = stored.external_storage_used_bytes
+            free = stored.external_storage_free_bytes
+            percent = stored.external_storage_usage_percent
+            checked_at = stored.external_storage_checked_at
+            stored_error = stored.external_storage_error or error
+            target = storage_probe_target_from_location(stored.location)
+            remote = (
+                f"{target.username}@{target.host}:{target.port}" if target else stored.location
+            )
+            path = stored.external_storage_path or (target.repository_path if target else stored.location)
+            blocked = bool(enabled and percent is not None and float(percent) >= threshold)
+            return {
+                "path": f"{remote} · {path}",
+                "total": total, "used": used, "free": free, "percent": percent,
+                "repositories": [{
+                    "id": int(stored.id), "name": str(stored.name), "path": str(stored.location),
+                    "guard_enabled": enabled, "guard_threshold_percent": threshold,
+                    "guard_source": source, "guard_blocked": blocked, "external": True,
+                }],
+                "guard_blocked": blocked, "external": True,
+                "checked_at": checked_at, "error": stored_error,
+            }
+
+    if external_repositories:
+        external_rows = await asyncio.gather(*(external_filesystem_row(repo) for repo in external_repositories))
+        filesystems.extend(_group_external_repository_filesystems([row for row in external_rows if row]))
     storage = next((item for item in filesystems if Path(item["path"]) == REPOSITORY_ROOT.resolve()), None)
     if storage is not None:
         storage = {
@@ -1792,14 +2005,14 @@ def system_diagnostics() -> dict:
     with SessionLocal() as db:
         access_rows = list(db.scalars(
             select(HostRepositoryAccess)
-            .options(joinedload(HostRepositoryAccess.host))
+            .options(joinedload(HostRepositoryAccess.host), joinedload(HostRepositoryAccess.repository))
             .order_by(HostRepositoryAccess.host_id, HostRepositoryAccess.repository_id)
         ))
         checks.update(repository_access_diagnostic(access_rows, authorized_lines))
         shared = db.execute(
             select(Job.repository_id, func.count(func.distinct(Job.host_id)))
             .join(Repository, Repository.id == Job.repository_id)
-            .where(Repository.storage_path.is_not(None))
+            .where(Repository.storage_path.is_not(None), Repository.enabled.is_(True))
             .group_by(Job.repository_id)
             .having(func.count(func.distinct(Job.host_id)) > 1)
         ).all()
@@ -2154,6 +2367,7 @@ async def import_repository(data: RepositoryImportIn):
             raise HTTPException(409, "Repository directory is already registered")
         row = Repository(
             name=data.name,
+            enabled=data.enabled,
             location=managed_repository_location(relative_path),
             encryption_mode=data.encryption_mode,
             storage_path=str(storage_path),
@@ -2221,6 +2435,8 @@ async def refresh_size(repository_id: int) -> dict:
         repository = db.get(Repository, repository_id)
         if not repository:
             raise HTTPException(404, "Repository not found")
+        if not repository.enabled:
+            raise HTTPException(409, "Repository ist deaktiviert")
         managed = bool(repository.storage_path)
         initialized = repository.initialized
         if not initialized:
@@ -2231,11 +2447,21 @@ async def refresh_size(repository_id: int) -> dict:
             raise HTTPException(400, str(exc)) from exc
 
     filesystem_size = None
+    external_storage = None
     if managed:
         try:
             filesystem_size = managed_repository_filesystem_size(repository_id)
         except (OSError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc
+    else:
+        try:
+            external_storage = await refresh_external_repository_storage(repository_id)
+        except (LookupError, ValueError):
+            # Keep Borg statistics available even when the external account does
+            # not permit a shell/df command. The repository row stores the
+            # probe error and the WebUI explains that filesystem monitoring is
+            # unavailable for this target.
+            external_storage = None
 
     code, output, error = await execute_interactive(repository_id, command)
     if code not in {0, 1}:
@@ -2267,8 +2493,21 @@ async def refresh_size(repository_id: int) -> dict:
         "original_size_bytes": stored["original_size"],
         "compressed_size_bytes": stored["compressed_size"],
         "deduplicated_size_bytes": stored["deduplicated_size"],
+        "storage_usage": external_storage,
         "size_type": "filesystem-and-borg" if managed else "borg-deduplicated-compressed",
     }
+
+
+def _set_repository_enabled_state(db, repository: Repository, enabled: bool) -> None:
+    if repository.enabled == enabled:
+        return
+    if not enabled:
+        active = db.scalar(select(func.count()).select_from(Run).where(
+            Run.repository_id == repository.id, Run.status.in_(["queued", "running"])
+        )) or 0
+        if active:
+            raise ValueError("Repository kann während einer laufenden oder wartenden Ausführung nicht deaktiviert werden")
+    repository.enabled = enabled
 
 
 @app.post("/api/repositories", response_model=RepositoryOut, status_code=201, dependencies=admin_protected)
@@ -2292,6 +2531,7 @@ async def create_repository(data: RepositoryIn):
             location = data.location or ""
         row = Repository(
             name=data.name,
+            enabled=data.enabled,
             location=location,
             passphrase_env=None,
             encryption_mode=data.encryption_mode,
@@ -2304,8 +2544,8 @@ async def create_repository(data: RepositoryIn):
             initialized=False,
             validation_error=None,
             validation_details=None,
-            storage_guard_enabled=data.storage_guard_enabled if data.managed else None,
-            storage_guard_threshold_percent=data.storage_guard_threshold_percent if data.managed else None,
+            storage_guard_enabled=data.storage_guard_enabled,
+            storage_guard_threshold_percent=data.storage_guard_threshold_percent,
             parallel_limit=data.parallel_limit,
             extra_env_json="{}",
         )
@@ -2326,7 +2566,7 @@ async def create_repository(data: RepositoryIn):
             stored.extra_env_json = json.dumps(store_repository_environment(row_id, data.extra_env))
             db.commit()
 
-    if data.managed:
+    if data.managed and data.enabled:
         try:
             queue_repository_init(row_id)
         except (LookupError, ValueError) as exc:
@@ -2351,6 +2591,9 @@ async def update_repository(row_id: int, data: RepositoryUpdate):
             raise HTTPException(400, "Repository type cannot be changed")
         if row.initialized and row.encryption_mode != data.encryption_mode:
             raise HTTPException(400, "Repository encryption cannot be changed after initialization")
+        previous_location = row.location
+        previous_external_public_key = row.external_ssh_public_key
+        previous_external_fingerprint = row.external_host_fingerprint
         external_credentials: dict[str, str | None] = {}
         if not data.managed:
             try:
@@ -2358,21 +2601,43 @@ async def update_repository(row_id: int, data: RepositoryUpdate):
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
         row.name = data.name
+        if data.enabled is not None:
+            try:
+                _set_repository_enabled_state(db, row, data.enabled)
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
         row.passphrase_env = None
         row.encryption_mode = data.encryption_mode
-        row.storage_guard_enabled = data.storage_guard_enabled if data.managed else None
-        row.storage_guard_threshold_percent = data.storage_guard_threshold_percent if data.managed else None
+        row.storage_guard_enabled = data.storage_guard_enabled
+        row.storage_guard_threshold_percent = data.storage_guard_threshold_percent
         row.parallel_limit = data.parallel_limit
         if not data.managed:
-            row.location = data.location or row.location
+            next_location = data.location or row.location
+            next_public_key = external_credentials.get("external_ssh_public_key")
+            next_fingerprint = external_credentials.get("external_host_fingerprint")
+            connection_changed = bool(
+                next_location != previous_location
+                or next_public_key != previous_external_public_key
+                or next_fingerprint != previous_external_fingerprint
+            )
+            row.location = next_location
+            if connection_changed:
+                row.external_storage_total_bytes = None
+                row.external_storage_used_bytes = None
+                row.external_storage_free_bytes = None
+                row.external_storage_usage_percent = None
+                row.external_storage_path = None
+                row.external_storage_checked_at = None
+                row.external_storage_error = None
             row.access_host_id = None
             row.external_ssh_key_path = None
             row.external_known_hosts_path = None
-            row.external_ssh_public_key = external_credentials.get("external_ssh_public_key")
-            row.external_host_fingerprint = external_credentials.get("external_host_fingerprint")
-            row.initialized = False
-            row.validation_error = None
-            row.validation_details = None
+            row.external_ssh_public_key = next_public_key
+            row.external_host_fingerprint = next_fingerprint
+            if connection_changed:
+                row.initialized = False
+                row.validation_error = None
+                row.validation_details = None
         if data.encryption_mode == "none":
             row.passphrase_env = None
         row.extra_env_json = json.dumps(store_repository_environment(row_id, data.extra_env))
@@ -2388,6 +2653,8 @@ async def update_repository(row_id: int, data: RepositoryUpdate):
         set_repository_secret(row_id, "external_ssh_private_key", external_credentials.get("external_ssh_private_key"))
         set_repository_secret(row_id, "external_known_hosts", external_credentials.get("external_known_hosts"))
 
+    sync_repository_access_assignments()
+    sync_schedules()
     invalidate_archive_cache(row_id)
     if data.managed:
         with SessionLocal() as db:
@@ -2396,6 +2663,24 @@ async def update_repository(row_id: int, data: RepositoryUpdate):
     with SessionLocal() as db:
         return repo_out(db.get(Repository, row_id))
 
+
+
+@app.put("/api/repositories/{repository_id}/enabled", response_model=RepositoryOut, dependencies=admin_protected)
+def set_repository_enabled(repository_id: int, data: EnabledStateIn):
+    with SessionLocal() as db:
+        repository = db.get(Repository, repository_id)
+        if not repository:
+            raise HTTPException(404, "Repository not found")
+        try:
+            _set_repository_enabled_state(db, repository, data.enabled)
+            db.commit()
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(409, str(exc)) from exc
+    sync_repository_access_assignments()
+    sync_schedules()
+    with SessionLocal() as db:
+        return repo_out(db.get(Repository, repository_id))
 
 
 @app.post("/api/repositories/{repository_id}/test", status_code=202, dependencies=admin_protected)
@@ -2598,7 +2883,8 @@ def list_jobs():
         assignments = schedule_assignments(db)
         ready_pairs = set(db.execute(
             select(HostRepositoryAccess.host_id, HostRepositoryAccess.repository_id)
-            .where(HostRepositoryAccess.public_key.is_not(None))
+            .join(Repository, Repository.id == HostRepositoryAccess.repository_id)
+            .where(HostRepositoryAccess.public_key.is_not(None), Repository.enabled.is_(True))
         ).all())
         jobs = list(db.scalars(select(Job).options(joinedload(Job.repository)).order_by(Job.name)))
         return [

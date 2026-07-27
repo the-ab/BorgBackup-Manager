@@ -31,6 +31,7 @@ def migrate_schema(target_engine=engine) -> None:
             "borg_checked_at": "DATETIME",
         },
         "repositories": {
+            "enabled": "BOOLEAN NOT NULL DEFAULT 1",
             "encrypted_passphrase": "TEXT",
             "encryption_mode": "VARCHAR(40) NOT NULL DEFAULT 'repokey-blake2'",
             "encrypted_keyfile": "TEXT",
@@ -53,6 +54,13 @@ def migrate_schema(target_engine=engine) -> None:
             "validated_at": "DATETIME",
             "storage_guard_enabled": "BOOLEAN",
             "storage_guard_threshold_percent": "INTEGER",
+            "external_storage_total_bytes": "INTEGER",
+            "external_storage_used_bytes": "INTEGER",
+            "external_storage_free_bytes": "INTEGER",
+            "external_storage_usage_percent": "FLOAT",
+            "external_storage_path": "VARCHAR(500)",
+            "external_storage_checked_at": "DATETIME",
+            "external_storage_error": "TEXT",
             "parallel_limit": "INTEGER NOT NULL DEFAULT 1",
         },
         "jobs": {

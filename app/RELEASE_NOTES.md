@@ -1,5 +1,85 @@
 # Release Notes
 
+## v1.0.94 – 27.07.2026
+
+### Effective status for disabled repositories
+
+- An enabled backup job is no longer shown as **active** while its repository is disabled. Its effective state is now **blocked**, while the explicit **Repository is disabled** reason remains visible.
+- The job status filter therefore adds **Blocked**; **Active** now shows only enabled jobs that are operationally runnable. **Active first** sorting also uses the effective operating state.
+- The same effective-state logic is used in the dashboard job overview so a job blocked by its device or repository is not shown as green/active.
+- Central schedules now visually reflect the jobs that can actually run. Mixed assignments show **partially blocked** when only some jobs are runnable; when none of the assigned jobs can run, the schedule state is **blocked**.
+- The schedule list additionally shows **runnable / assigned**, for example `1 / 2`. Jobs blocked by disabled repositories are counted separately so multi-client schedules using different repositories immediately show why they are only partially runnable.
+- The stored enabled state of jobs and schedules is unchanged. Re-enabling the repository automatically returns affected jobs and schedules to active/fully runnable state without reconfiguration.
+
+## v1.0.93 – 27.07.2026
+
+### Improved external repository display and diagnostics
+
+- External filesystem run-log messages no longer show raw byte counters. Free space is shown in MB below 1 GB, in GB below 1 TB and in TB from 1 TB upward; for example `534925803520 bytes` is rendered as `498.2 GB free`. The same readable formatting is used for the pre-job storage message.
+- Backup jobs now prioritize the explicit **Repository is disabled** state over the generic **Repository is missing or not initialized** warning. The existing warning remains unchanged for genuinely missing or uninitialized repositories.
+- System Diagnostics now groups external repository filesystems by the actual remote filesystem. Multiple repositories using the same SSH identity and the same mount reported by `df` are shown in one row, with all repositories and their individual storage-guard thresholds listed under **Repositories / guard**.
+- This matches the existing grouping used for managed repositories that share one local mount.
+
+## v1.0.92 – 27.07.2026
+
+### Persistent interface display in the header
+
+- The header can optionally show up to three network interfaces permanently, including interface name, IPv4 address and current download/upload rates. The feature is disabled by default.
+- The data source can be the **BBM host system** or one enabled managed device. Remote devices are queried only through the existing controller SSH access; no Borg process is started.
+- For the BBM host system, host `/sys` and host `/proc/net` are mounted read-only into the container so the display is not limited to the Docker container interface. If host metrics are unavailable, the UI explicitly falls back to the container network view.
+- Interfaces can be selected automatically or manually. Discovery can list more than three interfaces while the header itself remains strictly limited to three. The refresh interval is configurable from 2 to 60 seconds.
+- Rate calculation reuses kernel RX/TX byte counters like the live-log network display and derives bit/s between two samples. These are live-only values and are not persisted.
+- On mobile devices the interface display uses its own compact horizontally scrollable area in the sticky header and does not move the other action buttons.
+
+## v1.0.91 – 27.07.2026
+
+- External repositories are now included in **Repository filesystems** in System Diagnostics together with managed repositories. Loading diagnostics refreshes external filesystem usage over SSH and shows total, used, free, percentage, storage-guard threshold and probe status.
+- Repositories can now be **enabled/disabled**. Disabled repositories remain fully configured but are excluded from backup execution, schedules, storage/size probes and System Diagnostics.
+- Managed repository access for disabled repositories is omitted from `authorized_keys`. Existing assignments are reused after re-enabling.
+- A repository cannot be disabled while it has a queued or running execution.
+- Jobs remain configured while their repository is disabled and become usable again after re-enabling it.
+
+## v1.0.90 – 27.07.2026
+
+### External storage-guard edits no longer reset repository state
+
+- In v1.0.89, editing an external repository unconditionally reset its stored repository state to “not initialized”. Merely enabling or changing the storage guard therefore made a previously validated repository appear uninitialized.
+- Non-connection changes such as storage guard mode, threshold, parallel limit, or name now preserve the validated repository state and the last successful external filesystem measurement.
+- Only actual changes to the repository location, manager SSH key, or stored host key reset the external repository state and require a new connection test. In that case, filesystem measurements belonging to the old target are cleared as well.
+- New regression tests cover both a storage-guard-only edit and an actual repository-location change.
+
+## v1.0.89 – 27.07.2026
+
+### Fixed HTTP 500 after external storage probe
+
+- A successful external `df -m` probe in v1.0.88 could subsequently end with **Repository action failed · HTTP 500**. The cause was a missing import of `effective_storage_guard` in the service module.
+- Storage values had already been determined when the failure occurred; calculating the effective storage guard afterwards raised a `NameError`.
+- The missing import has been added. External usage probing, guard evaluation and repository size refresh now complete as one successful operation again.
+- A new API regression test explicitly covers `df -m` success → persist external usage → determine guard state → reload repository list so this failure cannot silently return.
+
+## v1.0.88 – 27.07.2026
+
+### External storage probing for restricted SSH services
+
+- External filesystem probing now uses `df -m` instead of `LC_ALL=C df -Pk`. The target no longer needs a full remote shell, making the probe compatible with restricted services such as Hetzner Storage Box.
+- For relative Borg locations such as `./borg`, BBM first tries `df -m <repository-path>` and, if rejected, safely falls back to Hetzner's documented pathless `df -m`. Absolute repository paths deliberately have no pathless fallback so BBM cannot accidentally monitor an unrelated filesystem.
+- The parser now converts the MiB blocks returned by `df -m` to bytes correctly. The existing pre-job, 15-second in-job and post-job probes remain unchanged.
+- The SSH probe still uses only the stored repository key and `known_hosts`; remote pipes, redirects, environment assignments and uploaded helper scripts are not required.
+
+## v1.0.87 – 26.07.2026
+
+### External repository filesystem usage and dynamic storage guard
+
+- External SSH repositories can now query their actual filesystem usage through a separate host-key-verified `df -Pk` probe. The repository view shows percentage used, used/total bytes, free space, detected filesystem/mount path and the time of the last successful probe.
+- The repository table combines **Status and ID** into a more compact column and adds **Usage** directly beside it. Borg repository statistics remain separate in the existing size column.
+- The external storage guard is explicitly configurable per repository. Existing external repositories stay unguarded after upgrade unless enabled; when enabled, an empty repository threshold inherits the global percentage.
+- A fresh filesystem probe is required before every external backup. If the guard is enabled and usage cannot be determined or is already at the threshold, Borg is not started.
+- While `borg create` is running, an independent SSH monitor refreshes usage every 15 seconds. Crossing the configured threshold stops Borg through the existing graceful SIGINT/SIGTERM path and marks the run failed with a clear storage-guard message.
+- With the external guard enabled, two consecutive probe failures also stop the job so a backup cannot continue without enforceable free-space protection.
+- When Borg finishes, the monitor is stopped and one final filesystem probe is performed immediately so the repository row receives the freshest possible end state. A failed final refresh preserves the timestamp of the last successful measurement and is shown as a separate refresh error.
+- The probe reuses the protected external repository SSH key and `known_hosts`; key material remains out of process arguments and environment variables. IPv6 destinations are bracketed correctly.
+- Accounts restricted to `borg serve` or another forced command that does not permit `df` are shown as **usage unavailable**. With the guard enabled the manager fails safe instead of starting an unmonitored backup; with the guard disabled normal Borg access remains available.
+
 ## v1.0.86 – 26.07.2026
 
 ### Borg 1.4.3 live progress fixed

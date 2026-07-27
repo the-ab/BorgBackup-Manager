@@ -1006,3 +1006,134 @@ def test_managed_manager_side_repository_commands_keep_existing_locking(job, mon
     monkeypatch.setattr("app.runner.load_repository_environment", lambda *_args, **_kwargs: {})
     command = prune_command(job)
     assert command.manager_cache_repository_id is None
+
+
+def test_external_storage_probe_resolves_relative_ssh_repository(monkeypatch):
+    from app.runner import external_repository_storage_command
+
+    repository = Repository(
+        id=900,
+        name="storagebox",
+        location="ssh://backup@example.invalid:2222/./borg/repository",
+        storage_path=None,
+        encryption_mode="none",
+        extra_env_json="{}",
+    )
+    monkeypatch.setattr("app.runner.get_repository_secret", lambda _repository, kind: {
+        "external_ssh_private_key": "PRIVATE",
+        "external_known_hosts": "example.invalid ssh-ed25519 AAAA",
+    }.get(kind))
+    monkeypatch.setattr("app.runner.os.geteuid", lambda: 1000)
+
+    command = external_repository_storage_command(repository)
+
+    assert command.stdin_data is not None
+    assert "backup@example.invalid" in command.preview
+    assert "./borg/repository" in command.preview
+    assert "df -m" in command.preview
+    assert "Fallback: df -m" in command.preview
+    assert "LC_ALL=C" not in command.preview
+    assert "2222" in command.preview
+    assert command.timeout_seconds == 20
+
+
+def test_external_storage_probe_brackets_ipv6_destination(monkeypatch):
+    from app.runner import external_repository_storage_command
+
+    repository = Repository(
+        id=901,
+        name="ipv6-storage",
+        location="ssh://backup@[2001:db8::10]:2222/./borg/repository",
+        storage_path=None,
+        encryption_mode="none",
+        extra_env_json="{}",
+    )
+    monkeypatch.setattr("app.runner.get_repository_secret", lambda _repository, kind: {
+        "external_ssh_private_key": "PRIVATE",
+        "external_known_hosts": "[2001:db8::10]:2222 ssh-ed25519 AAAA",
+    }.get(kind))
+    monkeypatch.setattr("app.runner.os.geteuid", lambda: 1000)
+
+    command = external_repository_storage_command(repository)
+
+    assert "backup@[2001:db8::10]" in command.preview
+
+
+
+def test_external_storage_probe_absolute_path_has_no_pathless_fallback(monkeypatch):
+    from app.runner import external_repository_storage_command
+
+    repository = Repository(
+        id=902,
+        name="absolute-storage",
+        location="ssh://backup@example.invalid:22/var/backups/borg",
+        storage_path=None,
+        encryption_mode="none",
+        extra_env_json="{}",
+    )
+    monkeypatch.setattr("app.runner.get_repository_secret", lambda _repository, kind: {
+        "external_ssh_private_key": "PRIVATE",
+        "external_known_hosts": "example.invalid ssh-ed25519 AAAA",
+    }.get(kind))
+    monkeypatch.setattr("app.runner.os.geteuid", lambda: 1000)
+
+    command = external_repository_storage_command(repository)
+
+    assert "df -m /var/backups/borg" in command.preview
+    assert "Fallback: df -m" not in command.preview
+
+
+def test_external_storage_probe_wrapper_is_restricted_shell_compatible():
+    from app.runner import _EXTERNAL_STORAGE_SSH_WRAPPER
+
+    assert 'run_ssh "df -m"' in _EXTERNAL_STORAGE_SSH_WRAPPER
+    assert "LC_ALL=C" not in _EXTERNAL_STORAGE_SSH_WRAPPER
+    assert "df -Pk" not in _EXTERNAL_STORAGE_SSH_WRAPPER
+    assert "|" not in _EXTERNAL_STORAGE_SSH_WRAPPER.split("run_ssh()", 1)[-1].split("# Restricted SSH services", 1)[-1]
+
+def test_external_storage_df_parser_uses_capacity_and_mountpoint():
+    from app.runner import parse_external_repository_storage
+
+    usage = parse_external_repository_storage(
+        "Filesystem 1M-blocks Used Available Capacity Mounted on\n"
+        "/dev/storage 1024 768 256 75% /home/backup\n",
+        "./borg/repository",
+    )
+
+    assert usage["total"] == 1024 * 1024 * 1024
+    assert usage["used"] == 768 * 1024 * 1024
+    assert usage["free"] == 256 * 1024 * 1024
+    assert usage["percent"] == 75.0
+    assert usage["path"] == "./borg/repository"
+    assert usage["mount_point"] == "/home/backup"
+
+
+
+def test_external_storage_df_parser_accepts_hetzner_storagebox_df_m_sample():
+    from app.runner import parse_external_repository_storage
+
+    usage = parse_external_repository_storage(
+        "Filesystem   1M-blocks Used  Avail Capacity  Mounted on\n"
+        "u500             102400    0 102399     0%    /home\n",
+        "./borg",
+    )
+
+    assert usage["total"] == 102400 * 1024 * 1024
+    assert usage["used"] == 0
+    assert usage["free"] == 102399 * 1024 * 1024
+    assert usage["percent"] == 0.0
+    assert usage["mount_point"] == "/home"
+
+def test_execute_can_be_aborted_by_safety_monitor():
+    async def scenario():
+        event = asyncio.Event()
+        reason = {"value": "storage threshold reached"}
+        command = Command(argv=["sh", "-c", "sleep 30"], preview="sleep")
+        task = asyncio.create_task(execute(command, abort_event=event, abort_reason=lambda: reason["value"]))
+        await asyncio.sleep(0.05)
+        event.set()
+        return await task
+
+    code, _output, error = asyncio.run(scenario())
+    assert code == 75
+    assert error == "storage threshold reached"

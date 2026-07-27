@@ -37,9 +37,9 @@ def normalize_schedule(value: str | None) -> str | None:
 
 
 def schedule_target_job_ids(db, schedule: BackupSchedule, *, enabled_jobs_only: bool = True) -> list[int]:
-    query = select(Job.id).join(Host, Host.id == Job.host_id)
+    query = select(Job.id).join(Host, Host.id == Job.host_id).join(Repository, Repository.id == Job.repository_id)
     if enabled_jobs_only:
-        query = query.where(Job.enabled.is_(True), Host.enabled.is_(True))
+        query = query.where(Job.enabled.is_(True), Host.enabled.is_(True), Repository.enabled.is_(True))
     if schedule.target_mode == "hosts":
         host_ids = [int(value) for value in json.loads(schedule.target_host_ids_json or "[]")]
         if not host_ids:

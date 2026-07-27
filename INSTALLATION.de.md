@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.0.86
+# Installation und Betrieb – BorgBackup Manager 1.0.90
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.0.86.zip
+BorgBackup-Manager-1.0.90.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.86.zip
+unzip /pfad/BorgBackup-Manager-1.0.90.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -134,7 +134,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.0.86.zip
+unzip /pfad/BorgBackup-Manager-1.0.90.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build
@@ -342,6 +342,8 @@ Repositorybezogene Abweichung:
 4. Optional eine eigene Sperrgrenze setzen. Eine leere Angabe übernimmt den globalen Wert.
 
 Die **Systemdiagnose** zeigt alle im Container sichtbaren Mountpunkte unter `/repositories` getrennt mit Belegung, freiem Speicher, zugeordneten Repositories und Blockierstatus. Ein Mount ab seiner wirksamen Schwelle blockiert nur Backups in die darauf liegenden Repositories.
+
+Für **externe SSH-Repositories** kann die Speicherplatz-Sperre ebenfalls pro Repository aktiviert werden. Die Repository-Liste zeigt die über eine separate SSH-`df -m`-Abfrage ermittelte Belegung. Vor dem Backup wird zwingend frisch geprüft; während `borg create` erfolgt die Prüfung alle 15 Sekunden und nach Jobende ein letztes Mal. Wird die Grenze während des Backups erreicht, stoppt der Manager Borg kontrolliert. Zwei aufeinanderfolgende fehlgeschlagene Prüfungen beenden einen laufenden Job ebenfalls, sofern die Sperre aktiviert ist. Externe Repositorys erben die globale Aktivierung nicht automatisch; ohne ausdrückliche Aktivierung bleibt die externe Sperre aus. Der Prozentwert kann bei Aktivierung weiterhin global übernommen oder repositorybezogen überschrieben werden. Ein ausschließlich auf `borg serve` beschränkter SSH-Zugang kann die Dateisystemabfrage verhindern; in diesem Fall kann eine aktivierte externe Sperre keinen Backupstart zulassen.
 
 ## 9. Ausschlussvorlagen konfigurieren
 
