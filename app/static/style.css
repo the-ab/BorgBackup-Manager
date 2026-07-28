@@ -501,8 +501,11 @@ details > :not(summary) { margin-left: 12px; margin-right: 12px; }
 #log-view-technical details { margin-bottom: 9px; }
 .log-console.technical { height: auto; max-height: 300px; margin: 0 12px 12px; padding: 13px; border-radius: 7px; }
 
-#toast { position: fixed; z-index: 100; right: 20px; bottom: 20px; max-width: 420px; padding: 12px 16px; border-radius: 9px; background: #22303b; color: white; opacity: 0; transform: translateY(12px); pointer-events: none; transition: .2s; box-shadow: var(--shadow); }
-#toast.show { opacity: 1; transform: translateY(0); }
+#toast { position: fixed; z-index: 100; right: 20px; bottom: 20px; display: flex; align-items: flex-start; gap: 12px; max-width: min(520px, calc(100vw - 40px)); padding: 12px 16px; border-radius: 9px; background: #22303b; color: white; opacity: 0; transform: translateY(12px); pointer-events: none; transition: .2s; box-shadow: var(--shadow); }
+#toast.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+#toast .toast-message { min-width: 0; overflow-wrap: anywhere; }
+#toast .toast-close { flex: 0 0 auto; min-width: 28px; min-height: 28px; margin: -5px -8px -5px 0; padding: 0; border: 0; border-radius: 7px; background: transparent; color: inherit; box-shadow: none; font-size: 1.35rem; line-height: 1; }
+#toast .toast-close:hover { background: rgb(255 255 255 / 16%); transform: none; box-shadow: none; }
 body.compact .entity, body.compact .run { padding-top: 10px; padding-bottom: 10px; }
 body.compact .panel { padding: 15px; }
 
@@ -1222,7 +1225,8 @@ body.compact .settings-section { gap: 8px; padding-top: 11px; }
 }
 .archive-selection-toolbar .check { margin: 0; }
 .archive-stat-grid {
-  grid-template-columns: repeat(5, minmax(6.5rem, 1fr));
+  grid-template-columns: minmax(11rem, 1.35fr) minmax(8.5rem, .9fr) repeat(3, minmax(7rem, 1fr));
+  column-gap: 1.25rem;
   padding: .35rem 0;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -1233,7 +1237,7 @@ body.compact .settings-section { gap: 8px; padding-top: 11px; }
   min-width: 0;
 }
 @media (max-width: 1050px) {
-  .archive-stat-grid { grid-template-columns: repeat(3, minmax(7rem, 1fr)); }
+  .archive-stat-grid { grid-template-columns: repeat(3, minmax(8rem, 1fr)); column-gap: .9rem; }
 }
 @media (max-width: 680px) {
   .repository-size-grid { min-width: 0; }
@@ -1924,7 +1928,9 @@ body.compact .job-action-buttons button { min-height: 27px !important; padding: 
 }
 
 /* 1.0.67: mount-level concurrency and live manager network controls */
-.mount-parallel-editor { display: grid; gap: 8px; margin-top: 10px; }
+.mount-parallel-editor { display: grid; gap: 14px; margin-top: 10px; }
+.parallel-limit-group { display: grid; gap: 8px; }
+.parallel-limit-group h3 { margin: 0; font-size: .92rem; }
 .mount-parallel-row { display: grid; grid-template-columns: minmax(0,1fr) 150px; gap: 12px; align-items: end; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
 .mount-parallel-row > div { min-width: 0; display: grid; gap: 3px; }
 .mount-parallel-row strong { overflow-wrap: anywhere; font-size: .82rem; }

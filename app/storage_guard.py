@@ -139,6 +139,7 @@ def repository_storage_filesystems(
             **usage,
             "repositories": [],
             "guard_blocked": False,
+            "parallel_limit": int((getattr(settings, "mount_parallel_limits", {}) or {}).get(str(mount), 0)),
         }
 
     for repository in repositories:
@@ -163,6 +164,7 @@ def repository_storage_filesystems(
                 **usage,
                 "repositories": [],
                 "guard_blocked": False,
+                "parallel_limit": int((getattr(settings, "mount_parallel_limits", {}) or {}).get(str(mount), 0)),
             }
         enabled, threshold, source = effective_storage_guard(repository, settings)
         blocked = enabled and float(rows[mount]["percent"]) >= threshold

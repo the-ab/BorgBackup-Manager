@@ -113,6 +113,17 @@
       "Diagnose laden": "Load diagnostics",
       "Diagnose schließen": "Close diagnostics",
       "Repository-Server:": "Repository server:",
+      "Globale Parallelität:": "Global parallelism:",
+      "Quellenstatistiken:": "Source statistics:",
+      "Parallelität": "Parallelism",
+      "unbegrenzt": "unlimited",
+      "nicht anwendbar": "not applicable",
+      "für externe Repositorys zuerst die Dateisystemprüfung erfolgreich ausführen": "run a successful filesystem probe for external repositories first",
+      "Verwaltete Repository-Mounts": "Managed repository mounts",
+      "Externe Repository-Dateisysteme": "External repository filesystems",
+      "Noch kein gemeinsames externes Dateisystem erkannt. Zuerst Repository-Speicher prüfen oder die Systemdiagnose laden.": "No shared external filesystem has been detected yet. Check repository storage or load System Diagnostics first.",
+      "Dateisystem-Grenzen gelten gemeinsam für unterschiedliche Repositorys auf demselben lokalen Mount oder demselben erkannten externen SSH-Dateisystem. Pro Repository läuft unabhängig davon immer nur ein Borg-Job. 0 bedeutet für dieses Dateisystem unbegrenzt. Externe Gruppen erscheinen nach einer erfolgreichen Dateisystemprüfung.": "Filesystem limits apply jointly to different repositories on the same local mount or the same detected external SSH filesystem. Each repository itself still runs only one Borg job. 0 means unlimited for that filesystem. External groups appear after a successful filesystem probe.",
+      "wirksame Grenze für verschiedene Repositorys dieses Dateisystems": "effective limit for different repositories on this filesystem",
       "Repository-Dateisysteme": "Repository filesystems",
       "Serverprüfungen": "Server checks",
       "Repository R/W/X": "Repository R/W/X",
@@ -129,6 +140,7 @@
       "borg-serve-Log": "borg-serve log",
       "Debug-/Fehlerlog": "Debug/error log",
       "Keine unerwarteten Tracebacks oder Hintergrundfehler protokolliert.": "No unexpected tracebacks or background errors have been logged.",
+      "Unerwarteter interner Fehler. Details wurden im Debug-Log gespeichert.": "Unexpected internal error. Details were saved to the debug log.",
       "Noch keine SSH-Servermeldung protokolliert.": "No SSH server message has been logged yet.",
       "Noch kein Start von borg serve protokolliert.": "No borg serve start has been logged yet.",
       "Borg-Version, Repository-Speicher und Serverprotokoll bei Bedarf laden.": "Load the Borg version, repository storage and server log when needed.",
@@ -178,7 +190,6 @@
       "Eigene Sperrgrenze in Prozent": "Custom threshold in percent",
       "Status / ID": "Status / ID",
       "Belegung": "Filesystem usage",
-      "Maximal parallele Backup-Läufe": "Maximum parallel backup runs",
       "Standard 1. Höhere Werte erlauben mehrere Backup-Läufe auf demselben Repository; Wartungs- und Prüfaktionen bleiben exklusiv.": "Default 1. Higher values allow multiple backup runs on the same repository; maintenance and check actions remain exclusive.",
       "Die Prüfung verwendet das tatsächliche Dateisystem dieses Repository-Verzeichnisses. Eine leere eigene Grenze übernimmt den globalen Wert.": "The check uses the actual filesystem of this repository directory. An empty custom threshold inherits the global value.",
       "URL des vorhandenen Borg-Repositorys": "Existing Borg repository URL",
@@ -283,7 +294,7 @@
       "Zeitplan speichern": "Save schedule",
       "Maximal parallele Ausführungen": "Maximum parallel runs",
       "0 = nur globale Grenze": "0 = global limit only",
-      "Parallelität": "Parallelism",
+      "Parallel: Repository exklusiv": "Parallel: repository exclusive",
       "globale Grenze": "global limit",
       "Sortierung": "Sort order",
       "Name A–Z": "Name A–Z",
@@ -314,7 +325,6 @@
       "0 angezeigt": "0 shown",
       "Archivübersicht": "Archive list",
       "Alle Geräte / alle Archive": "All devices / all archives",
-      "Unvollständige Checkpoint-Archive anzeigen": "Show incomplete checkpoint archives",
       "Archive anzeigen": "Show archives",
       "Neu aus Repository einlesen": "Reload from repository",
       "Die zuletzt geladene Archivliste wird persistent zwischengespeichert.": "The most recently loaded archive list is cached persistently.",
@@ -484,8 +494,8 @@
       "Begrenzt gleichzeitig laufende Borg-Ausführungen auch dann, wenn sie unterschiedliche Repositorys verwenden.": "Limits concurrently running Borg operations even when they use different repositories.",
       "Maximal parallele Ausführungen global": "Maximum parallel runs globally",
       "Maximal parallele Quellenstatistiken": "Maximum parallel source-statistics scans",
-      "0 bedeutet bei der globalen Grenze unbegrenzt. Manuelle Quellenstatistiken zählen zusätzlich gegen die globale Grenze und besitzen eine eigene Grenze (Standard 1), damit mehrere ressourcenintensive Quellenscans nicht unbeabsichtigt gleichzeitig laufen. Repository- und Mount-Grenzen gelten für Quellenstatistiken nicht, weil dabei nur das Quellgerät gelesen wird.": "0 means unlimited for the global limit. Manual source-statistics scans also count against the global limit and have their own cap (default 1), preventing several resource-intensive source scans from running unintentionally at the same time. Repository and mount limits do not apply to source statistics because only the source device is read.",
-      "Mount-Grenzen gelten gemeinsam für alle verwalteten Repositorys auf demselben Dateisystem. 0 bedeutet für diesen Mount unbegrenzt.": "Mount limits apply jointly to all managed repositories on the same filesystem. 0 means unlimited for this mount.",
+      "0 bedeutet bei der globalen Grenze unbegrenzt. Manuelle Quellenstatistiken zählen zusätzlich gegen die globale Grenze und besitzen eine eigene Grenze (Standard 1), damit mehrere ressourcenintensive Quellenscans nicht unbeabsichtigt gleichzeitig laufen. Repository- und Mount-Sperren gelten für Quellenstatistiken nicht, weil dabei nur das Quellgerät gelesen wird.": "0 means unlimited for the global limit. Manual source-statistics scans also count against the global limit and have their own cap (default 1), preventing several resource-intensive source scans from running unintentionally at the same time. Repository and mount locks do not apply to source statistics because only the source device is read.",
+      "Mount-Grenzen gelten gemeinsam für unterschiedliche verwaltete Repositorys auf demselben Dateisystem. Pro Repository läuft unabhängig davon immer nur ein Borg-Job. 0 bedeutet für diesen Mount unbegrenzt.": "Mount limits apply jointly to different managed repositories on the same filesystem. Each repository still runs only one Borg job at a time. 0 means unlimited for this mount.",
       "Max. parallel": "Max. parallel",
       "Job stoppen": "Stop job",
       "Controller-Schlüssel": "Controller key",
@@ -566,6 +576,7 @@
       "Aktiv": "Active",
       "Inaktiv": "Inactive",
       "aktiv": "active",
+      "wartend": "queued",
       "inaktiv": "inactive",
       "blockiert": "blocked",
       "Blockiert": "Blocked",
@@ -933,6 +944,9 @@
   };
 
   const patterns = [
+    [/^Unerwarteter interner Fehler\. Details wurden im Debug-Log gespeichert\. Fehler-ID: (BBM-[A-F0-9]+)$/, 'Unexpected internal error. Details were saved to the debug log. Error ID: $1'],
+    [/^max\. (\d+) gleichzeitig$/, 'max. $1 concurrently'],
+    [/^max\. (\d+)$/, 'max. $1'],
     [/^Repository wird als Ausführung #(\d+) eingelesen\. Die vorhandene Archivliste bleibt währenddessen verfügbar\.$/, 'Repository is being scanned as run #$1. The existing archive list remains available while the scan is running.'],
     [/^Archivscan #(\d+) eingereiht$/, 'Archive scan #$1 queued'],
     [/^(\d+) Jobs$/, '$1 jobs'], [/^(\d+) Zeitpläne$/, '$1 schedules'], [/^(\d+) angezeigt$/, '$1 shown'],
@@ -942,8 +956,9 @@
     [/^Lauf #(\d+) wurde angenommen …$/, 'Run #$1 was accepted …'],
     [/^Standortbestätigung #(\d+) eingereiht$/, 'Location confirmation #$1 queued'],
     [/^WARTESCHLANGE: Warte auf Repository-Ausführung #(\d+)\.$/, 'QUEUE: waiting for repository run #$1.'],
-    [/^WARTESCHLANGE: Repository „(.+)“ erlaubt maximal (\d+) parallele Ausführung\(en\); warte auf Ausführung #(\d+)\.$/, 'QUEUE: repository “$1” allows at most $2 parallel runs; waiting for run #$3.'],
-    [/^WARTESCHLANGE: Mount „(.+)“ erlaubt maximal (\d+) parallele Ausführung\(en\); warte auf Ausführung #(\d+)\.$/, 'QUEUE: mount “$1” allows at most $2 parallel runs; waiting for run #$3.'],
+    [/^WARTESCHLANGE: Repository „(.+)“ wird bereits von Ausführung #(\d+) verwendet; Borg erlaubt dort nur einen schreibenden Lauf gleichzeitig\.$/, 'QUEUE: repository “$1” is already used by run #$2; Borg permits only one writing run there at a time.'],
+    [/^WARTESCHLANGE: Repository „(.+)“ wird bereits von freie Kapazität verwendet; Borg erlaubt dort nur einen schreibenden Lauf gleichzeitig\.$/, 'QUEUE: repository “$1” is already in use; Borg permits only one writing run there at a time.'],
+    [/^WARTESCHLANGE: Repository-Dateisystem „(.+)“ erlaubt maximal (\d+) parallele Ausführung\(en\); warte auf Ausführung #(\d+)\.$/, 'QUEUE: repository filesystem “$1” allows at most $2 parallel runs; waiting for run #$3.'],
     [/^WARTESCHLANGE: Globale Parallelitätsgrenze (\d+) erreicht; warte auf Ausführung #(\d+)\.$/, 'QUEUE: global parallelism limit $1 reached; waiting for run #$2.'],
     [/^WARTESCHLANGE: Zeitplan „(.+)“ erlaubt maximal (\d+) parallele Ausführung\(en\); warte auf Ausführung #(\d+)\.$/, 'QUEUE: schedule “$1” allows at most $2 parallel runs; waiting for run #$3.'],
     [/^max\. (\d+)$/, 'max. $1'],
@@ -959,7 +974,6 @@
     [/^([\d.]+) Min\.$/, '$1 min'], [/^([\d.]+) Sek\.$/, '$1 sec'], [/^([\d.]+) Std\.$/, '$1 hr'],
     [/^Dauer (.+) · $/, 'Duration $1 · '],
     [/^Letztes Backup · (.+)$/, 'Latest backup · $1'],
-    [/^Live-Scan vor Ausschlüssen · (.+)$/, 'Live scan before exclusions · $1'],
     [/^täglich · (.+)$/, 'daily · $1'], [/^monatlich am (\d+)\. · (.+)$/, 'monthly on day $1 · $2'],
     [/^Vorlage „(.+)“ hinzugefügt$/, 'Template “$1” added'],
     [/^Die Ausschlussvorlage „(.+)“ enthält keine Muster$/, 'Exclusion template “$1” contains no patterns'],
@@ -1004,6 +1018,10 @@
     const leading = text.match(/^\s*/)?.[0] || '';
     const trailing = text.match(/\s*$/)?.[0] || '';
     const core = text.slice(leading.length, text.length - trailing.length || undefined);
+    const debugReference = core.match(/^(.*) Technische Details: Debug-Log, Fehler-ID (BBM-[A-F0-9]+)\.$/);
+    if (debugReference) {
+      return leading + translateRaw(debugReference[1]) + ` Technical details: debug log, error ID ${debugReference[2]}.` + trailing;
+    }
     if (exact[core]) return leading + exact[core] + trailing;
     for (const [pattern, replacement] of patterns) {
       if (pattern.test(core)) return leading + core.replace(pattern, replacement) + trailing;

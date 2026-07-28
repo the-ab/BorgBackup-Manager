@@ -399,6 +399,16 @@ class ApiError extends Error {
   }
 }
 
+function browserSafeErrorMessage(value) {
+  const text = String(value || '').trim();
+  const technical = text.includes('Traceback (most recent call last)')
+    || text.includes('During handling of the above exception')
+    || /(?:^|\n)\s*File ["']/.test(text);
+  return technical
+    ? 'Unerwarteter interner Fehler. Details wurden im Debug-Log gespeichert.'
+    : text;
+}
+
 async function api(path, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
   const securityHeaders = ['GET', 'HEAD', 'OPTIONS'].includes(method) ? {} : {'X-BBM-Request': '1'};
@@ -413,7 +423,7 @@ async function api(path, options = {}) {
     let detail;
     try { detail = (await response.json()).detail; } catch { detail = response.statusText; }
     const rawMessage = Array.isArray(detail) ? detail.map((item) => item.msg).join(', ') : detail;
-    const message = translateMessage(rawMessage);
+    const message = translateMessage(browserSafeErrorMessage(rawMessage));
     const error = new ApiError(response.status, message, path);
     // Nur ein echter HTTP-401 beendet die lokale Anmeldung. Fehlermeldungen aus
     // Borg, SSH oder Diagnose dürfen auch dann nicht abmelden, wenn sie Wörter
@@ -498,12 +508,37 @@ async function loadPublicVersion() {
 }
 loadPublicVersion();
 
-function toast(message, bad = false) {
+let toastTimer = null;
+
+function hideToast() {
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = null;
+  $('#toast').classList.remove('show');
+}
+
+function toast(message, bad = false, autoHideMs = null) {
   const element = $('#toast');
-  element.textContent = message;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = null;
+  element.replaceChildren();
+  const text = document.createElement('span');
+  text.className = 'toast-message';
+  text.textContent = message;
+  element.append(text);
+  if (bad) {
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-close';
+    close.setAttribute('aria-label', 'Schließen');
+    close.textContent = '×';
+    close.onclick = hideToast;
+    element.append(close);
+  }
   element.style.background = bad ? '#a83d36' : '';
+  element.classList.toggle('error', bad);
   element.classList.add('show');
-  setTimeout(() => element.classList.remove('show'), bad ? 8000 : 3200);
+  if (!bad) toastTimer = setTimeout(hideToast, 3200);
+  else if (Number(autoHideMs) > 0) toastTimer = setTimeout(hideToast, Number(autoHideMs));
 }
 
 async function copyText(value, successMessage, fallbackTitle = 'Text kopieren') {
@@ -738,7 +773,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.1.3`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.2.0`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -1006,7 +1041,7 @@ async function pollRun(runId) {
     const good = ['success', 'warning'].includes(run.status);
     const label = run.status === 'success' ? 'erfolgreich abgeschlossen' : run.status === 'warning' ? 'mit Warnung abgeschlossen' : run.status === 'cancelled' ? 'abgebrochen' : 'fehlgeschlagen';
     setSyncState(`Ausführung #${runId} ${label}`, good ? 'success' : 'error');
-    toast(`Ausführung #${runId} ${label}`, !good);
+    toast(`Ausführung #${runId} ${label}`, !good, good ? null : 6000);
   } catch (error) {
     tracker.timer = setTimeout(() => pollRun(runId), 1500);
     setSyncState(`Status von Ausführung #${runId} wird erneut abgefragt …`, 'pending', true);
@@ -1025,6 +1060,22 @@ function syncRunFilterControls() {
 }
 
 
+function sourceStatsLimitationText(limitations) {
+  if (!Array.isArray(limitations) || !limitations.length) return '';
+  const english = currentLocale().toLowerCase().startsWith('en');
+  const parts = limitations.map((item) => {
+    const count = Number(item?.count || 0);
+    switch (item?.code) {
+      case 'fallback': return english ? 'Python 3 unavailable; fallback scan used' : 'Python 3 fehlt; Fallback-Scan verwendet';
+      case 'unsupported-patterns': return english ? `${count} exclusion pattern${count === 1 ? '' : 's'} could not be mirrored safely` : `${count} Ausschlussmuster konnten nicht sicher berücksichtigt werden`;
+      case 'nodump-unavailable': return english ? 'nodump could not be checked' : 'nodump konnte nicht geprüft werden';
+      case 'read-warnings': return english ? `${count} path read warning${count === 1 ? '' : 's'}` : `${count} Lese-/Zugriffswarnung${count === 1 ? '' : 'en'}`;
+      default: return english ? 'scan result is limited' : 'Scanergebnis ist eingeschränkt';
+    }
+  });
+  return `${english ? 'Scan limited' : 'Scan eingeschränkt'}: ${parts.join('; ')}`;
+}
+
 function sourceStatsLine(job, refreshable = false) {
   const hasStats = job.source_size_bytes != null || job.source_file_count != null;
   const sourceLabel = job.source_stats_origin === 'scan' ? 'Ausschlussbereinigter Quellen-Scan' : 'Letztes Backup';
@@ -1032,13 +1083,12 @@ function sourceStatsLine(job, refreshable = false) {
     ? `${formatBytes(job.source_size_bytes)} · ${job.source_file_count == null ? '–' : Number(job.source_file_count).toLocaleString(currentLocale())} Dateien`
     : 'noch nicht ermittelt';
   const checked = job.source_stats_checked_at ? formatDate(job.source_stats_checked_at) : '–';
-  const sourceCount = Array.isArray(job.source_stats_by_path) ? job.source_stats_by_path.length : 0;
-  const quality = job.source_stats_quality === 'high' ? 'Qualität hoch' : job.source_stats_quality === 'observed' ? 'aus letztem Borg-Lauf beobachtet' : job.source_stats_quality === 'partial' ? 'Qualität eingeschränkt' : '';
-  const detail = [sourceLabel, checked, sourceCount ? `${sourceCount} Quelle${sourceCount === 1 ? '' : 'n'}` : '', quality].filter(Boolean).join(' · ');
+  const limitation = sourceStatsLimitationText(job.source_stats_limitations);
+  const detail = [sourceLabel, checked, limitation].filter(Boolean).join(' · ');
   const refresh = refreshable && state.currentUser?.role === 'admin'
     ? `<button type="button" class="inline-action" ${bbmAction('action', job.id, 'source-stats')}>Aktualisieren</button>`
     : '';
-  return `<span class="source-stat-line"><span class="source-stat-copy"><span><b>Quellenstatistik:</b> ${values}</span><small>${hasStats ? esc(detail) : 'Noch keine Quellenstatistik gespeichert'}</small></span>${refresh}</span>`;
+  return `<span class="source-stat-line"><span class="source-stat-copy"><span><b>Quellenstatistik:</b> ${values}</span><small class="${limitation ? 'warning-text' : ''}">${hasStats ? esc(detail) : 'Noch keine Quellenstatistik gespeichert'}</small></span>${refresh}</span>`;
 }
 
 function dashboardJobTable(jobs) {
@@ -1156,7 +1206,7 @@ function renderRepos() {
       ? `<small>Manager-SSH-Key · ${esc(repo.external_host_fingerprint || 'Hostkey gespeichert')}</small>` : '';
     const mountLimit = repo.mount_path ? Number(state.settings?.mount_parallel_limits?.[repo.mount_path] || 0) : 0;
     const guardSourceLabel = repo.storage_guard_source === 'repository' ? 'Repository' : repo.storage_guard_source === 'global' ? 'global' : 'externer Standard';
-    const guardInfo = `<small>Parallel: Repo max. ${repo.parallel_limit || 1}${repo.mount_path ? ` · Mount ${esc(repo.mount_path)} ${mountLimit ? `max. ${mountLimit}` : 'unbegrenzt'}` : ''}</small>`;
+    const guardInfo = `<small>Parallel: Repository exklusiv${repo.mount_path ? ` · Mount ${esc(repo.mount_path)} ${mountLimit ? `max. ${mountLimit}` : 'unbegrenzt'}` : ''}</small>`;
     const storageKnown = repo.storage_usage_percent != null && repo.storage_usage_total_bytes != null;
     const storageGuardText = repo.storage_guard_effective_enabled
       ? `Sperre ab ${repo.storage_guard_effective_threshold_percent} % (${guardSourceLabel})`
@@ -1491,7 +1541,6 @@ function fillSelects(skipView = null) {
     replaceOptions($('#archive-repository'), repos);
     const storedRepository = localStorage.getItem('bbm-archive-repository');
     if (storedRepository && [...$('#archive-repository').options].some((option) => option.value === storedRepository)) $('#archive-repository').value = storedRepository;
-    $('#archive-consider-checkpoints').checked = localStorage.getItem('bbm-archive-checkpoints') === '1';
   }
 }
 
@@ -1858,29 +1907,58 @@ function collectExcludeTemplates() {
   return templates;
 }
 
-function mountParallelCandidates() {
+function managedMountParallelCandidates() {
   const paths = new Set(Object.keys(state.settings?.mount_parallel_limits || {}));
   (state.repos || []).filter((repo) => repo.managed && repo.mount_path).forEach((repo) => paths.add(repo.mount_path));
   return [...paths].sort((a, b) => a.localeCompare(b, currentLocale()));
 }
 
+function externalFilesystemParallelCandidates() {
+  const groups = new Map();
+  Object.keys(state.settings?.external_storage_parallel_limits || {}).forEach((key) => {
+    groups.set(key, {key, label: key.replace(/^external:/, ''), repositories: []});
+  });
+  (state.repos || []).filter((repo) => !repo.managed && repo.external_parallel_key).forEach((repo) => {
+    const current = groups.get(repo.external_parallel_key) || {
+      key: repo.external_parallel_key,
+      label: repo.external_parallel_label || repo.external_parallel_key.replace(/^external:/, ''),
+      repositories: [],
+    };
+    current.repositories.push(repo.name);
+    groups.set(repo.external_parallel_key, current);
+  });
+  (state.externalFilesystemParallelGroups || []).forEach((group) => {
+    if (!group?.key) return;
+    const current = groups.get(group.key) || {key: group.key, label: group.label, repositories: []};
+    current.repositories = [...new Set([...(current.repositories || []), ...(group.repositories || [])])];
+    groups.set(group.key, current);
+  });
+  return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label, currentLocale()));
+}
+
 function renderMountParallelLimits() {
   const target = $('#mount-parallel-editor');
   if (!target) return;
-  const paths = mountParallelCandidates();
-  if (!paths.length) {
-    target.innerHTML = '<div class="empty">Keine verwalteten Repository-Mounts erkannt.</div>';
-    return;
-  }
-  const limits = state.settings?.mount_parallel_limits || {};
-  target.innerHTML = paths.map((path) => {
+  const managedPaths = managedMountParallelCandidates();
+  const externalGroups = externalFilesystemParallelCandidates();
+  const managedLimits = state.settings?.mount_parallel_limits || {};
+  const externalLimits = state.settings?.external_storage_parallel_limits || {};
+  const managedRows = managedPaths.map((path) => {
     const repos = (state.repos || []).filter((repo) => repo.mount_path === path).map((repo) => repo.name);
-    return `<div class="mount-parallel-row"><div><strong>${esc(path)}</strong><small>${repos.length ? esc(repos.join(', ')) : 'derzeit kein Repository zugeordnet'}</small></div><label>Max. parallel<input type="number" min="0" max="64" value="${esc(limits[path] ?? 0)}" data-mount-parallel-path="${esc(path)}"></label></div>`;
+    return `<div class="mount-parallel-row"><div><strong>${esc(path)}</strong><small>${repos.length ? esc(repos.join(', ')) : 'derzeit kein Repository zugeordnet'}</small></div><label>Max. parallel<input type="number" min="0" max="64" value="${esc(managedLimits[path] ?? 0)}" data-mount-parallel-path="${esc(path)}"></label></div>`;
   }).join('');
+  const externalRows = externalGroups.map((group) => `<div class="mount-parallel-row"><div><strong>${esc(group.label)}</strong><small>${group.repositories.length ? esc(group.repositories.join(', ')) : 'derzeit kein Repository zugeordnet'}</small></div><label>Max. parallel<input type="number" min="0" max="64" value="${esc(externalLimits[group.key] ?? 0)}" data-external-parallel-key="${esc(group.key)}"></label></div>`).join('');
+  target.innerHTML = `
+    <div class="parallel-limit-group"><h3>Verwaltete Repository-Mounts</h3>${managedRows || '<div class="empty">Keine verwalteten Repository-Mounts erkannt.</div>'}</div>
+    <div class="parallel-limit-group"><h3>Externe Repository-Dateisysteme</h3>${externalRows || '<div class="empty">Noch kein gemeinsames externes Dateisystem erkannt. Zuerst Repository-Speicher prüfen oder die Systemdiagnose laden.</div>'}</div>`;
 }
 
 function collectMountParallelLimits() {
   return Object.fromEntries($$('[data-mount-parallel-path]').map((input) => [input.dataset.mountParallelPath, Number(input.value) || 0]).filter(([, limit]) => limit > 0));
+}
+
+function collectExternalStorageParallelLimits() {
+  return Object.fromEntries($$('[data-external-parallel-key]').map((input) => [input.dataset.externalParallelKey, Number(input.value) || 0]).filter(([, limit]) => limit > 0));
 }
 
 function renderSettings() {
@@ -3060,7 +3138,7 @@ async function deleteHostSshAction(id) {
 function resetRepositoryForm() {
   const form = $('#repo-form'); form.reset(); form.elements.id.value = ''; form.elements.import_directory.value = '';
   form.elements.managed.disabled = false; form.elements.encryption_mode.disabled = false; form.elements.generate_external_ssh_key.checked = true; form.elements.scan_external_host_key.checked = true; form.elements.external_ssh_private_key.value = ''; form.elements.external_known_hosts.value = '';
-  form.elements.storage_guard_mode.value = 'inherit'; form.elements.storage_guard_threshold_percent.value = ''; form.elements.parallel_limit.value = '1'; form.dataset.lastManagedMode = 'true';
+  form.elements.storage_guard_mode.value = 'inherit'; form.elements.storage_guard_threshold_percent.value = ''; form.dataset.lastManagedMode = 'true';
   $('#repo-form-title').textContent = 'Repository hinzufügen'; $('#cancel-repo-edit').classList.add('hidden');
   $('#repo-manager-key-info').classList.add('hidden'); $('#repo-manager-key-info').innerHTML = '';
   clearRepositoryStatus();
@@ -3077,7 +3155,6 @@ function editRepository(id) {
   form.elements.generate_external_ssh_key.checked = false; form.elements.scan_external_host_key.checked = false;
   form.elements.storage_guard_mode.value = repo.storage_guard_enabled == null ? 'inherit' : (repo.storage_guard_enabled ? 'enabled' : 'disabled');
   form.elements.storage_guard_threshold_percent.value = repo.storage_guard_threshold_percent ?? '';
-  form.elements.parallel_limit.value = repo.parallel_limit || 1;
   form.elements.managed.disabled = true; form.elements.encryption_mode.disabled = repo.repository_present;
   const keyInfo = $('#repo-manager-key-info');
   if (!repo.managed && repo.external_ssh_public_key) {
@@ -3280,8 +3357,8 @@ bindForm('#repo-form', (form) => {
   const guardMode = form.get('storage_guard_mode');
   const guardEnabled = guardMode === 'inherit' ? null : guardMode === 'enabled';
   const guardThreshold = form.get('storage_guard_threshold_percent') ? +form.get('storage_guard_threshold_percent') : null;
-  if (importDirectory) return api('/repositories/import', {method: 'POST', body: JSON.stringify({name: form.get('name'), enabled: true, directory_name: importDirectory, encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, storage_guard_enabled: guardEnabled, storage_guard_threshold_percent: guardThreshold, parallel_limit: +form.get('parallel_limit') || 1})});
-  return api(id ? `/repositories/${id}` : '/repositories', {method: id ? 'PUT' : 'POST', body: JSON.stringify({name: form.get('name'), enabled: existing ? Boolean(existing.enabled) : true, managed, location: managed ? null : form.get('location'), external_ssh_private_key: managed ? null : (form.get('external_ssh_private_key') || null), external_known_hosts: managed ? null : (form.get('external_known_hosts') || null), generate_external_ssh_key: managed ? false : form.get('generate_external_ssh_key') === 'on', scan_external_host_key: managed ? false : form.get('scan_external_host_key') === 'on', encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, passphrase_env: null, extra_env: {}, storage_guard_enabled: guardEnabled, storage_guard_threshold_percent: guardThreshold, parallel_limit: +form.get('parallel_limit') || 1})});
+  if (importDirectory) return api('/repositories/import', {method: 'POST', body: JSON.stringify({name: form.get('name'), enabled: true, directory_name: importDirectory, encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, storage_guard_enabled: guardEnabled, storage_guard_threshold_percent: guardThreshold})});
+  return api(id ? `/repositories/${id}` : '/repositories', {method: id ? 'PUT' : 'POST', body: JSON.stringify({name: form.get('name'), enabled: existing ? Boolean(existing.enabled) : true, managed, location: managed ? null : form.get('location'), external_ssh_private_key: managed ? null : (form.get('external_ssh_private_key') || null), external_known_hosts: managed ? null : (form.get('external_known_hosts') || null), generate_external_ssh_key: managed ? false : form.get('generate_external_ssh_key') === 'on', scan_external_host_key: managed ? false : form.get('scan_external_host_key') === 'on', encryption_mode: encryption, passphrase: form.get('passphrase') || null, keyfile: form.get('keyfile') || null, passphrase_env: null, extra_env: {}, storage_guard_enabled: guardEnabled, storage_guard_threshold_percent: guardThreshold})});
 }, ['dashboard', 'repositories', 'jobs']);
 
 bindForm('#job-form', (form) => {
@@ -3380,9 +3457,7 @@ async function unmountLegacyArchive(mountId) {
 
 function markArchivesStale() {
   const repositoryId = +$('#archive-repository').value;
-  const considerCheckpoints = $('#archive-consider-checkpoints').checked;
   if (repositoryId) localStorage.setItem('bbm-archive-repository', String(repositoryId));
-  localStorage.setItem('bbm-archive-checkpoints', considerCheckpoints ? '1' : '0');
   state.archiveData = null;
   state.archiveSelection = new Set();
   state.activeBrowser = null;
@@ -3403,9 +3478,7 @@ function markArchivesStale() {
 async function loadArchives(options = {}) {
   const repositoryId = +$('#archive-repository').value;
   if (!repositoryId) return;
-  const considerCheckpoints = $('#archive-consider-checkpoints').checked;
   localStorage.setItem('bbm-archive-repository', String(repositoryId));
-  localStorage.setItem('bbm-archive-checkpoints', considerCheckpoints ? '1' : '0');
   const requestId = ++state.archiveRequestId;
   const forceRefresh = options.force === true;
   const button = forceRefresh ? $('#refresh-archives') : $('#load-archives');
@@ -3420,7 +3493,7 @@ async function loadArchives(options = {}) {
   else if (!forceRefresh) $('#archive-summary').textContent = 'Archivliste wird aus dem Zwischenspeicher geladen …';
   try {
     if (forceRefresh) {
-      const result = await api(`/repositories/${repositoryId}/archives/refresh?consider_checkpoints=${considerCheckpoints}`, {method: 'POST'});
+      const result = await api(`/repositories/${repositoryId}/archives/refresh`, {method: 'POST'});
       if (requestId !== state.archiveRequestId) return;
       $('#archive-summary').textContent = `Repository wird als Ausführung #${result.run_id} eingelesen. Die vorhandene Archivliste bleibt währenddessen verfügbar.`;
       watchRunCompletion(result.run_id, {
@@ -3433,7 +3506,7 @@ async function loadArchives(options = {}) {
       return;
     }
 
-    const result = await api(`/repositories/${repositoryId}/archives?consider_checkpoints=${considerCheckpoints}`);
+    const result = await api(`/repositories/${repositoryId}/archives`);
     if (requestId !== state.archiveRequestId) return;
     state.archiveData = result;
     if (result.archive_cache_missing) {
@@ -3533,7 +3606,7 @@ function renderArchives() {
     return !selectedDevice || (selectedDevice === '__unassigned__' ? !device : device === selectedDevice);
   });
   const checkpoints = archives.filter((archive) => archive.checkpoint).length;
-  const checkpointInfo = state.archiveData?.consider_checkpoints ? ` · ${checkpoints} Checkpoint(s) eingeblendet` : '';
+  const checkpointInfo = checkpoints ? ` · ${checkpoints} Checkpoint(s)` : '';
   const repoStats = state.archiveData?.repository_statistics || {};
   const sizeSummary = repoStats.original_size != null
     ? ` · Original ${formatBytes(repoStats.original_size)} · komprimiert ${formatBytes(repoStats.compressed_size)} · dedupliziert ${formatBytes(repoStats.deduplicated_size)}`
@@ -3622,7 +3695,6 @@ function renderArchives() {
 function openRepositoryArchives(repositoryId) {
   goToView('archives');
   $('#archive-repository').value = String(repositoryId);
-  $('#archive-consider-checkpoints').checked = false;
   loadArchives();
 }
 
@@ -3724,10 +3796,10 @@ async function deleteArchives(repositoryId, archives) {
       body: JSON.stringify({archives: uniqueArchives, compact_after: compactAfter}),
     });
     uniqueArchives.forEach((name) => state.archiveSelection.delete(name));
-    await refreshAreas(['dashboard', 'runs'], `${english ? 'Archive deletion' : 'Archivlöschung'} #${result.run_id} ${english ? 'was accepted' : 'wurde angenommen'} …`);
     watchRunCompletion(result.run_id, {areas: ['dashboard', 'runs', 'repositories'], repositoryId, refreshArchives: true});
     toast(`${english ? 'Archive deletion' : 'Archivlöschung'} #${result.run_id} ${english ? 'started' : 'gestartet'} · ${result.device_label || deviceLabel}`);
     showRun(result.run_id);
+    await refreshAreas(['dashboard', 'runs'], `${english ? 'Archive deletion' : 'Archivlöschung'} #${result.run_id} ${english ? 'was accepted' : 'wurde angenommen'} …`);
   } catch (error) {
     setSyncState(english ? 'Archive deletion could not be started' : 'Archivlöschung konnte nicht gestartet werden', 'error');
     toast(error.message, true);
@@ -4041,7 +4113,6 @@ $('#browse-repositories').onclick = () => browseRepositoryDirectories('');
 $('#repository-browser-up').onclick = () => browseRepositoryDirectories($('#repository-browser-up').dataset.parent || '');
 $('#close-repository-browser').onclick = () => $('#repository-folder-browser').classList.add('hidden');
 $('#archive-repository').onchange = markArchivesStale;
-$('#archive-consider-checkpoints').onchange = markArchivesStale;
 $('#archive-device-filter').onchange = () => {
   if (!state.archiveData) return;
   localStorage.setItem(`bbm-archive-device-${state.archiveData.repository_id}`, $('#archive-device-filter').value);
@@ -4120,6 +4191,13 @@ $('#load-diagnostics').onclick = async () => {
   try {
     const diagnostics = await api('/system/diagnostics'); const storage = diagnostics.repository_storage; const checks = diagnostics.repository_server_checks || {};
     const filesystems = diagnostics.repository_storage_filesystems || (storage ? [storage] : []);
+    state.externalFilesystemParallelGroups = filesystems
+      .filter((item) => item.external && item.parallel_key)
+      .map((item) => ({
+        key: item.parallel_key,
+        label: item.path,
+        repositories: (item.repositories || []).map((repo) => repo.name),
+      }));
     const filesystemRows = filesystems.map((item) => {
       const repositories = item.repositories?.length ? item.repositories.map((repo) => `${esc(repo.name)}${repo.external ? ' · extern' : ''} · ${repo.guard_enabled ? `Sperre ab ${repo.guard_threshold_percent} %${repo.guard_source === 'repository' ? ' (Repository)' : repo.guard_source === 'global' ? ' (global)' : ''}` : 'Sperre deaktiviert'}${repo.guard_blocked ? ' · BLOCKIERT' : ''}`).join('<br>') : `Keine direkte Repository-Zuordnung · globale Sperre ${item.guard_enabled ? 'ab ' + item.guard_threshold_percent + ' %' : 'deaktiviert'}`;
       const usageKnown = item.used != null && item.total != null && item.percent != null;
@@ -4129,7 +4207,10 @@ $('#load-diagnostics').onclick = async () => {
       const failed = Boolean(item.error && !usageKnown);
       const statusClass = item.guard_blocked ? 'failed' : failed ? 'warning' : 'success';
       const statusLabel = item.guard_blocked ? 'Backups blockiert' : failed ? 'Prüfung fehlgeschlagen' : 'OK';
-      return `<tr><td data-label="Mount"><code>${esc(item.path)}</code>${item.external ? '<small>Externes Repository-Dateisystem</small>' : ''}</td><td data-label="Belegung">${usage}</td><td data-label="Repositories">${repositories}</td><td data-label="Status"><span class="badge ${statusClass}">${statusLabel}</span>${item.error && usageKnown ? `<small class="repository-error-summary">Letzte Aktualisierung fehlgeschlagen: ${esc(item.error)}</small>` : ''}</td></tr>`;
+      const parallel = item.parallel_limit == null
+        ? '<span>nicht verfügbar</span><small>für externe Repositorys zuerst die Dateisystemprüfung erfolgreich ausführen</small>'
+        : `<b>${Number(item.parallel_limit || 0) > 0 ? `max. ${Number(item.parallel_limit)} gleichzeitig` : 'unbegrenzt'}</b><small>aktiv ${Number(item.running_runs || 0)} · wartend ${Number(item.queued_runs || 0)} · wirksame Grenze für verschiedene Repositorys dieses Dateisystems</small>`;
+      return `<tr><td data-label="Mount"><code>${esc(item.path)}</code>${item.external ? '<small>Externes Repository-Dateisystem</small>' : ''}</td><td data-label="Belegung">${usage}</td><td data-label="Parallelität">${parallel}</td><td data-label="Repositories">${repositories}</td><td data-label="Status"><span class="badge ${statusClass}">${statusLabel}</span>${item.error && usageKnown ? `<small class="repository-error-summary">Letzte Aktualisierung fehlgeschlagen: ${esc(item.error)}</small>` : ''}</td></tr>`;
     }).join('');
     const inactiveAccess = Number(checks.repository_access_inactive_rows || 0);
     const accessDetail = currentLanguage() === 'en'
@@ -4149,7 +4230,9 @@ $('#load-diagnostics').onclick = async () => {
     const sharedRepositories = Number(checks.managed_repositories_shared_across_hosts ?? 0);
     $('#system-diagnostics').className = '';
     state.diagnosticLogs = {sshd: diagnostics.sshd_log || '', borg: diagnostics.borg_serve_log || '', debug: diagnostics.debug_log || ''};
-    $('#system-diagnostics').innerHTML = `<p class="diagnostic-server"><b>Repository-Server:</b> ${esc(diagnostics.borg_version)}</p><h3>Repository-Dateisysteme</h3>${filesystemRows ? `<div class="table-scroll diagnostic-filesystems"><table class="data-table"><thead><tr><th>Mount</th><th>Belegung</th><th>Repositories / Sperre</th><th>Status</th></tr></thead><tbody>${filesystemRows}</tbody></table></div>` : '<p>Repository-Speicher konnte nicht ermittelt werden.</p>'}<h3>Serverprüfungen</h3><div class="diagnostic-check-grid">${diagnosticGrid}<div class="diagnostic-check diagnostic-info"><span>Gemeinsam genutzte Repositories</span><b class="badge inactive">${sharedRepositories}</b><small>Information</small></div></div><h3>Serverprotokolle</h3><div class="diagnostic-log-tabs" role="tablist"><button class="secondary" data-diagnostic-log="sshd" role="tab">sshd-Log</button><button class="secondary" data-diagnostic-log="borg" role="tab">borg-serve-Log</button><button class="secondary" data-diagnostic-log="debug" role="tab">Debug-/Fehlerlog</button></div><pre id="diagnostic-log-content" class="diagnostic-log-content"></pre>`;
+    const globalParallel = Number(diagnostics.global_parallel_limit || 0) > 0 ? `max. ${Number(diagnostics.global_parallel_limit)}` : 'unbegrenzt';
+    const sourceStatsParallel = Number(diagnostics.source_stats_parallel_limit || 1);
+    $('#system-diagnostics').innerHTML = `<p class="diagnostic-server"><b>Repository-Server:</b> ${esc(diagnostics.borg_version)} · <b>Globale Parallelität:</b> ${globalParallel} · <b>Quellenstatistiken:</b> max. ${sourceStatsParallel}</p><h3>Repository-Dateisysteme</h3>${filesystemRows ? `<div class="table-scroll diagnostic-filesystems"><table class="data-table"><thead><tr><th>Mount</th><th>Belegung</th><th>Parallelität</th><th>Repositories / Sperre</th><th>Status</th></tr></thead><tbody>${filesystemRows}</tbody></table></div>` : '<p>Repository-Speicher konnte nicht ermittelt werden.</p>'}<h3>Serverprüfungen</h3><div class="diagnostic-check-grid">${diagnosticGrid}<div class="diagnostic-check diagnostic-info"><span>Gemeinsam genutzte Repositories</span><b class="badge inactive">${sharedRepositories}</b><small>Information</small></div></div><h3>Serverprotokolle</h3><div class="diagnostic-log-tabs" role="tablist"><button class="secondary" data-diagnostic-log="sshd" role="tab">sshd-Log</button><button class="secondary" data-diagnostic-log="borg" role="tab">borg-serve-Log</button><button class="secondary" data-diagnostic-log="debug" role="tab">Debug-/Fehlerlog</button></div><pre id="diagnostic-log-content" class="diagnostic-log-content"></pre>`;
     $$('[data-diagnostic-log]').forEach((tab) => tab.onclick = () => renderDiagnosticLog(tab.dataset.diagnosticLog));
     renderDiagnosticLog(state.activeDiagnosticLog);
     button.textContent = 'Diagnose neu laden';
@@ -4891,7 +4974,7 @@ $('#settings-form').onsubmit = async (event) => {
     release();
     return;
   }
-  const payload = {appearance: state.settings.appearance || 'auto', density: form.get('density'), dashboard_recent_runs_limit: +form.get('dashboard_recent_runs_limit'), runs_list_limit: +form.get('runs_list_limit'), auto_refresh_seconds: +form.get('auto_refresh_seconds'), list_max_height: +form.get('list_max_height'), run_retention_days: +form.get('run_retention_days'), run_log_max_mib: +form.get('run_log_max_mib'), run_log_view_kib: +form.get('run_log_view_kib'), session_idle_timeout_seconds: Math.max(60, Number(form.get('session_idle_timeout_minutes') || 60) * 60), max_parallel_runs: +form.get('max_parallel_runs'), source_stats_parallel_limit: +form.get('source_stats_parallel_limit'), update_check_enabled: form.get('update_check_enabled') === 'on', update_check_interval_hours: +form.get('update_check_interval_hours'), mount_parallel_limits: collectMountParallelLimits(), repository_size_after_run: form.get('repository_size_after_run') === 'on', compact_after_prune: form.get('compact_after_prune') === 'on', storage_guard_enabled: form.get('storage_guard_enabled') === 'on', storage_guard_threshold_percent: +form.get('storage_guard_threshold_percent'), header_network_enabled: headerNetworkEnabled, header_network_source: headerNetworkSource, header_network_host_id: headerNetworkHostId, header_network_interfaces: headerNetworkInterfaces, header_network_max_interfaces: Number(event.target.elements.header_network_max_interfaces.value) || 3, header_network_interval_seconds: Number(event.target.elements.header_network_interval_seconds.value) || 5, exclude_templates: collectExcludeTemplates()};
+  const payload = {appearance: state.settings.appearance || 'auto', density: form.get('density'), dashboard_recent_runs_limit: +form.get('dashboard_recent_runs_limit'), runs_list_limit: +form.get('runs_list_limit'), auto_refresh_seconds: +form.get('auto_refresh_seconds'), list_max_height: +form.get('list_max_height'), run_retention_days: +form.get('run_retention_days'), run_log_max_mib: +form.get('run_log_max_mib'), run_log_view_kib: +form.get('run_log_view_kib'), session_idle_timeout_seconds: Math.max(60, Number(form.get('session_idle_timeout_minutes') || 60) * 60), max_parallel_runs: +form.get('max_parallel_runs'), source_stats_parallel_limit: +form.get('source_stats_parallel_limit'), update_check_enabled: form.get('update_check_enabled') === 'on', update_check_interval_hours: +form.get('update_check_interval_hours'), mount_parallel_limits: collectMountParallelLimits(), external_storage_parallel_limits: collectExternalStorageParallelLimits(), repository_size_after_run: form.get('repository_size_after_run') === 'on', compact_after_prune: form.get('compact_after_prune') === 'on', storage_guard_enabled: form.get('storage_guard_enabled') === 'on', storage_guard_threshold_percent: +form.get('storage_guard_threshold_percent'), header_network_enabled: headerNetworkEnabled, header_network_source: headerNetworkSource, header_network_host_id: headerNetworkHostId, header_network_interfaces: headerNetworkInterfaces, header_network_max_interfaces: Number(event.target.elements.header_network_max_interfaces.value) || 3, header_network_interval_seconds: Number(event.target.elements.header_network_interval_seconds.value) || 5, exclude_templates: collectExcludeTemplates()};
   try { state.settings = await api('/settings', {method: 'PUT', body: JSON.stringify(payload)}); if (state.system) state.system.update_status = await api('/update-status'); state.headerNetwork = null; renderSettings(); renderSystem(); scheduleRefresh(); scheduleHeaderNetworkPoll(0); setSyncState('Einstellungen übernommen', 'success'); toast('Einstellungen gespeichert'); }
   catch (error) { setSyncState('Einstellungen konnten nicht gespeichert werden', 'error'); toast(error.message, true); }
   finally { release(); }

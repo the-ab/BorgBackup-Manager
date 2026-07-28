@@ -81,9 +81,11 @@ def parse_source_scan_statistics(text: str | None) -> dict[str, Any]:
         "skipped_mount_count": max(0, int(payload.get("skipped_mount_count") or 0)),
         "skipped_mounts": [str(path) for path in skipped_mounts[:50]],
         "included_mount_count": max(0, int(payload.get("included_mount_count") or 0)),
+        "path_excluded_count": max(0, int(payload.get("path_excluded_count") or 0)),
         "excluded_file_count": max(0, int(payload.get("excluded_file_count") or 0)),
         "excluded_size_bytes": max(0, int(payload.get("excluded_size_bytes") or 0)),
         "unsupported_patterns": [str(value) for value in unsupported[:50]],
+        "nodump_supported": payload.get("nodump_supported"),
         "quality": str(payload.get("quality") or ("high" if sources else "partial")),
         "sources": sources,
     }

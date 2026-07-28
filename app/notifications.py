@@ -594,14 +594,15 @@ def dispatch_message(message: NotificationMessage, *, channel: str | None = None
             detail = "Benachrichtigung erfolgreich versendet"
             status = "success"
         except Exception as exc:  # delivery failures must never change a Borg run result
+            LOGGER.exception("Notification delivery failed for channel %s", name)
             detail = _safe_error(exc)
             status = "failed"
         try:
             _record_delivery(message, name, status, detail)
-        except Exception as exc:
+        except Exception:
             # Health alerts must still be deliverable when the primary manager
             # database itself is the component that is unavailable.
-            LOGGER.warning("Notification was sent but its delivery log could not be stored: %s", type(exc).__name__)
+            LOGGER.exception("Notification was sent but its delivery log could not be stored")
         results.append({"channel": name, "status": status, "detail": detail})
     return results
 

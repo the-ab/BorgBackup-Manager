@@ -37,6 +37,8 @@ def test_archive_bulk_delete_and_repository_compact_are_exposed_safely():
     assert 'id="delete-selected-archives"' in html
     assert "async function deleteArchives(repositoryId, archives)" in javascript
     assert "`/repositories/${repositoryId}/archive-delete`" in javascript
+    delete_block = javascript.split("async function deleteArchives(repositoryId, archives)", 1)[1].split("async function deleteArchive", 1)[0]
+    assert delete_block.index("showRun(result.run_id)") < delete_block.index("await refreshAreas(['dashboard', 'runs']")
     assert "async function compactRepository(id)" in javascript
     assert "`/repositories/${id}/compact`" in javascript
     assert "repositoryJobs[0]?.id" not in javascript

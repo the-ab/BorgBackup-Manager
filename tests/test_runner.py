@@ -930,6 +930,7 @@ def test_source_stats_command_reports_mount_handling(job):
     assert "skipped_mount_count" in command.preview
     assert "included_mount_count" in command.preview
     assert "os.scandir" in command.preview
+    assert command.preview.index("if excluded_by_pattern(path):") < command.preview.index("item_stat = entry.stat")
 
 
 def test_source_stats_live_scan_counts_files_without_repository_access(job, tmp_path):
@@ -979,7 +980,8 @@ def test_source_stats_live_scan_applies_excludes_and_reports_each_source(job, tm
     assert payload["quality"] == "high"
     assert payload["size_bytes"] == 8
     assert payload["file_count"] == 2
-    assert payload["excluded_size_bytes"] == 20
+    assert payload["path_excluded_count"] == 1
+    assert payload["excluded_size_bytes"] == 0
     assert payload["sources"] == [
         {"path": str(first), "size_bytes": 5, "file_count": 1},
         {"path": str(second), "size_bytes": 3, "file_count": 1},

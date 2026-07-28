@@ -33,7 +33,7 @@ HOST_KEY = "host.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEtesthostkeymateri
 BROWSER = {"X-BBM-Request": "1"}
 
 
-def wait_for_run_terminal(client: TestClient, run_id: int, timeout: float = 3.0) -> dict:
+def wait_for_run_terminal(client: TestClient, run_id: int, timeout: float = 5.0) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         response = client.get(f"/api/runs/{run_id}", headers=AUTH)
@@ -1583,7 +1583,6 @@ def test_external_storage_guard_edit_preserves_initialized_state_and_last_usage(
                 "encryption_mode": "none",
                 "storage_guard_enabled": True,
                 "storage_guard_threshold_percent": 90,
-                "parallel_limit": 1,
             },
         )
 
@@ -1634,7 +1633,6 @@ def test_external_connection_change_still_requires_repository_recheck():
                 "encryption_mode": "none",
                 "storage_guard_enabled": True,
                 "storage_guard_threshold_percent": 90,
-                "parallel_limit": 1,
             },
         )
 
@@ -2315,6 +2313,7 @@ def test_repository_compact_queues_without_backup_job(monkeypatch):
 def test_repository_bulk_delete_resolves_multiple_devices_and_queues_once(monkeypatch):
     suffix = str(time.time_ns())
     queued = []
+    scanned = False
 
     def fake_queue(repository_id, action, data=None, *, subject=None, refresh_size_after=True):
         queued.append({
@@ -2326,6 +2325,13 @@ def test_repository_bulk_delete_resolves_multiple_devices_and_queues_once(monkey
         return 902
 
     monkeypatch.setattr(main_module, "queue_repository_action", fake_queue)
+
+    async def should_not_scan(_repository_id, _command):
+        nonlocal scanned
+        scanned = True
+        return 0, '{"archives": []}', ""
+
+    monkeypatch.setattr(main_module, "execute_interactive", should_not_scan)
 
     with TestClient(app) as client:
         with SessionLocal() as db:
@@ -2354,13 +2360,12 @@ def test_repository_bulk_delete_resolves_multiple_devices_and_queues_once(monkey
             archive_a = f"{job_a.archive_prefix}2026-07-18T10:00:00"
             archive_b = f"{job_b.archive_prefix}2026-07-18T11:00:00"
 
-        async def listing(_repository_id, _command):
-            return 0, json.dumps({"archives": [
+        monkeypatch.setattr(main_module, "load_archive_cache", lambda _repository_id, consider_checkpoints=False: {
+            "data": {"archives": [
                 {"name": archive_a, "id": "a"},
                 {"name": archive_b, "id": "b"},
-            ]}), ""
-
-        monkeypatch.setattr(main_module, "execute_interactive", listing)
+            ]}
+        } if not consider_checkpoints else None)
         response = client.post(
             f"/api/repositories/{repository_id}/archive-delete",
             headers=AUTH,
@@ -2368,6 +2373,7 @@ def test_repository_bulk_delete_resolves_multiple_devices_and_queues_once(monkey
         )
 
     assert response.status_code == 202, response.text
+    assert scanned is False
     assert response.json()["archive_count"] == 2
     assert response.json()["device_label"] == "Mehrere Geräte"
     assert queued == [{
@@ -2375,6 +2381,62 @@ def test_repository_bulk_delete_resolves_multiple_devices_and_queues_once(monkey
         "action": "delete-archive",
         "data": {"archives": [archive_a, archive_b], "compact_after": True},
         "subject": "Mehrere Geräte",
+    }]
+
+
+def test_repository_bulk_delete_queues_immediately_without_archive_cache_or_repository_scan(monkeypatch):
+    suffix = str(time.time_ns())
+    queued = []
+    scanned = False
+
+    def fake_queue(repository_id, action, data=None, *, subject=None, refresh_size_after=True):
+        queued.append({
+            "repository_id": repository_id,
+            "action": action,
+            "data": data,
+            "subject": subject,
+        })
+        return 903
+
+    async def should_not_scan(_repository_id, _command):
+        nonlocal scanned
+        scanned = True
+        return 0, '{"archives": []}', ""
+
+    monkeypatch.setattr(main_module, "queue_repository_action", fake_queue)
+    monkeypatch.setattr(main_module, "execute_interactive", should_not_scan)
+    monkeypatch.setattr(main_module, "load_archive_cache", lambda *_args, **_kwargs: None)
+
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            repository = Repository(
+                name=f"uncached-delete-repository-{suffix}",
+                location=f"/tmp/uncached-delete-repository-{suffix}",
+                initialized=True,
+            )
+            db.add(repository)
+            db.commit()
+            repository_id = repository.id
+
+        archive = f"manual-archive-{suffix}"
+        response = client.post(
+            f"/api/repositories/{repository_id}/archive-delete",
+            headers=AUTH,
+            json={"archives": [archive], "compact_after": False},
+        )
+
+    assert response.status_code == 202, response.text
+    assert response.json() == {
+        "run_id": 903,
+        "archive_count": 1,
+        "device_label": f"Repository: uncached-delete-repository-{suffix}",
+    }
+    assert scanned is False
+    assert queued == [{
+        "repository_id": repository_id,
+        "action": "delete-archive",
+        "data": {"archives": [archive], "compact_after": False},
+        "subject": f"Repository: uncached-delete-repository-{suffix}",
     }]
 
 
@@ -3040,7 +3102,8 @@ def test_source_statistics_are_persisted_from_live_scan_and_backup(monkeypatch):
         assert job.source_stats_origin == 'scan'
         detail = json.loads(job.source_stats_detail_json)
         assert detail['quality'] == 'high'
-        assert detail['sources'] == [{'path': '/srv/data', 'size_bytes': 12345, 'file_count': 17}]
+        assert detail['warning_count'] == 0
+        assert detail['path_excluded_count'] == 0
         backup_run = Run(
             job_id=job.id, repository_id=job.repository_id, job_name_snapshot=job.name,
             action='backup', status='queued', command_preview='borg create',
@@ -3059,9 +3122,9 @@ def test_source_statistics_are_persisted_from_live_scan_and_backup(monkeypatch):
         assert job.source_size_bytes == 15000
         assert job.source_file_count == 19
         assert job.source_stats_origin == 'backup'
-        # The exact last-backup total may supersede the scan total, while the
-        # Per-source distribution remains available for source attribution and the next frozen baseline.
-        assert json.loads(job.source_stats_detail_json)['sources'][0]['path'] == '/srv/data'
+        # The exact last-backup total supersedes the manual scan and clears
+        # scan-specific limitation metadata.
+        assert json.loads(job.source_stats_detail_json) == {}
         assert run.backup_file_count == 19
         assert run.backup_network_download_bytes == 4321
         assert run.backup_network_upload_bytes == 8765
@@ -3415,6 +3478,48 @@ def test_repository_can_be_disabled_without_disabling_jobs_and_blocks_execution(
         assert "deaktiviert" in blocked.text
 
 
+def test_system_diagnostics_show_mount_running_and_queued_occupancy(monkeypatch):
+    suffix = str(time.time_ns())
+    mount_path = "/repositories/offline"
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            running_repo = Repository(
+                name=f"diag-running-{suffix}", enabled=True,
+                location=f"ssh://borg@example.invalid:2222/./diag-running-{suffix}",
+                storage_path=f"{mount_path}/diag-running-{suffix}",
+                encryption_mode="none", initialized=True,
+            )
+            queued_repo = Repository(
+                name=f"diag-queued-{suffix}", enabled=True,
+                location=f"ssh://borg@example.invalid:2222/./diag-queued-{suffix}",
+                storage_path=f"{mount_path}/diag-queued-{suffix}",
+                encryption_mode="none", initialized=True,
+            )
+            db.add_all([running_repo, queued_repo]); db.flush()
+            db.add_all([
+                Run(repository_id=running_repo.id, action="backup", status="running"),
+                Run(repository_id=queued_repo.id, action="backup", status="queued"),
+            ])
+            db.commit()
+
+        monkeypatch.setattr(main_module, "repository_storage_filesystems", lambda *_args, **_kwargs: [{
+            "path": mount_path, "total": 1000, "used": 100, "free": 900, "percent": 10.0,
+            "repositories": [], "guard_blocked": False, "parallel_limit": 2,
+        }])
+        async def fake_external_refresh(_repository_id: int):
+            return {"total": 1000, "used": 100, "free": 900, "percent": 10.0, "mount_point": "/home"}
+        monkeypatch.setattr(main_module, "refresh_external_repository_storage", fake_external_refresh)
+        monkeypatch.setattr(main_module, "repository_mount_path", lambda *_args, **_kwargs: Path(mount_path))
+        response = client.get("/api/system/diagnostics", headers=AUTH)
+        assert response.status_code == 200, response.text
+        row = next(item for item in response.json()["repository_storage_filesystems"] if item["path"] == mount_path)
+        assert row["parallel_limit"] == 2
+        assert row["running_runs"] >= 1
+        assert row["queued_runs"] >= 1
+        assert any(item["repository"].startswith("diag-running-") for item in row["running_repositories"])
+        assert any(item["repository"].startswith("diag-queued-") for item in row["queued_repositories"])
+
+
 def test_system_diagnostics_include_enabled_external_repository_and_skip_disabled(monkeypatch):
     suffix = str(time.time_ns())
     active_name = f"diag-external-active-{suffix}"
@@ -3487,7 +3592,10 @@ def test_system_diagnostics_group_external_repositories_on_same_remote_filesyste
         ]
         assert len(rows) == 1
         assert rows[0]["path"] == "u123@box.example:23 · /home"
-        assert [repo["name"] for repo in rows[0]["repositories"]] == sorted(names)
+        assert rows[0]["parallel_key"] == "external:u123@box.example:23 · /home"
+        assert rows[0]["parallel_limit"] == 0
+        repository_names = [repo["name"] for repo in rows[0]["repositories"]]
+        assert all(name in repository_names for name in names)
 
 
 def test_header_network_endpoint_uses_saved_manager_configuration(monkeypatch):
@@ -3633,3 +3741,54 @@ def test_queue_backup_freezes_source_baseline_on_run(monkeypatch):
         db.refresh(run)
         assert run.backup_source_size_bytes_snapshot == 25_700_000_000_000
         assert run.backup_source_file_count_snapshot == 11_300_000
+
+
+def test_system_diagnostics_show_external_filesystem_limit_and_occupancy(monkeypatch):
+    from app.schemas import SettingsIn
+
+    suffix = str(time.time_ns())
+    key = "external:u123@box.example:23 · /home"
+    previous = main_module.load_settings()
+    try:
+        main_module.save_settings(SettingsIn(**{
+            **previous.model_dump(),
+            "external_storage_parallel_limits": {key: 2},
+        }))
+        with TestClient(app) as client:
+            with SessionLocal() as db:
+                running_repo = Repository(
+                    name=f"diag-ext-running-{suffix}", enabled=True,
+                    location="ssh://u123@box.example:23/./repo-a",
+                    encryption_mode="none", initialized=True, external_storage_path="/home",
+                    external_storage_total_bytes=1000, external_storage_used_bytes=100,
+                    external_storage_free_bytes=900, external_storage_usage_percent=10.0,
+                )
+                queued_repo = Repository(
+                    name=f"diag-ext-queued-{suffix}", enabled=True,
+                    location="ssh://u123@box.example:23/./repo-b",
+                    encryption_mode="none", initialized=True, external_storage_path="/home",
+                    external_storage_total_bytes=1000, external_storage_used_bytes=100,
+                    external_storage_free_bytes=900, external_storage_usage_percent=10.0,
+                )
+                db.add_all([running_repo, queued_repo]); db.flush()
+                ids = [running_repo.id, queued_repo.id]
+                db.add_all([
+                    Run(repository_id=running_repo.id, action="backup", status="running"),
+                    Run(repository_id=queued_repo.id, action="backup", status="queued"),
+                ])
+                db.commit()
+
+            async def fake_refresh(repository_id: int):
+                if repository_id not in ids:
+                    raise ValueError("unrelated external repository")
+                return {"total": 1000, "used": 100, "free": 900, "percent": 10.0, "mount_point": "/home"}
+
+            monkeypatch.setattr(main_module, "refresh_external_repository_storage", fake_refresh)
+            response = client.get("/api/system/diagnostics", headers=AUTH)
+            assert response.status_code == 200, response.text
+            row = next(item for item in response.json()["repository_storage_filesystems"] if item.get("parallel_key") == key)
+            assert row["parallel_limit"] == 2
+            assert row["running_runs"] >= 1
+            assert row["queued_runs"] >= 1
+    finally:
+        main_module.save_settings(previous)

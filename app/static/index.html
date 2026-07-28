@@ -6,26 +6,26 @@
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
-<link href="/static/favicon.svg?v=1.1.3" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.1.3"></script>
-<link href="/static/style.css?v=1.1.3" rel="stylesheet"/>
+<link href="/static/favicon.svg?v=1.2.0" rel="icon" type="image/svg+xml"/>
+<script src="/static/theme-init.js?v=1.2.0"></script>
+<link href="/static/style.css?v=1.2.0" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
 <form class="login-card" id="login-form">
-<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.1.3"/>
+<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.2.0"/>
 <p class="eyebrow">BorgBackup Manager</p>
 <h1>Zentrale für deine Backups.</h1>
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.1.3</b></p>
+<p class="login-version">Version <b id="login-version">v1.2.0</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
 <div class="app-shell hidden" id="app">
 <aside>
-<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.1.3"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
+<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.2.0"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
 <nav id="main-navigation">
 <span class="nav-label">Betrieb</span>
 <button class="active" data-view="dashboard">Übersicht</button>
@@ -114,9 +114,7 @@
 <option value="authenticated">authenticated – unverschlüsselt, authentifiziert</option>
 <option value="none">none – unverschlüsselt und nicht authentifiziert</option>
 </select></label>
-<label>Maximal parallele Backup-Läufe<input name="parallel_limit" type="number" min="1" max="64" value="1"/></label>
 </div>
-<p class="hint">Standard 1. Höhere Werte erlauben mehrere Backup-Läufe auf demselben Repository; Wartungs- und Prüfaktionen bleiben exklusiv.</p>
 <div class="repository-form-grid storage-guard-options" id="repo-storage-guard-fields">
 <label>Speicherplatz-Sperre<select name="storage_guard_mode"><option value="inherit">Globale Einstellung übernehmen</option><option value="enabled">Für dieses Repository aktivieren</option><option value="disabled">Für dieses Repository deaktivieren</option></select></label>
 <label>Eigene Sperrgrenze in Prozent<input max="100" min="1" name="storage_guard_threshold_percent" placeholder="globale Grenze" type="number"/></label>
@@ -252,7 +250,7 @@
 </section>
 <section class="view" id="view-runs"><div class="panel"><div class="panel-head responsive-head"><div><h2>Ausführungsprotokolle</h2><span><span id="runs-filter-label">Alle Ausführungen</span> · <span id="runs-count">0 angezeigt</span> · Zeitzone Europe/Berlin</span></div><div class="list-controls"><label>Status<select id="runs-filter"><option value="all">Alle</option><option value="active">Laufend/wartend</option><option value="running">Laufend</option><option value="queued">Wartend</option><option value="failed">Fehlgeschlagen</option><option value="warning">Warnungen</option><option value="success">Erfolgreich</option><option value="cancelled">Abgebrochen</option></select></label><label>Suche<input id="runs-search" placeholder="Lauf, Job, Aktion oder Diagnose" type="search"/></label><label>Anzahl<select id="runs-limit"><option>10</option><option>25</option><option>50</option><option selected="">100</option><option>250</option><option>500</option></select></label></div></div><div id="run-list"></div></div></section>
 <section class="view" id="view-archives">
-<div class="panel archive-toolbar"><div class="row"><label>Repository<select id="archive-repository"></select></label><label>Archive anzeigen<select disabled="" id="archive-device-filter"><option value="">Alle Geräte / alle Archive</option></select></label><label class="check archive-check"><input id="archive-consider-checkpoints" type="checkbox"/> Unvollständige Checkpoint-Archive anzeigen</label></div><div class="form-actions"><button id="load-archives" type="button">Archive anzeigen</button><button class="secondary" id="refresh-archives" type="button">Neu aus Repository einlesen</button><span class="hint" id="archive-summary">Die zuletzt geladene Archivliste wird persistent zwischengespeichert.</span></div><div class="archive-selection-toolbar hidden" data-admin-only-block="" id="archive-selection-toolbar"><label class="check"><input disabled="" id="archive-select-visible" type="checkbox"/> Sichtbare Archive auswählen</label><button class="danger" disabled="" id="delete-selected-archives" type="button">Ausgewählte Archive löschen</button><span class="hint" id="archive-selection-summary">0 ausgewählt</span></div><p class="hint">Nach erfolgreichen Backups, Prune-Läufen, Umbenennungen oder Löschungen wird der Zwischenspeicher automatisch verworfen. „Neu aus Repository einlesen“ ist nur für Änderungen erforderlich, die außerhalb des Managers vorgenommen wurden.</p><div class="persistent-error hidden" id="archive-error"></div></div>
+<div class="panel archive-toolbar"><div class="row"><label>Repository<select id="archive-repository"></select></label><label>Archive anzeigen<select disabled="" id="archive-device-filter"><option value="">Alle Geräte / alle Archive</option></select></label></div><div class="form-actions"><button id="load-archives" type="button">Archive anzeigen</button><button class="secondary" id="refresh-archives" type="button">Neu aus Repository einlesen</button><span class="hint" id="archive-summary">Die zuletzt geladene Archivliste wird persistent zwischengespeichert.</span></div><div class="archive-selection-toolbar hidden" data-admin-only-block="" id="archive-selection-toolbar"><label class="check"><input disabled="" id="archive-select-visible" type="checkbox"/> Sichtbare Archive auswählen</label><button class="danger" disabled="" id="delete-selected-archives" type="button">Ausgewählte Archive löschen</button><span class="hint" id="archive-selection-summary">0 ausgewählt</span></div><p class="hint">Nach erfolgreichen Backups, Prune-Läufen, Umbenennungen oder Löschungen wird der Zwischenspeicher automatisch verworfen. „Neu aus Repository einlesen“ ist nur für Änderungen erforderlich, die außerhalb des Managers vorgenommen wurden.</p><div class="persistent-error hidden" id="archive-error"></div></div>
 <div class="panel archive-compare archive-compare-compact"><div class="panel-head"><div><h2>Archive vergleichen</h2><span>Änderungen zwischen zwei Sicherungsständen mit Borg Diff anzeigen.</span><span class="archive-diff-context" id="archive-diff-context">Backup-Job wird aus den ausgewählten Archiven ermittelt.</span></div></div><div class="archive-compare-grid"><div class="archive-compare-selects"><label>Älteres Archiv<select id="archive-diff-first"><option value="">Archive anzeigen</option></select></label><label>Neueres Archiv<select id="archive-diff-second"><option value="">Archive anzeigen</option></select></label><label class="check archive-check"><input id="archive-diff-content-only" type="checkbox"/> Nur Inhaltsänderungen</label></div><div class="archive-compare-paths"><label>Optionale Pfade <span>(einer je Zeile)</span><textarea id="archive-diff-paths" placeholder="home/user/Documents" rows="2"></textarea></label><div class="form-actions"><button id="compare-archives" type="button">Archive vergleichen</button></div></div></div></div>
 <div class="panel"><div class="panel-head"><div><h2>Archivübersicht</h2><span>Verwaltete Repositories werden direkt im Manager-Container geöffnet. SSH zum Backup-Client ist dafür nicht erforderlich.</span></div></div><div class="bounded-list" id="archive-list"><div class="empty">Zuerst ein Repository auswählen und die Archivliste anzeigen.</div></div></div>
 <div class="panel hidden" id="archive-browser-panel"><div class="panel-head"><div><h2>Archivinhalt durchsuchen</h2><span id="archive-browser-meta"></span></div><button class="secondary" id="close-archive-browser" type="button">Browser schließen</button></div><div class="persistent-error hidden" id="archive-browser-error"></div><div class="browser-toolbar"><button class="secondary" id="browser-up" type="button">Eine Ebene höher</button><div class="browser-breadcrumbs" id="browser-path"><button type="button" data-browse-path="">/</button></div><button class="secondary" id="export-browser-selection" type="button">Auswahl exportieren (.tar.gz)</button><button id="use-browser-selection" type="button">Auswahl wiederherstellen</button></div><div class="persistent-info hidden" id="archive-export-status"></div><div class="archive-browser-list" id="archive-browser-list"></div><div class="selection-box"><b>Ausgewählte Pfade</b><div class="hint" id="browser-selection">Noch nichts ausgewählt.</div></div></div>
@@ -426,9 +424,9 @@
 <section class="panel settings-section">
 <div class="panel-head"><div><h2>Parallelitätsgrenzen</h2><span>Begrenzt gleichzeitig laufende Borg-Ausführungen auch dann, wenn sie unterschiedliche Repositorys verwenden.</span></div></div>
 <div class="row"><label>Maximal parallele Ausführungen global<input max="64" min="0" name="max_parallel_runs" type="number"/></label><label>Maximal parallele Quellenstatistiken<input max="64" min="1" name="source_stats_parallel_limit" type="number"/></label></div>
-<p class="hint">0 bedeutet bei der globalen Grenze unbegrenzt. Manuelle Quellenstatistiken zählen zusätzlich gegen die globale Grenze und besitzen eine eigene Grenze (Standard 1), damit mehrere ressourcenintensive Quellenscans nicht unbeabsichtigt gleichzeitig laufen. Repository- und Mount-Grenzen gelten für Quellenstatistiken nicht, weil dabei nur das Quellgerät gelesen wird.</p>
+<p class="hint">0 bedeutet bei der globalen Grenze unbegrenzt. Manuelle Quellenstatistiken zählen zusätzlich gegen die globale Grenze und besitzen eine eigene Grenze (Standard 1), damit mehrere ressourcenintensive Quellenscans nicht unbeabsichtigt gleichzeitig laufen. Repository- und Mount-Sperren gelten für Quellenstatistiken nicht, weil dabei nur das Quellgerät gelesen wird.</p>
 <div class="mount-parallel-editor" id="mount-parallel-editor"></div>
-<p class="hint">Mount-Grenzen gelten gemeinsam für alle verwalteten Repositorys auf demselben Dateisystem. 0 bedeutet für diesen Mount unbegrenzt.</p>
+<p class="hint">Dateisystem-Grenzen gelten gemeinsam für unterschiedliche Repositorys auf demselben lokalen Mount oder demselben erkannten externen SSH-Dateisystem. Pro Repository läuft unabhängig davon immer nur ein Borg-Job. 0 bedeutet für dieses Dateisystem unbegrenzt. Externe Gruppen erscheinen nach einer erfolgreichen Dateisystemprüfung.</p>
 </section>
 <section class="panel settings-section">
 <div class="panel-head"><div><h2>Ausführungs- und Benachrichtigungsprotokolle</h2><span>Ausführungen und letzte Benachrichtigungszustellungen folgen derselben Aufbewahrungsfrist. Der letzte relevante Backup-Stand vorhandener Jobs bleibt bei der Fristbereinigung erhalten.</span></div></div>
@@ -527,6 +525,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.1.3"></script><script src="/static/app.js?v=1.1.3"></script>
+<script src="/static/i18n.js?v=1.2.0"></script><script src="/static/app.js?v=1.2.0"></script>
 </body>
 </html>

@@ -476,7 +476,7 @@ def test_favicon_density_and_help_are_present():
     assert (project / "app/static/help.en.html").is_file()
 
 
-def test_help_quick_links_use_router_sections_and_checkpoint_controls_exist():
+def test_help_quick_links_use_router_sections_and_restore_checkpoint_control_exists():
     project = Path(__file__).resolve().parents[1]
     html = (project / "app/static/index.html").read_text(encoding="utf-8")
     javascript = (project / "app/static/app.js").read_text(encoding="utf-8")
@@ -490,7 +490,7 @@ def test_help_quick_links_use_router_sections_and_checkpoint_controls_exist():
     assert "function scrollToHelpSection(section" in javascript
     assert "view === 'help'" in javascript
     assert "scrollToHelpSection(parsed.section" in javascript
-    assert 'id="archive-consider-checkpoints"' in html
+    assert 'id="archive-consider-checkpoints"' not in html
     assert 'name="consider_checkpoints"' in html
     assert "consider_checkpoints=${considerCheckpoints}" in javascript
 
@@ -515,6 +515,9 @@ def test_repository_workspace_is_stacked_responsive_and_distinguishes_add_from_c
 
 
 def test_second_repository_run_remains_queued_until_first_finishes(monkeypatch):
+    from app.security_store import initialize_security_store
+
+    initialize_security_store("Queue-Test-Admin-2026!")
     Base.metadata.create_all(engine)
     suffix = uuid4().hex
     with SessionLocal() as db:
@@ -672,7 +675,8 @@ def test_archive_cache_is_regenerable_and_ui_exposes_explicit_repository_refresh
     assert "/data/archive-cache" in entrypoint
     assert "--exclude='./archive-cache'" in update
     assert 'id="refresh-archives"' in html
-    assert "/archives/refresh?consider_checkpoints=" in javascript
+    assert "api(`/repositories/${repositoryId}/archives/refresh`, {method: 'POST'})" in javascript
+    assert 'id="archive-consider-checkpoints"' not in html
     assert "{method: 'POST'}" in javascript
     assert "force_refresh=${forceRefresh}" not in javascript
     assert "execute_repository_archive_refresh" in service

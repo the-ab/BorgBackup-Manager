@@ -6,8 +6,12 @@ from types import SimpleNamespace
 from app import storage_guard
 
 
-def settings(enabled: bool = True, threshold: int = 95):
-    return SimpleNamespace(storage_guard_enabled=enabled, storage_guard_threshold_percent=threshold)
+def settings(enabled: bool = True, threshold: int = 95, mount_limits: dict[str, int] | None = None):
+    return SimpleNamespace(
+        storage_guard_enabled=enabled,
+        storage_guard_threshold_percent=threshold,
+        mount_parallel_limits=mount_limits or {},
+    )
 
 
 def repository(repository_id: int, name: str, path: Path, enabled=None, threshold=None):
@@ -79,13 +83,15 @@ def test_diagnostics_include_every_nested_repository_mount(monkeypatch, tmp_path
             repository(2, "B", nfs_b, enabled=True, threshold=80),
         ],
         root,
-        settings(enabled=True, threshold=95),
+        settings(enabled=True, threshold=95, mount_limits={str(nfs_a.resolve()): 2}),
         mountinfo,
     )
 
     by_path = {row["path"]: row for row in rows}
     assert set(by_path) == {str(root.resolve()), str(nfs_a.resolve()), str(nfs_b.resolve())}
     assert by_path[str(nfs_a.resolve())]["guard_blocked"] is True
+    assert by_path[str(nfs_a.resolve())]["parallel_limit"] == 2
+    assert by_path[str(nfs_b.resolve())]["parallel_limit"] == 0
     assert by_path[str(nfs_a.resolve())]["repositories"][0]["guard_threshold_percent"] == 95
     assert by_path[str(nfs_b.resolve())]["repositories"][0]["guard_threshold_percent"] == 80
     assert by_path[str(nfs_b.resolve())]["guard_blocked"] is False
@@ -102,6 +108,9 @@ def test_webui_exposes_global_and_repository_storage_guard_controls():
     assert 'name="storage_guard_mode"' in html
     assert "repository_storage_filesystems" in main
     assert "Repository-Dateisysteme" in javascript
+    assert "global_parallel_limit" in main
+    assert "item.parallel_limit" in javascript
+    assert "wirksame Grenze für verschiedene Repositorys dieses Dateisystems" in javascript
     assert "storage_guard_threshold_percent" in javascript
 
 

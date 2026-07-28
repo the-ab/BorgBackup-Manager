@@ -317,3 +317,15 @@ def test_manager_backup_schema_rejects_legacy_cache_fields():
         assert "include_borg_cache" in str(exc)
     else:
         raise AssertionError("legacy manager-backup cache field must be rejected")
+
+
+def test_external_storage_parallel_limits_are_normalized_and_bounded():
+    from app.schemas import SettingsIn
+
+    key = "external:u123@box.example:23 · /home"
+    settings = SettingsIn(external_storage_parallel_limits={key: 3, "external:unused": 0})
+    assert settings.external_storage_parallel_limits == {key: 3}
+    with pytest.raises(ValidationError):
+        SettingsIn(external_storage_parallel_limits={"/home": 2})
+    with pytest.raises(ValidationError):
+        SettingsIn(external_storage_parallel_limits={key: 65})

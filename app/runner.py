@@ -836,6 +836,7 @@ seen_paths = set()
 skipped_mounts = []
 included_mounts = []
 unsupported_patterns = []
+path_excluded_count = 0
 excluded_file_count = 0
 excluded_size_bytes = 0
 CACHEDIR_SIGNATURE = b"Signature: 8a477f597d28d172789f06886806bc55"
@@ -967,9 +968,7 @@ def has_nodump(path):
         os.close(fd)
 
 
-def excluded(path, *, is_dir=False):
-    if excluded_by_pattern(path):
-        return True
+def excluded_after_metadata(path, *, is_dir=False):
     if has_nodump(path):
         return True
     if is_dir and cache_tagged(path):
@@ -983,6 +982,10 @@ total_files = 0
 for root in roots:
     source_size = 0
     source_files = 0
+    if excluded_by_pattern(root):
+        path_excluded_count += 1
+        source_results.append({"path": root, "size_bytes": 0, "file_count": 0})
+        continue
     try:
         root_stat = os.lstat(root)
     except OSError as exc:
@@ -990,7 +993,7 @@ for root in roots:
         source_results.append({"path": root, "size_bytes": 0, "file_count": 0})
         continue
     root_is_dir = stat.S_ISDIR(root_stat.st_mode)
-    if excluded(root, is_dir=root_is_dir):
+    if excluded_after_metadata(root, is_dir=root_is_dir):
         source_results.append({"path": root, "size_bytes": 0, "file_count": 0})
         continue
     if not root_is_dir:
@@ -1017,13 +1020,19 @@ for root in roots:
             with os.scandir(directory) as iterator:
                 for entry in iterator:
                     path = entry.path
+                    # Borg path patterns depend only on the archive path. Check
+                    # them before stat() so excluded files and complete directory
+                    # trees do not cause avoidable metadata traffic on NFS/CIFS.
+                    if excluded_by_pattern(path):
+                        path_excluded_count += 1
+                        continue
                     try:
                         item_stat = entry.stat(follow_symlinks=False)
                     except OSError as exc:
                         warn(f"{path}: {exc}")
                         continue
                     is_dir = stat.S_ISDIR(item_stat.st_mode)
-                    if excluded(path, is_dir=is_dir):
+                    if excluded_after_metadata(path, is_dir=is_dir):
                         if not is_dir:
                             excluded_file_count += 1
                             if stat.S_ISREG(item_stat.st_mode):
@@ -1077,7 +1086,7 @@ if unsupported_patterns:
     )
 
 nodump_unavailable = exclude_nodump and fcntl is None
-quality = "high" if not unsupported_patterns and not nodump_unavailable else "partial"
+quality = "high" if not warning_count and not unsupported_patterns and not nodump_unavailable else "partial"
 print("BBM_SOURCE_STATS_JSON=" + json.dumps({
     "size_bytes": total_size,
     "file_count": total_files,
@@ -1085,6 +1094,7 @@ print("BBM_SOURCE_STATS_JSON=" + json.dumps({
     "skipped_mount_count": len(skipped_mounts),
     "skipped_mounts": skipped_mounts,
     "included_mount_count": len(included_mounts),
+    "path_excluded_count": path_excluded_count,
     "excluded_file_count": excluded_file_count,
     "excluded_size_bytes": excluded_size_bytes,
     "unsupported_patterns": unsupported_patterns,

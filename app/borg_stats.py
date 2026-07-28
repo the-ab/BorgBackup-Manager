@@ -69,6 +69,7 @@ def _archive_stats(item: dict[str, Any]) -> dict[str, Any]:
         "original_size": _number(stats.get("original_size")),
         "compressed_size": _number(stats.get("compressed_size")),
         "deduplicated_size": _number(stats.get("deduplicated_size")),
+        "checkpoint": bool(re.search(r"\.checkpoint(?:\.\d+)?$", str(item.get("name") or item.get("archive") or ""), re.IGNORECASE)),
         "max_archive_size_utilization": (
             item.get("limits", {}).get("max_archive_size")
             if isinstance(item.get("limits"), dict)

@@ -8,7 +8,6 @@ from app.borg_progress import (
     clear_run_progress,
     get_run_item_activity,
     get_run_progress,
-    get_run_progress_history,
     parse_borg_create_progress,
     set_run_item_activity,
     set_run_progress,
@@ -112,16 +111,6 @@ def test_live_progress_store_is_process_local_and_clearable():
 
 
 
-def test_live_progress_history_is_bounded_and_reset_with_run():
-    clear_run_progress(124)
-    set_run_progress(124, BorgCreateProgress(100, 80, 5, 1, "/srv/a"), timestamp=10.0)
-    set_run_progress(124, BorgCreateProgress(200, 160, 10, 2, "/srv/b"), timestamp=11.0)
-    history = get_run_progress_history(124)
-    assert [item["original_bytes"] for item in history] == [100, 200]
-    assert history[-1]["timestamp"] == 11.0
-    clear_run_progress(124)
-    assert get_run_progress_history(124) == []
-
 def test_item_activity_filter_counts_amce_and_strips_added_modified_when_compact():
     filter_ = BorgItemActivityStreamFilter(strip_added_modified=True)
     filtered, activity = filter_.feed(b"A /srv/new\nM /srv/changed\nC /srv/racing\nE /srv/error\nwarning\n")
@@ -213,22 +202,6 @@ def test_network_filter_strips_telemetry_tracks_three_interfaces_and_route_total
     assert second.interfaces[0].upload_bits_per_second == 12000.0
     assert second.download_bytes == 2000
     assert second.upload_bytes == 3000
-
-
-def test_live_progress_history_remains_hard_bounded_for_long_runs():
-    clear_run_progress(125)
-    for index in range(2000):
-        set_run_progress(
-            125,
-            BorgCreateProgress(index + 1, index + 1, index + 1, index + 1, f"/srv/file-{index}"),
-            timestamp=float(index),
-        )
-    history = get_run_progress_history(125)
-    assert len(history) == 720
-    assert history[0]["original_bytes"] == 1281
-    assert history[-1]["original_bytes"] == 2000
-    clear_run_progress(125)
-
 
 
 def test_item_activity_keeps_only_latest_cumulative_counters():

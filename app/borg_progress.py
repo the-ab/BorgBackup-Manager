@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import time
-from collections import deque
 from dataclasses import asdict, dataclass
 from threading import Lock
 
@@ -165,34 +164,11 @@ class BorgProgressStreamFilter:
 
 _progress_lock = Lock()
 _live_progress: dict[int, BorgCreateProgress] = {}
-# Borg progress history is process-local and hard-bounded. It is retained only
-# for current-source attribution and post-run per-source statistics; remaining
-# time no longer depends on short-term rates or a growing trend history.
-_live_progress_history: dict[int, deque[dict]] = {}
 
 
-def set_run_progress(run_id: int, progress: BorgCreateProgress, *, timestamp: float | None = None) -> None:
-    run_id = int(run_id)
-    now = time.monotonic() if timestamp is None else float(timestamp)
-    sample = {**asdict(progress), "timestamp": now}
+def set_run_progress(run_id: int, progress: BorgCreateProgress) -> None:
     with _progress_lock:
-        _live_progress[run_id] = progress
-        history = _live_progress_history.setdefault(run_id, deque(maxlen=720))
-        if history and (
-            sample["original_bytes"] < history[-1]["original_bytes"]
-            or sample["files"] < history[-1]["files"]
-            or sample["deduplicated_bytes"] < history[-1]["deduplicated_bytes"]
-        ):
-            # Borg restarted/retried inside the same process: do not mix two
-            # incompatible counter sequences in source-attribution history.
-            history.clear()
-        if history and now - float(history[-1]["timestamp"]) < 0.5:
-            history[-1] = sample
-        elif not history or any(
-            sample[key] != history[-1][key]
-            for key in ("original_bytes", "files", "deduplicated_bytes", "path")
-        ):
-            history.append(sample)
+        _live_progress[int(run_id)] = progress
 
 
 def get_run_progress(run_id: int) -> dict | None:
@@ -201,15 +177,9 @@ def get_run_progress(run_id: int) -> dict | None:
         return asdict(progress) if progress is not None else None
 
 
-def get_run_progress_history(run_id: int) -> list[dict]:
-    with _progress_lock:
-        return [dict(item) for item in _live_progress_history.get(int(run_id), ())]
-
-
 def clear_run_progress(run_id: int) -> None:
     with _progress_lock:
         _live_progress.pop(int(run_id), None)
-        _live_progress_history.pop(int(run_id), None)
 
 
 _ITEM_ACTIVITY_RE = re.compile(

@@ -98,10 +98,156 @@ def audit_document_feature_alignment() -> None:
         "Der Client-Scan prüft ausschließlich `$HOME/.cache/borgbackup-manager/`",
         "Neue 0.9.x-Backups enthalten Sicherheitsdatenbank",
         "--list --filter CE",
+        "Live scan before exclusions",
+        "backup-run limit per repository",
+        "Maximal parallele Backup-Läufe",
+        "Der begrenzte Borg-Progress-Verlauf",
+        "The bounded Borg progress history",
     )
     for marker in forbidden:
         if marker in en or marker in de:
             error(f"Outdated documentation wording still present: {marker}")
+
+
+def audit_current_source_stats_and_parallelism() -> None:
+    runner = _read(APP / "runner.py")
+    service = _read(APP / "service.py")
+    models = _read(APP / "models.py")
+    schemas = _read(APP / "schemas.py")
+    index = _read(STATIC / "index.html")
+    app_js = _read(STATIC / "app.js")
+    progress = _read(APP / "borg_progress.py")
+
+    pattern_check = runner.find("if excluded_by_pattern(path):")
+    stat_call = runner.find("item_stat = entry.stat(follow_symlinks=False)")
+    if pattern_check < 0 or stat_call < 0 or pattern_check > stat_call:
+        error("Source-stat path exclusions are not checked before entry.stat()")
+    if '"path_excluded_count": path_excluded_count' not in runner:
+        error("Source-stat scanner does not report pre-stat path exclusions")
+
+    obsolete_parallel_markers = {
+        "service.py": "_repository_parallel_limit",
+        "models.py": "parallel_limit: Mapped[int] = mapped_column(Integer, default=1)",
+        "index.html": "Maximal parallele Backup-Läufe",
+        "app.js": "repo.parallel_limit",
+    }
+    texts = {"service.py": service, "models.py": models, "schemas.py": schemas, "index.html": index, "app.js": app_js}
+    for name, obsolete in obsolete_parallel_markers.items():
+        if obsolete in texts[name]:
+            error(f"Obsolete configurable repository parallelism remains in {name}: {obsolete}")
+
+    repository_schema_classes = ("RepositoryIn", "RepositoryImportIn", "RepositoryUpdate", "RepositoryOut")
+    for index_no, class_name in enumerate(repository_schema_classes):
+        start = schemas.find(f"class {class_name}")
+        if start < 0:
+            error(f"Repository schema class missing: {class_name}")
+            continue
+        later_starts = [
+            schemas.find(f"class {other}", start + 1)
+            for other in repository_schema_classes[index_no + 1:]
+        ]
+        later_starts.extend([
+            match.start()
+            for match in re.finditer(r"^class \w+", schemas[start + 1:], re.MULTILINE)
+        ])
+        later_starts = [value if value >= start else start + 1 + value for value in later_starts if value >= 0]
+        end = min(later_starts) if later_starts else len(schemas)
+        block = schemas[start:end]
+        if re.search(r"^\s+parallel_limit\s*:", block, re.MULTILINE):
+            error(f"Obsolete repository parallel_limit remains in schema class {class_name}")
+    if 'return _capacity_semaphore(_repository_locks, (id(loop), f"repository-id:{repository_id}"), 1)' not in service:
+        error("Repository runtime lock is not scoped to one repository record")
+    if "mount_parallel_limits" not in schemas or "mount_parallel_limits" not in app_js:
+        error("Mount-level parallelism controls are missing")
+    if "external_storage_parallel_limits" not in schemas or "external_storage_parallel_limits" not in app_js:
+        error("External-filesystem parallelism controls are missing")
+    main_source = _read(APP / "main.py")
+    if "external_filesystem_parallel_identity" not in service or "external_filesystem_parallel_identity" not in main_source:
+        error("External repositories are not grouped by detected remote filesystem")
+    if "class _AdjustableCapacity" not in service or "async def _acquire_mount_capacity" not in service:
+        error("Live-resizable mount capacity limiter is missing")
+    if "await asyncio.wait_for(limiter.acquire(), timeout=0.25)" not in service:
+        error("Interactive mount capacity does not refresh changed limits")
+    inner_start = service.find("async def _execute_run_inner")
+    inner_end = service.find("async def execute_run", inner_start)
+    inner_block = service[inner_start:inner_end] if inner_start >= 0 and inner_end > inner_start else ""
+    if "await _acquire_mount_capacity" in inner_block:
+        error("Persisted runs still reserve a second process-local mount slot before queue admission")
+    if "single admission controller" not in inner_block:
+        error("Persisted queue does not document the single admission-controller invariant")
+    if "tuple[int, asyncio.Semaphore]" in service:
+        error("Obsolete non-resizable semaphore cache remains")
+
+    main = _read(APP / "main.py")
+    storage_guard = _read(APP / "storage_guard.py")
+    if '"global_parallel_limit": int(settings.max_parallel_runs or 0)' not in main:
+        error("System diagnostics do not expose the global parallel limit")
+    if '"parallel_limit": int((getattr(settings, "mount_parallel_limits", {}) or {}).get(str(mount), 0))' not in storage_guard:
+        error("Repository filesystem diagnostics do not expose effective mount limits")
+    if "wirksame Grenze für verschiedene Repositorys dieses Dateisystems" not in app_js:
+        error("Repository filesystem diagnostics do not render mount parallelism")
+    if "running_runs" not in main or "queued_runs" not in main or "aktiv ${Number(item.running_runs" not in app_js:
+        error("Repository filesystem diagnostics do not expose current mount queue occupancy")
+
+    for obsolete in ("Qualität hoch", "aus letztem Borg-Lauf beobachtet", "source_stats_by_path", "source_stats_quality"):
+        if obsolete in app_js:
+            error(f"Obsolete normal source-stat detail remains in app.js: {obsolete}")
+    if "source_stats_limitations" not in app_js or "sourceStatsLimitationText" not in app_js:
+        error("Concrete source-stat limitation rendering is missing")
+
+    for obsolete in ("_live_progress_history", "get_run_progress_history", "deque(maxlen=720)"):
+        if obsolete in progress or obsolete in service:
+            error(f"Obsolete Borg progress-history logic remains: {obsolete}")
+
+
+
+def audit_archive_scan_locking_and_checkpoint_ui() -> None:
+    service = _read(APP / "service.py")
+    index = _read(STATIC / "index.html")
+    app_js = _read(STATIC / "app.js")
+
+    start = service.find("async def execute_interactive")
+    end = service.find("EXTERNAL_STORAGE_POLL_SECONDS", start)
+    block = service[start:end] if start >= 0 and end > start else ""
+    if not block:
+        error("Interactive repository execution helper is missing")
+    elif "if mount_lock and mount_acquired:" not in block or "mount_lock.release()" not in block:
+        error("Interactive repository commands do not release acquired mount capacity")
+
+    if 'id="archive-consider-checkpoints"' in index:
+        error("Redundant checkpoint toggle remains in the normal archive overview")
+    if 'name="consider_checkpoints"' not in index:
+        error("Restore checkpoint opt-in is missing")
+    load_start = app_js.find("async function loadArchives(options = {})")
+    load_end = app_js.find("function archiveSelectionDeviceLabel", load_start)
+    load_block = app_js[load_start:load_end] if load_start >= 0 and load_end > load_start else ""
+    if "archive-consider-checkpoints" in load_block or "bbm-archive-checkpoints" in load_block:
+        error("Normal archive refresh still depends on the removed checkpoint toggle")
+    if "const checkpointInfo = checkpoints ?" not in app_js:
+        error("Normal archive overview does not report automatically detected checkpoints")
+
+def audit_archive_delete_queueing() -> None:
+    main = _read(APP / "main.py")
+    app_js = _read(STATIC / "app.js")
+    start = main.find('@app.post("/api/repositories/{repository_id}/archive-delete"')
+    end = main.find('@app.get("/api/jobs/{job_id}/archives"', start)
+    block = main[start:end] if start >= 0 and end > start else ""
+    if not block:
+        error("Repository archive-delete endpoint is missing")
+        return
+    for forbidden in ("execute_interactive(", "repository_list_command(", "parse_archive_listing("):
+        if forbidden in block:
+            error(f"Archive deletion still scans Borg synchronously before queueing: {forbidden}")
+    if "load_archive_cache(repository_id" not in block or "queue_repository_action(" not in block:
+        error("Archive deletion does not use cached metadata and immediate queueing")
+
+    js_start = app_js.find("async function deleteArchives(repositoryId, archives)")
+    js_end = app_js.find("async function deleteArchive", js_start + 1)
+    js_block = app_js[js_start:js_end] if js_start >= 0 and js_end > js_start else ""
+    if not js_block:
+        error("Archive deletion frontend handler is missing")
+    elif js_block.find("showRun(result.run_id)") > js_block.find("await refreshAreas(['dashboard', 'runs']"):
+        error("Archive deletion does not open the queued run before secondary view refreshes")
 
 
 def audit_python_modules() -> None:
@@ -261,6 +407,72 @@ def _route_regex(path: str) -> re.Pattern[str]:
     return re.compile("^" + "".join(parts) + "$")
 
 
+def audit_debug_error_boundary() -> None:
+    debug_logging = _read(APP / "debug_logging.py")
+    main = _read(APP / "main.py")
+    service = _read(APP / "service.py")
+    notifications = _read(APP / "notifications.py")
+    javascript = _read(STATIC / "app.js")
+    stylesheet = _read(STATIC / "style.css")
+
+    required_debug = (
+        "def detail_requires_debug_log",
+        "def log_unexpected_exception",
+        "def public_error_message",
+        "class _IncidentOnlyFilter",
+        "source-statistics output is deliberately not treated as an incident",
+        "Technical detail:",
+    )
+    for required in required_debug:
+        if required not in debug_logging:
+            error(f"Central debug error boundary is incomplete: {required}")
+    if "@app.exception_handler(StarletteHTTPException)" not in main:
+        error("Technical HTTPException details are not centrally sanitized")
+    if '"Unhandled HTTP exception"' not in main or "public_error_message(error_id)" not in main:
+        error("Unhandled HTTP exceptions do not return a short debug-log reference")
+    if "Existing repository import failed unexpectedly" not in main:
+        error("Unexpected repository-import failures are not written to debug.log")
+    for marker in (
+        "Execution #{run_id} failed unexpectedly",
+        "Archive scan execution #{run_id} failed unexpectedly",
+        "Repository initialization finalization",
+        "_background_error_message",
+    ):
+        if marker not in service:
+            error(f"Background traceback logging is incomplete: {marker}")
+    if 'LOGGER.exception("Notification delivery failed' not in notifications:
+        error("Notification delivery tracebacks are not written to debug.log")
+    if "function browserSafeErrorMessage(value)" not in javascript:
+        error("Frontend traceback fallback is missing")
+    if "if (!bad) toastTimer = setTimeout(hideToast, 3200);" not in javascript:
+        error("Normal success-toast timeout is missing")
+    if "else if (Number(autoHideMs) > 0) toastTimer = setTimeout(hideToast, Number(autoHideMs));" not in javascript:
+        error("Optional timed error-toast handling is missing")
+    if "toast(`Ausführung #${runId} ${label}`, !good, good ? null : 6000);" not in javascript:
+        error("Short failed-run notification does not disappear after six seconds")
+    if "text.length > 1200" in javascript or "_TECHNICAL_DETAIL_LIMIT" in debug_logging:
+        error("Long normal output is still misclassified as a debug incident")
+    if "response.status_code >= 500" not in main or "HTTP {exc.status_code} response was recorded" not in main:
+        error("Application-side HTTP 5xx responses are not recorded in debug.log")
+    if "close.onclick = hideToast" not in javascript:
+        error("Dismissible error toasts cannot be closed")
+    if "#toast.show { opacity: 1; transform: translateY(0); pointer-events: auto; }" not in stylesheet:
+        error("Persistent error toast interaction styling is missing")
+    if "bad ? 8000" in javascript:
+        error("Obsolete generic timed error-toast behavior remains")
+    document_markers = {
+        ROOT / "README.md": "`/data/logs/debug.log` is restricted to real incidents",
+        ROOT / "README.de.md": "`/data/logs/debug.log` ist ausschließlich für echte Störfälle vorgesehen",
+        ROOT / "INSTALLATION.md": "The incident log `/data/logs/debug.log` stores unexpected tracebacks",
+        ROOT / "INSTALLATION.de.md": "Das Störungsprotokoll `/data/logs/debug.log` speichert unerwartete Tracebacks",
+        STATIC / "help.en.html": "The debug log is restricted to unexpected tracebacks",
+        STATIC / "help.de.html": "Das Debug-Log ist auf unerwartete Tracebacks",
+    }
+    for path, marker in document_markers.items():
+        if marker not in _read(path):
+            error(f"Debug error-boundary documentation missing in {path.relative_to(ROOT)}")
+
+
 def audit_frontend_api_routes() -> None:
     javascript = _read(STATIC / "app.js")
     backend = _read(APP / "main.py")
@@ -344,12 +556,16 @@ def main() -> int:
     version = _read(ROOT / "VERSION").strip()
     audit_version_consistency(version)
     audit_document_feature_alignment()
+    audit_current_source_stats_and_parallelism()
+    audit_archive_scan_locking_and_checkpoint_ui()
+    audit_archive_delete_queueing()
     audit_python_modules()
     audit_unused_python_imports()
     audit_dead_top_level_definitions()
     audit_static_files()
     audit_css_references()
     audit_i18n()
+    audit_debug_error_boundary()
     audit_frontend_api_routes()
     audit_docker_sources()
     audit_markdown_links()

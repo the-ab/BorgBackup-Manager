@@ -62,6 +62,26 @@ def storage_probe_target_from_location(location: str) -> ExternalStorageProbeTar
     )
 
 
+
+def external_filesystem_parallel_identity(
+    location: str, mount_point: str | None,
+) -> tuple[str, str] | None:
+    """Return a stable settings key and label for one remote filesystem.
+
+    The remote ``df`` mount point is combined with the SSH identity so three
+    Borg repositories on the same Storage Box/account share one configurable
+    parallelism group.  Until a successful filesystem probe has supplied a
+    mount point, BBM deliberately falls back to repository-only serialization.
+    """
+    target = storage_probe_target_from_location(location)
+    mount = str(mount_point or "").strip()
+    if target is None or not mount or any(char in mount for char in "\x00\r\n"):
+        return None
+    host = target.host.casefold()
+    host_display = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    label = f"{target.username}@{host_display}:{target.port} · {mount}"
+    return f"external:{label}", label
+
 def repository_location_uses_ssh(location: str) -> bool:
     parsed = urlsplit(location)
     return parsed.scheme == "ssh" or bool(re.match(r"^[^/@:]+@[^/:]+:.+", location))

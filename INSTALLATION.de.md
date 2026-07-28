@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.1.3
+# Installation und Betrieb – BorgBackup Manager 1.2.0
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.1.3.zip
+BorgBackup-Manager-1.2.0.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.1.3.zip
+unzip /pfad/BorgBackup-Manager-1.2.0.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -114,7 +114,6 @@ BBM_STORAGE_GUARD_THRESHOLD_PERCENT=95
 BBM_HEALTH_REQUIRE_SSHD=1
 BBM_LOG_MAX_BYTES=10485760
 BBM_LOG_ROTATIONS=5
-BBM_DEBUG_LOG_LEVEL=WARNING
 ```
 
 `BBM_SESSION_COOKIE_SECURE=always` ist der empfohlene und voreingestellte Wert. Der Manager wird selbst per HTTPS ausgeliefert. `auto` und insbesondere `never` sind nur für ausdrücklich geprüfte Sonderfälle vorgesehen. Proxy-Header beeinflussen Scheme, Client-IP oder Origin ausschließlich, wenn die unmittelbare Proxy-Adresse in `BBM_TRUSTED_PROXY_CIDRS` liegt. Bei einem separaten Docker-Reverse-Proxy muss dessen festes Container-Netz dort ausdrücklich ergänzt werden; eingehende Forwarded-Header sind am Proxy zu überschreiben.
@@ -134,7 +133,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.1.3.zip
+unzip /pfad/BorgBackup-Manager-1.2.0.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build
@@ -429,9 +428,10 @@ Für manuelle Starts stehen im Backup-Job unter **Aufbewahrung** zwei optionale 
 
 Pro Repository wird immer nur eine Borg-Aktion gleichzeitig ausgeführt. Starten mehrere Geräte zur selben Zeit, bleibt der erste Lauf **Laufend**, alle weiteren stehen **Wartend**. Das Dashboard zeigt beide Zustände getrennt. Sobald das Repository frei wird, startet der nächste wartende Lauf automatisch. Direkt am Repository gestartetes Compact und repositoryweite Archivlöschungen werden ebenfalls über diese Sperre und ein reguläres Ausführungsprotokoll gesteuert; ein Backup-Job ist dafür nicht erforderlich.
 
-Die Parallelität wird in vier Ebenen begrenzt: **global**, **pro Repository**, **pro erkanntem Mount unter `/repositories`** und optional **pro Zeitplan**. Unter **Repositories → Bearbeiten** legt `Maximal parallele Backup-Läufe` fest, wie viele Backup-Jobs dieses Repository gleichzeitig verwenden dürfen; Bestandsrepositorys starten mit dem sicheren Standard `1`. Wartungs- und Prüfaktionen bleiben repositoryweit exklusiv. Unter **System → Einstellungen → Parallelitätsgrenzen** kann die globale Obergrenze von `0` bis `64` gesetzt werden (`0` = unbegrenzt), für jeden erkannten Mount eine gemeinsame Grenze hinterlegt werden (`0` = für diesen Mount unbegrenzt) und die Zahl gleichzeitig laufender manueller Quellenstatistiken separat begrenzt werden (Standard `1`). Quellenstatistiken zählen gleichzeitig gegen die globale Grenze, reservieren aber kein Repository und keinen Repository-Mount, weil sie nur das Quellgerät lesen. Mehrere Repository-Verzeichnisse auf demselben NFS-/Datenträger-Mount teilen sich weiterhin dieselbe I/O-Grenze. Zeitpläne können zusätzlich eine engere Grenze besitzen. Ein Job startet nur, wenn alle für ihn geltenden Grenzen gleichzeitig freie Kapazität besitzen.
+Die Parallelität wird in vier Ebenen begrenzt: durch einen festen Einzelplatz pro physischem Borg-Repository, **global**, **pro erkanntem Repository-Dateisystem** und optional **pro Zeitplan**. Die Repository-Grenze ist nicht konfigurierbar, weil Borg schreibende Vorgänge im selben Repository ohnehin exklusiv sperrt. Unter **System → Einstellungen → Parallelitätsgrenzen** kann die globale Obergrenze von `0` bis `64` gesetzt werden (`0` = unbegrenzt), für jeden erkannten lokalen Mount oder externen SSH-Dateisystemverbund eine gemeinsame Grenze hinterlegt werden (`0` = unbegrenzt) und die Zahl gleichzeitig laufender manueller Quellenstatistiken separat begrenzt werden (Standard `1`). Externe Gruppen entstehen automatisch aus SSH-Identität und dem durch die Remote-Dateisystemprüfung gemeldeten Mountpunkt. Eine Grenze von `2` erlaubt zwei unterschiedliche Repositorys auf demselben lokalen oder externen Dateisystem; weitere Repositorys dieses Dateisystems warten. Mehrere Jobs desselben Repositorys bleiben immer serialisiert. Quellenstatistiken zählen gleichzeitig gegen die globale Grenze, reservieren aber kein Repository und kein Repository-Dateisystem, weil sie nur das Quellgerät lesen. Zeitpläne können zusätzlich eine engere Grenze besitzen. Ein Job startet nur, wenn alle für ihn geltenden Grenzen gleichzeitig freie Kapazität besitzen.
+Eine geänderte Dateisystemgrenze wird von bereits wartenden Läufen fortlaufend neu eingelesen und gilt daher ohne vorheriges Leeren der Warteschlange. Persistierte Läufe werden ausschließlich durch den datenbankgestützten FIFO-Ausführungsplan zugelassen; eine zweite prozesslokale Reservierung findet nicht statt. Externe Gruppen erscheinen nach erfolgreicher Speicherprüfung beziehungsweise nach dem Laden der Systemdiagnose. Solange kein Remote-Mount erkannt wurde, bleibt die repositoryweise Serialisierung aktiv. Unter **System → Systemdiagnose → Repository-Dateisysteme** erscheinen die tatsächlich wirksame Grenze jedes lokalen und erkannten externen Dateisystems, die aktuelle Belegung als **aktiv / wartend** sowie die globale und die separate Quellenstatistik-Grenze.
 
-Die Reihenfolge wird als datenbankgestützte FIFO-Warteschlange geführt und zusätzlich durch eine lokale Prozesssperre abgesichert. Das tatsächliche Repository-Verzeichnis beziehungsweise die externe URL bildet die Sperridentität, sodass auch versehentlich doppelt erfasste Ziele nicht parallel bearbeitet werden. Freie globale Plätze werden nicht durch einen älteren Lauf verschwendet, der noch auf sein Repository oder seine Zeitplangrenze wartet. Wartende Laufprotokolle nennen die konkrete Ursache und gegebenenfalls die davorliegende Ausführungs-ID. Nur tatsächlich lebende Manager-Tasks belegen Plätze; verwaiste Laufzustände werden nicht als dauerhafte Blocker behandelt. Extern gestartete Borg-Prozesse sind für die Manager-Warteschlange nicht sichtbar und werden weiterhin durch Borgs eigene Repository-Sperre abgefangen.
+Die Reihenfolge wird als atomarer datenbankgestützter FIFO-Ausführungsplan geführt. Globale, Zeitplan-, Mount- und Repository-Grenzen werden dabei in genau einer Zulassungsentscheidung vergeben. Eine zusätzliche Laufzeitsperre schützt nur direkte interaktive Borg-Aufrufe desselben Repository-Datensatzes; sie reserviert keine Mount-Kapazität für persistierte Jobs. Das tatsächliche Repository-Verzeichnis beziehungsweise die externe URL bildet im Queue-Plan weiterhin die physische Sperridentität, sodass auch versehentlich doppelt erfasste Ziele nicht parallel bearbeitet werden. Freie globale Plätze werden nicht durch einen älteren Lauf verschwendet, der noch auf sein Repository oder seine Zeitplangrenze wartet. Wartende Laufprotokolle nennen die konkrete Ursache und gegebenenfalls die davorliegende Ausführungs-ID. Nur tatsächlich lebende Manager-Tasks belegen Plätze; verwaiste Laufzustände werden nicht als dauerhafte Blocker behandelt. Extern gestartete Borg-Prozesse sind für die Manager-Warteschlange nicht sichtbar und werden weiterhin durch Borgs eigene Repository-Sperre abgefangen.
 
 ## 11. Borg-Optionen im Job
 
@@ -513,7 +513,7 @@ Die Freigabe gilt nur für den einmaligen Prüflauf und setzt `BORG_RELOCATED_RE
 Die Liste wird repositorybezogen persistent unter `/data/archive-cache` gespeichert. Ein zeitgesteuerter Auto-Refresh wird nicht verwendet.
 
 1. Repository auswählen.
-2. optional unvollständige Checkpoint-Archive einblenden.
+2. Checkpoint-Archive werden in der normalen Archivübersicht automatisch angezeigt und eindeutig als unvollständig gekennzeichnet.
 3. **Archive anzeigen** wählen. Diese Aktion liest ausschließlich den vorhandenen persistenten Archivcache und startet keinen Borg-Befehl.
 4. Ist noch kein Cache vorhanden oder wurde das Repository außerhalb des Managers verändert, **Neu aus Repository einlesen** wählen. BBM legt dafür eine normale Hintergrund-Ausführung mit eigener Run-ID an; `borg info`/`borg list` sind damit unabhängig vom HTTP- beziehungsweise Reverse-Proxy-Timeout.
 5. Während des Scans bleibt eine vorhandene Archivliste sichtbar. Erst nach erfolgreichem Abschluss wird der Cache atomar ersetzt.
@@ -535,6 +535,8 @@ Funktionen:
 - optional einmaliges Compact nach der vollständigen Löschserie
 - Compact direkt in der Repository-Liste, unabhängig von einem Job
 - mit eindeutig passendem Backup-Job zusätzlich Diff, Rename und Restore
+
+Eine Archivlöschung wird anhand der streng validierten ausgewählten Namen sofort als normale Ausführung eingereiht und liefert unmittelbar eine Run-ID. Das vollständige Repository wird vor der Run-Erstellung nicht erneut innerhalb der HTTP-Anfrage eingelesen. Das Laufprotokoll öffnet sich sofort; ein veralteter Cache beziehungsweise ein außerhalb des Managers bereits entferntes Archiv erscheint dort als Borg-Fehler. Dadurch bleiben Löschungen auch bei sehr großen Repositorys unabhängig vom HTTP-/Reverse-Proxy-Timeout sichtbar.
 
 Bei lokal verwalteten Repositories benötigt der Containerbenutzer `BBM_BORG_UID:BBM_BORG_GID` Leserechte auf allen Segmentdateien. Schreiben weitere Clients mit abweichenden Eigentümern, müssen gemeinsame Gruppen, ACLs oder die NFS-UID/GID-Zuordnung entsprechend eingerichtet werden. Bei fehlenden Rechten zeigt die WebUI nur den betroffenen Pfad und die verwendete UID:GID. Bei als Ausführung gestarteten Aktionen bleibt die vollständige Borg-Ausgabe im Laufprotokoll; direkte Archivlistenabfragen liefern bewusst nur die kurze Ursache.
 
@@ -715,7 +717,7 @@ Der Compose-Stack setzt standardmäßig `TZ=Europe/Berlin`. Das Dashboard zeigt 
 
 
 - Darstellung hell, dunkel oder automatisch
-- globale Parallelitätsgrenze für alle Manager-Ausführungen (`0` = unbegrenzt) sowie gemeinsame Parallelitätsgrenzen pro erkanntem Repository-Mount
+- globale Parallelitätsgrenze für alle Manager-Ausführungen (`0` = unbegrenzt) sowie gemeinsame Parallelitätsgrenzen pro erkanntem lokalen oder externen Repository-Dateisystem
 - komfortable oder deutlich verdichtete Darstellung; die Umschaltung verändert Tabellen, Formulare, Karten und Navigation
 - Dashboard-Limit
 - Protokolllimit
@@ -894,6 +896,8 @@ CONTAINER   borgbackup-manager
 
 ## 25. Repository-SSH-Diagnose
 
+Das Störungsprotokoll `/data/logs/debug.log` speichert unerwartete Tracebacks, unbehandelte Anwendungs-/Hintergrundfehler, kritische Framework- oder Systemfehler und managerseitige HTTP-5xx-Antworten. Normale Backup-Läufe, Quellenstatistik-Ausgaben, erwartbare Borg-Warnungen sowie lange, aber nicht technische Meldungen werden dort nicht abgelegt. Geschützte Fehler erscheinen mit einer kurzen `BBM-...`-Fehler-ID. Der Hinweis nach einem fehlgeschlagenen oder abgebrochenen Lauf verschwindet nach sechs Sekunden; andere handlungsrelevante rote Fehler bleiben bis zum Schließen sichtbar.
+
 Die WebUI-Diagnose prüft Repository-Zugriff, Logs, Wrapper und `authorized_keys` direkt als Benutzer `borg`. Die nur als Root mögliche Konfigurationsprüfung `sshd -t` wird beim Containerstart ausgeführt und der Web-API als geschützter Laufzeitstatus bereitgestellt.
 
 ```bash
@@ -933,9 +937,9 @@ rm -rf /docker_data/borgbackup-manager
 ```
 
 
-### Checkpoint-Archive anzeigen
+### Checkpoint-Archive
 
-Die Archivübersicht blendet Checkpoint-Archive standardmäßig aus. Bei Bedarf kann „Unvollständige Checkpoint-Archive anzeigen“ aktiviert werden. Der Manager ergänzt dann `borg list --consider-checkpoints`. Checkpoints entstehen bei unterbrochenen Sicherungen und können nur einen Teil der vorgesehenen Dateien enthalten; Restore oder Löschen sollte daher bewusst erfolgen.
+Die Archivübersicht zeigt erkannte Checkpoint-Archive automatisch und kennzeichnet sie eindeutig als unvollständig. Checkpoints entstehen bei unterbrochenen Sicherungen und können nur einen Teil der vorgesehenen Dateien enthalten; Restore oder Löschen sollte daher bewusst erfolgen. Im Restore-Dialog bleibt die separate Auswahlfreigabe erhalten.
 
 ## Lokale Kontowiederherstellung
 
@@ -974,4 +978,4 @@ Anschließend unter **Archive → Archive anzeigen** prüfen, ob je Archiv Dauer
 
 ## Quellenstatistik und Archivbrowser
 
-Die Quellenstatistik eines Backup-Jobs wird nach abgeschlossenen Backups aus Borgs Abschlusswerten aktualisiert. Eine manuelle Aktualisierung führt einen repositoryunabhängigen Live-Scan auf dem Quellgerät aus. Der bevorzugte Scanner zählt jede konfigurierte Quelle getrennt und berücksichtigt die Job-Ausschlussmuster sowie Cache-Tags, `nodump` und die konfigurierte Dateisystemgrenze; er erzeugt kein Archiv. Nicht sicher nachbildbare Sondermuster führen zu einer als eingeschränkt markierten Statistik. Bei deaktivierter Option **Nur jeweiliges Quelldateisystem** werden auch eingehängte Unterverzeichnisse durchlaufen. Ist die Option aktiviert, werden erkannte Unter-Mounts wie bei Borg übersprungen und im Ausführungsprotokoll ausdrücklich aufgeführt. Nach einem abgeschlossenen Backup ersetzen Borgs exakte Abschlusswerte nach Anwendung der Ausschlüsse die Scanwerte. Der Archivbrowser liest Metadaten direkt über `borg list --json-lines`, zeigt Größe, Typ, Rechte, Besitzer/Gruppe und Änderungszeit und benötigt kein FUSE.
+Die Quellenstatistik eines Backup-Jobs wird nach abgeschlossenen Backups aus Borgs Abschlusswerten aktualisiert. Eine manuelle Aktualisierung führt einen repositoryunabhängigen Live-Scan auf dem Quellgerät aus. Der bevorzugte Scanner berücksichtigt die Job-Ausschlussmuster sowie Cache-Tags, `nodump` und die konfigurierte Dateisystemgrenze; er erzeugt kein Archiv. Pfadbasierte Ausschlüsse werden vor `stat()` geprüft, sodass ausgeschlossene Dateien und Verzeichnisbäume möglichst ohne unnötige Metadatenabfragen übersprungen werden. Normale erfolgreiche Scans zeigen nur Herkunft und Zeitpunkt. Nicht sicher nachbildbare Sondermuster oder Lesefehler werden ausschließlich mit einer konkreten Einschränkungsursache angezeigt. Bei deaktivierter Option **Nur jeweiliges Quelldateisystem** werden auch eingehängte Unterverzeichnisse durchlaufen. Ist die Option aktiviert, werden erkannte Unter-Mounts wie bei Borg übersprungen und im Ausführungsprotokoll ausdrücklich aufgeführt. Nach einem abgeschlossenen Backup ersetzen Borgs exakte Abschlusswerte nach Anwendung der Ausschlüsse die Scanwerte. Der Archivbrowser liest Metadaten direkt über `borg list --json-lines`, zeigt Größe, Typ, Rechte, Besitzer/Gruppe und Änderungszeit und benötigt kein FUSE.

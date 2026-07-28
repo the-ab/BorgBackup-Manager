@@ -39,7 +39,9 @@ def test_archive_listing_accepts_wrapper_text_around_borg_json():
 def _create_archive_refresh_run(*, suffix: str):
     from app.database import Base, SessionLocal, engine
     from app.models import Repository, Run
+    from app.security_store import initialize_security_store
 
+    initialize_security_store("Archive-Test-Admin-2026!")
     Base.metadata.create_all(engine)
     with SessionLocal() as db:
         repository = Repository(
@@ -82,7 +84,8 @@ def test_archive_refresh_frontend_queues_post_instead_of_force_get():
     load_archives = javascript.split("async function loadArchives(options = {})", 1)[1].split(
         "function archiveSelectionDeviceLabel", 1
     )[0]
-    assert "/archives/refresh?consider_checkpoints=" in load_archives
+    assert "api(`/repositories/${repositoryId}/archives/refresh`, {method: 'POST'})" in load_archives
+    assert "archive-consider-checkpoints" not in load_archives
     assert "{method: 'POST'}" in load_archives
     assert "force_refresh=" not in load_archives
     assert "watchRunCompletion(result.run_id" in load_archives
@@ -192,3 +195,33 @@ async def test_background_archive_refresh_persists_actionable_failure(monkeypatc
         assert "/repositories/borg/data/69/69536" in run.error
         assert "Traceback" not in run.error
         assert "Platform:" not in run.error
+
+
+@pytest.mark.asyncio
+async def test_normal_archive_refresh_reuses_detected_checkpoints_for_restore_cache(monkeypatch, tmp_path):
+    import json
+    from uuid import uuid4
+    from app import archive_cache, service
+
+    monkeypatch.setattr(archive_cache, "ARCHIVE_CACHE_DIR", tmp_path)
+    repository_id, run_id = _create_archive_refresh_run(suffix=uuid4().hex[:10])
+    payload = {
+        "archives": [
+            {"name": "regular", "time": "2026-07-28T10:00:00+02:00"},
+            {"name": "regular.checkpoint", "time": "2026-07-28T10:01:00+02:00"},
+        ]
+    }
+
+    async def fake_execute(_repository_id, _command):
+        return 0, json.dumps(payload), ""
+
+    monkeypatch.setattr(service, "execute_interactive", fake_execute)
+    await service.execute_repository_archive_refresh(run_id, repository_id, False)
+
+    regular = archive_cache.load_archive_cache(repository_id, False)
+    checkpoints = archive_cache.load_archive_cache(repository_id, True)
+    assert regular is not None
+    assert checkpoints is not None
+    assert {item["name"] for item in checkpoints["data"]["archives"]} == {
+        "regular", "regular.checkpoint",
+    }

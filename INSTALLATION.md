@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.1.3
+# Installation and Operations — BorgBackup Manager 1.2.0
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.1.3.zip
+BorgBackup-Manager-1.2.0.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.1.3.zip
+unzip /path/BorgBackup-Manager-1.2.0.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.1.3.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.2.0.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -126,7 +126,6 @@ BBM_STORAGE_GUARD_THRESHOLD_PERCENT=95
 BBM_HEALTH_REQUIRE_SSHD=1
 BBM_LOG_MAX_BYTES=10485760
 BBM_LOG_ROTATIONS=5
-BBM_DEBUG_LOG_LEVEL=WARNING
 ```
 
 ### Reverse proxy
@@ -312,8 +311,9 @@ The dashboard presents source size/file count on one compact row and the value o
 The job overview shows source size and entry count.
 
 - A completed backup stores exact Borg statistics automatically.
-- **Refresh** performs a read-only live scan on the source device without creating an archive.
-- The live scan is marked **before exclusions** because Borg 1.x does not provide useful create statistics for a dry run with the same semantics.
+- **Refresh** performs a read-only, exclusion-aware live scan on the source device without creating an archive.
+- Borg path exclusions are checked before `stat()` so excluded files and complete directory trees avoid unnecessary metadata traffic where possible. Cache tags, `nodump` and the configured filesystem boundary are applied as well.
+- Normal successful scans show only origin and timestamp. Unsupported patterns, unavailable `nodump` checks or read warnings are shown only when present, with a concrete limitation reason.
 - Relevant job changes invalidate old statistics.
 
 ### Enable and disable
@@ -338,12 +338,13 @@ For manual starts, a job can optionally enable **Prune after manual backup** and
 
 Parallel execution is controlled at four additive levels:
 
+- one fixed execution slot per physical Borg repository,
 - **global** maximum parallel manager executions (`0` = unlimited),
-- **per repository** maximum parallel backup runs (default `1`; repository maintenance/check operations remain exclusive),
-- **per detected managed mount** below `/repositories` (`0` = unlimited for that mount),
+- **per detected repository filesystem** (managed mount or detected external SSH filesystem; `0` = unlimited),
 - **per schedule** maximum parallel executions.
 
-Repositories stored on the same physical filesystem or NFS mount share the configured mount limit, so separate repository directories cannot bypass the intended disk/I/O concurrency cap. A run starts only when every applicable limit has free capacity.
+The repository slot is intentionally not configurable because Borg serializes writers to one repository. Repositories stored on the same physical/NFS mount or the same detected external SSH filesystem share the configured filesystem limit. External groups are derived from the SSH identity and the mount returned by the remote `df` probe. A limit of `2`, for example, allows two different repositories on that filesystem to run concurrently while further repositories wait. A run starts only when every applicable limit has free capacity.
+A changed filesystem limit is reloaded by already waiting runs and therefore applies without draining the whole queue first. Persisted runs are admitted only by the database-backed FIFO execution plan and no longer reserve a second process-local slot. External groups become configurable after a successful storage probe or after loading System Diagnostics; until then only per-repository serialization applies. **System → System diagnostics → Repository filesystems** displays the effective limit, current **active / queued** occupancy and the global/source-statistics limits for both managed and detected external filesystems.
 
 ## 13. Run and monitor backups
 
@@ -351,7 +352,7 @@ Start a job from the dashboard or job list. Open the live log from the task indi
 
 Queue reasons are displayed explicitly:
 
-- repository capacity reached,
+- repository already in use,
 - repository mount capacity reached,
 - global limit reached,
 - schedule limit reached,
@@ -374,7 +375,7 @@ Complete status and path output is stored in `/data/run-logs/run-ID.log`. SQLite
 The archive list is cached persistently per repository below `/data/archive-cache`. Opening the archive view does not run Borg automatically.
 
 1. Select the repository.
-2. Optionally enable incomplete checkpoint archives.
+2. Checkpoint archives are shown automatically in the normal archive overview and are clearly marked as incomplete.
 3. Choose **Show Archives**. This reads only the existing persistent cache and returns immediately.
 4. If no cache exists yet, or if the repository changed outside BBM, choose **Reload from Repository**. BBM queues a normal background run and returns a run ID immediately; `borg info`/`borg list` therefore no longer depend on the HTTP or reverse-proxy timeout.
 5. The previous cached list remains visible while a refresh is running and is replaced atomically only after a successful scan.
@@ -382,7 +383,9 @@ The archive list is cached persistently per repository below `/data/archive-cach
 
 Backup, prune, rename and delete operations invalidate only the affected repository cache. Archive listing, archive details and browsing do not require a backup job. Managed repositories are read locally; external repositories are opened by the manager with the centrally stored Borg/SSH repository credentials.
 
-The list is always sorted newest first regardless of Borg output order. Device filtering uses cached archive metadata and never starts another repository scan. Checkpoint archives may be incomplete and should be handled deliberately.
+Archive deletion is queued immediately from the strictly validated selected names and returns a run ID without enumerating the complete repository again inside the HTTP request. The run log is opened immediately; stale or externally removed names are reported by Borg in that visible run. This keeps deletion responsive for very large repositories and avoids HTTP/reverse-proxy timeouts before a run exists.
+
+The list is always sorted newest first regardless of Borg output order. Device filtering uses cached archive metadata and never starts another repository scan. Checkpoint archives are displayed automatically, clearly marked as incomplete, and should be handled deliberately. Restore keeps a separate opt-in control.
 
 ## 16. Archive browser and export
 
@@ -571,6 +574,8 @@ grep -E '^(BBM_DATA_PATH|BBM_REPOSITORY_PATH|BBM_HTTPS_PORT|BBM_REPOSITORY_SSH_P
 ```
 
 ## 25. Repository SSH diagnostics
+
+The incident log `/data/logs/debug.log` stores unexpected tracebacks, unhandled background/application failures, critical framework or system errors, and application-side HTTP 5xx responses. It does not store ordinary backup runs, source-statistics output, expected Borg warnings or long but non-technical messages. Protected failures are shown with a short `BBM-...` error ID. Failed/cancelled-run notices disappear after six seconds; other actionable red errors remain visible until explicitly closed.
 
 ```bash
 docker compose exec -T borg-manager pgrep -a sshd

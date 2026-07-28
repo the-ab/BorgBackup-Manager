@@ -31,25 +31,34 @@ def parse_source_detail(raw: str | None) -> dict[str, Any]:
         return {}
     if not isinstance(payload, dict):
         return {}
-    sources = payload.get("sources")
-    if not isinstance(sources, list):
-        sources = []
-    normalized: list[dict[str, Any]] = []
-    for item in sources:
-        if not isinstance(item, dict):
-            continue
-        path = str(item.get("path") or "").strip()
-        size = _safe_int(item.get("size_bytes"))
-        files = _safe_int(item.get("file_count"))
-        if not path or size is None or files is None:
-            continue
-        normalized.append({"path": path, "size_bytes": size, "file_count": files})
+    unsupported = payload.get("unsupported_patterns")
     return {
         **payload,
-        "sources": normalized,
         "quality": str(payload.get("quality") or "unknown"),
+        "scan_method": str(payload.get("scan_method") or ""),
+        "warning_count": _safe_int(payload.get("warning_count")) or 0,
+        "unsupported_patterns": [
+            str(value) for value in unsupported[:50]
+        ] if isinstance(unsupported, list) else [],
     }
 
+
+def source_stats_limitations(raw: str | None) -> list[dict[str, Any]]:
+    detail = parse_source_detail(raw)
+    limitations: list[dict[str, Any]] = []
+    if detail.get("scan_method") == "find-stat-fallback":
+        limitations.append({"code": "fallback"})
+    unsupported_count = len(detail.get("unsupported_patterns") or [])
+    if unsupported_count:
+        limitations.append({"code": "unsupported-patterns", "count": unsupported_count})
+    if detail.get("nodump_supported") is False:
+        limitations.append({"code": "nodump-unavailable"})
+    warning_count = _safe_int(detail.get("warning_count")) or 0
+    if warning_count:
+        limitations.append({"code": "read-warnings", "count": warning_count})
+    if not limitations and detail.get("quality") == "partial":
+        limitations.append({"code": "unspecified"})
+    return limitations
 
 def _archive_prefix(source: str) -> str:
     value = source.strip().replace("\\", "/")
@@ -72,85 +81,6 @@ def source_for_archive_path(path: str, source_paths: list[str]) -> str | None:
     if matches:
         return max(matches)[1]
     return root_source
-
-
-def _source_progress(history: list[dict], source_paths: list[str]) -> dict[str, dict[str, int]]:
-    result = {
-        path: {"original_bytes": 0, "files": 0, "deduplicated_bytes": 0}
-        for path in source_paths
-    }
-    previous = {"original_bytes": 0, "files": 0, "deduplicated_bytes": 0}
-    previous_source: str | None = None
-    for item in history:
-        current_source = source_for_archive_path(str(item.get("path") or ""), source_paths)
-        current = {
-            "original_bytes": _safe_int(item.get("original_bytes")) or 0,
-            "files": _safe_int(item.get("files")) or 0,
-            "deduplicated_bytes": _safe_int(item.get("deduplicated_bytes")) or 0,
-        }
-        # The first frame after a source transition still contains the previous
-        # source's cumulative tail. Attribute that transition delta to the old
-        # source; following deltas belong to the new source.
-        source = previous_source if previous_source and current_source != previous_source else current_source
-        if source in result:
-            for key in current:
-                result[source][key] += max(0, current[key] - previous[key])
-        previous = current
-        if current_source is not None:
-            previous_source = current_source
-    return result
-
-
-def observed_source_statistics(
-    history: list[dict[str, Any]],
-    source_paths: list[str],
-    *,
-    final_total_bytes: int | None,
-    final_total_files: int | None,
-) -> dict[str, Any]:
-    """Build a post-exclusion per-source distribution from Borg's finished run.
-
-    Progress frames are sampled rather than emitted for every file. The final
-    Borg totals scale the observed source shares so their sum matches the exact
-    archive statistics. This remains useful for source-by-source progress and
-    the next run's frozen source baseline; it is independent of ETA rates.
-    """
-    if not history or not source_paths:
-        return {}
-    observed = _source_progress(history, source_paths)
-    attributed_bytes = sum(item["original_bytes"] for item in observed.values())
-    attributed_files = sum(item["files"] for item in observed.values())
-    latest_bytes = _safe_int(history[-1].get("original_bytes")) or 0
-    latest_files = _safe_int(history[-1].get("files")) or 0
-    byte_coverage = (attributed_bytes / latest_bytes) if latest_bytes > 0 else 0.0
-    file_coverage = (attributed_files / latest_files) if latest_files > 0 else 0.0
-    if max(byte_coverage, file_coverage) < 0.70:
-        return {}
-    byte_scale = (
-        float(final_total_bytes) / attributed_bytes
-        if final_total_bytes and attributed_bytes > 0
-        else 1.0
-    )
-    file_scale = (
-        float(final_total_files) / attributed_files
-        if final_total_files and attributed_files > 0
-        else 1.0
-    )
-    sources = []
-    for path in source_paths:
-        values = observed.get(path) or {}
-        sources.append({
-            "path": path,
-            "size_bytes": max(0, int(round((values.get("original_bytes") or 0) * byte_scale))),
-            "file_count": max(0, int(round((values.get("files") or 0) * file_scale))),
-        })
-    return {
-        "version": 1,
-        "quality": "observed",
-        "scan_method": "borg-progress-observed",
-        "sources": sources,
-        "coverage": min(1.0, max(0.0, min(byte_coverage or 1.0, file_coverage or 1.0))),
-    }
 
 
 def _remaining_file_factor(remaining_bytes: int, remaining_files: int | None) -> float:

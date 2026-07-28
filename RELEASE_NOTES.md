@@ -1,5 +1,93 @@
 # Release Notes
 
+## v1.2.0 – 28.07.2026
+
+### Debug log restricted to real incidents
+
+- The previous size rule was removed: long but normal backup output and source-statistics scans are no longer treated as technical failures merely because of their length and are no longer copied to `/data/logs/debug.log`.
+- The debug log now acts strictly as an incident log. It records unexpected tracebacks, unhandled application/background failures, critical framework or system errors, and application-side HTTP 5xx responses. Ordinary INFO/WARNING records remain excluded even when an older installation still sets `BBM_DEBUG_LOG_LEVEL`.
+- Application-side HTTP errors 500, 502, 503 and 504 are recorded with method, path, status and error ID. Existing `BBM-...` references are not logged a second time.
+- The browser safeguard now detects only actual traceback/framework patterns. A merely long error message is no longer incorrectly replaced by the generic debug-log notice.
+- The short red notice after a failed or cancelled run now disappears automatically after six seconds. It can still be closed with `×` during that interval; other actionable error notices remain visible until closed.
+- Regression tests and the project audit cover exclusion of normal backup/source-statistics output, fixed incident filtering, HTTP 504 logging and the six-second run-notice timeout.
+
+## v1.1.10 – 28.07.2026
+
+### Central traceback logging and compact browser errors
+
+- Unexpected HTTP and background failures now receive a short `BBM-...` error ID. The browser and run status show only the compact reference; the complete traceback is written to `/data/logs/debug.log` under the same ID.
+- HTTP errors containing Python tracebacks, framework internals or unusually large technical payloads are sanitized centrally. Expected validation and compact Borg diagnostic messages remain specific and actionable.
+- Existing repository import no longer sends raw Borg/Python tracebacks to the browser. Unexpected import failures are logged completely before the temporary repository registration and secrets are removed.
+- Backup runs, repository initialization, archive scans, manual maintenance chains, scheduled queueing, manager/cache backup workers and notification delivery failures now preserve unexpected tracebacks in the debug log instead of exposing or discarding them.
+- Red WebUI error notices no longer disappear automatically. They remain readable until explicitly closed; an additional client-side guard replaces any leaked traceback-sized response with the compact debug-log hint.
+- Project audit and regression tests now protect the centralized error boundary, traceback persistence, error-ID response, persistent error toast and repository-import behavior.
+
+## v1.1.9 – 28.07.2026
+
+### External filesystem parallelism and wider archive statistics
+
+- **Settings → Parallel limits** can now also limit detected external SSH filesystems. Multiple external Borg repositories using the same SSH identity and the same filesystem detected by `df` share one limit; `0` means unlimited.
+- Queue planning and direct manager-side Borg calls use the same external filesystem group. Each repository itself remains limited to one execution.
+- External groups appear after a successful filesystem probe or after loading System Diagnostics. Without a detected remote mount, safe per-repository serialization remains in effect.
+- **System Diagnostics → Repository filesystems** now shows the configured limit and active/queued runs for external filesystems as well.
+- The archive overview now gives **Duration** and **Files** wider columns and more separation so long durations no longer overlap the file count.
+
+## v1.1.8 – 28.07.2026
+
+### Archive-scan mount capacity is released and checkpoint display is simplified
+
+- Direct manager-side Borg calls did not release their reserved mount capacity after completion. After the first archive scan an invisible mount slot therefore remained occupied, and a later scan could wait indefinitely until the container was restarted.
+- Mount capacity is now released reliably in the `finally` path after success, warning, failure or cancellation.
+- A checkpoint-enabled scan could deadlock itself with mount limit `1`: `borg info` kept the slot while the following `borg list --consider-checkpoints` waited for that same slot. This self-deadlock is fixed.
+- The normal archive overview continues to show detected checkpoint archives automatically and marks them as incomplete. Checkpoint metadata is now retained directly from `borg info`, and the resulting cache can be reused immediately for deliberate restore selection. The redundant **Show incomplete checkpoint archives** option was removed from this view.
+- Restore keeps its separate checkpoint opt-in so restoring from an incomplete archive remains a deliberate action.
+- Regression tests cover mount-capacity release and prevent the redundant archive-overview checkpoint control from returning.
+
+## v1.1.7 – 28.07.2026
+
+### Archive deletion becomes immediately visible on large repositories
+
+- Repository-wide archive deletion no longer performs a synchronous full `borg list` scan inside the HTTP request before creating a run. On large repositories the UI could otherwise remain on **Deletion is starting …** or hit an HTTP/reverse-proxy timeout before any visible execution existed.
+- Selected archive names remain strictly validated. Existing cache metadata is now used only for the device/run label, after which the exact Borg deletion is queued immediately as a normal repository run.
+- A stale archive cache or an archive already removed outside the manager is reported by Borg in the visible deletion run. The browser is no longer blocked before a run ID is created.
+- The WebUI starts status tracking, toast feedback and the live run log immediately after receiving the run ID. Dashboard and execution-list refreshes happen afterwards.
+- Repository exclusivity, mounted-archive protection, optional single compact execution and cache invalidation after potentially partial failed deletion remain unchanged.
+- The project audit now prevents synchronous repository scans from returning to the archive-delete endpoint and verifies that the live run opens before secondary view refreshes.
+
+## v1.1.6 – 28.07.2026
+
+### Mount parallelism now uses one authoritative queue decision
+
+- Persisted backup and repository runs no longer reserve mount capacity twice. Up to v1.1.5, a process-local mount limiter was acquired before the database-backed queue decision. Under real mount/path conditions this could still leave only one run active even when the effective mount limit was `2`.
+- Global, schedule, mount and repository limits are now assigned atomically by the database-backed FIFO execution plan alone. A second eligible job targeting another repository on the same mount can therefore use the second mount slot.
+- The additional runtime repository lock is acquired only after queue admission and is scoped to one repository database record. It now only coordinates direct interactive Borg calls for that repository and cannot silently serialize distinct repositories on the same mount.
+- Physical repository exclusivity remains enforced by the queue plan: multiple jobs targeting the same actual Borg repository still never run concurrently.
+- **System diagnostics → Repository filesystems** now shows current occupancy beside the effective limit as `active X · queued Y`, making it immediately visible whether the mount itself is full or another layer blocks a run.
+- Added regression coverage proving that persisted runs no longer request a second process-local mount slot and that two distinct repositories run concurrently with mount limit `2`.
+
+## v1.1.5 – 28.07.2026
+
+### Live mount-limit updates and clearer diagnostics
+
+- Fixed a stale process-local mount semaphore that could keep an old limit of `1` even after the administrator changed the mount to `2`. With a continuously occupied queue, the previous semaphore might never become fully idle and therefore never adopt the new limit.
+- Mount capacity now uses a live-resizable limiter. Waiting runs reload the configured mount limit every 250 ms, so increases, reductions and switching to `0` (unlimited) take effect without draining the entire mount queue first.
+- The database-backed queue planner remains authoritative: `0` for the global limit is still unlimited, source-statistics limit `1` applies only to manual source scans, and different repositories on a mount with limit `2` can run concurrently.
+- **System diagnostics → Repository filesystems** now shows the effective parallel limit for every detected managed mount. The diagnostics header also reports the global and source-statistics limits, making path mismatches or unexpected serialization easier to identify.
+- External repository filesystems are marked as not applicable for managed-mount limits because they remain serialized by repository identity.
+- Added regression coverage for raising a mount limit from `1` to `2` while one run is active and another is already waiting.
+
+## v1.1.4 – 28.07.2026
+
+### Exclusion-optimized source scan and unambiguous parallelism
+
+- The preferred manual source-statistics scanner now evaluates path-based Borg exclusion patterns before `stat()`. Excluded files and complete directory trees therefore avoid unnecessary metadata requests, especially on NFS/CIFS sources. `CACHEDIR.TAG`, `nodump` and **one file system per source** remain fully effective.
+- Paths rejected before metadata lookup are counted separately. Read/access warnings, patterns that cannot be mirrored safely, unavailable `nodump` checks or the `find/stat` fallback are exposed as concrete limitations. A normal complete scan no longer shows a quality level.
+- The source-statistics line is now compact: normal results show only **Exclusion-aware source scan · date/time** or **Latest backup · date/time**. Source count, **high quality** and **observed from the latest Borg run** are removed; real limitations remain visible with their cause.
+- Every physical Borg repository now has exactly one fixed execution slot. The former repository setting **Maximum parallel backup runs** was removed from the WebUI, API, data model and current documentation because Borg already serializes writing operations on the same repository.
+- Mount limits independently control different repositories on the same filesystem. With a mount limit of `2`, two different repositories may run concurrently and a third waits. Runs targeting the same repository always remain serialized.
+- Unneeded progress-history and observed per-source-statistics helpers were removed. Live status retains only the latest Borg progress frame; the fixed remaining-time calculation and current-source display require no rolling history.
+- The project audit now also verifies pre-`stat()` exclusion checks, fixed repository exclusivity, removal of the old repository parallelism setting, compact source-statistics output and absence of obsolete progress-history logic.
+
 ## v1.1.3 – 27.07.2026
 
 ### Unified modern button design

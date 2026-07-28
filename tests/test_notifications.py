@@ -14,7 +14,8 @@ from app import notifications
 def _reset_notification_state() -> None:
     notifications.NOTIFICATION_SETTINGS_PATH.unlink(missing_ok=True)
     notifications.HEALTH_NOTIFICATION_STATE_PATH.unlink(missing_ok=True)
-    from app.security_store import delete_secret
+    from app.security_store import delete_secret, initialize_security_store
+    initialize_security_store("test-token")
     for name in (
         notifications.SMTP_PASSWORD_SECRET,
         notifications.WEBHOOK_URL_SECRET,

@@ -33,7 +33,7 @@ cleanup_runtime() {
 trap cleanup_runtime EXIT
 
 BBM_DATA_DIR="$runtime_dir" \
-BBM_DATABASE_URL="sqlite://" \
+BBM_DATABASE_URL="sqlite:///$runtime_dir/test.db" \
 BBM_ADMIN_TOKEN="${BBM_ADMIN_TOKEN:-test-token}" \
 BBM_ALLOW_LEGACY_TOKEN_AUTH="${BBM_ALLOW_LEGACY_TOKEN_AUTH:-1}" \
 pytest -q

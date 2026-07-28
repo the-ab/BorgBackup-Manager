@@ -61,7 +61,6 @@ def migrate_schema(target_engine=engine) -> None:
             "external_storage_path": "VARCHAR(500)",
             "external_storage_checked_at": "DATETIME",
             "external_storage_error": "TEXT",
-            "parallel_limit": "INTEGER NOT NULL DEFAULT 1",
         },
         "jobs": {
             "archive_prefix": "VARCHAR(80)",

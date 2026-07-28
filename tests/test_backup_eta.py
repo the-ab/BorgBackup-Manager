@@ -1,23 +1,11 @@
+import json
+
 from app.backup_eta import (
     ASSUMED_TRANSFER_BYTES_PER_SECOND,
     estimate_fixed_baseline_remaining,
-    observed_source_statistics,
     source_for_archive_path,
+    source_stats_limitations,
 )
-
-
-def _history(points):
-    return [
-        {
-            "timestamp": float(ts),
-            "original_bytes": int(original),
-            "files": int(files),
-            "deduplicated_bytes": int(dedup),
-            "compressed_bytes": int(original * 0.8),
-            "path": path,
-        }
-        for ts, original, files, dedup, path in points
-    ]
 
 
 def test_source_matching_prefers_longest_configured_source():
@@ -25,22 +13,6 @@ def test_source_matching_prefers_longest_configured_source():
     assert source_for_archive_path("mnt/nas/projects/a.bin", sources) == "/mnt/nas/projects"
     assert source_for_archive_path("mnt/nas/other.bin", sources) == "/mnt/nas"
     assert source_for_archive_path("etc/hosts", sources) == "/"
-
-
-def test_observed_source_statistics_scale_current_run_distribution_to_exact_borg_totals():
-    history = _history([
-        (0, 1000, 10, 10, "srv/a"),
-        (30, 4000, 40, 20, "srv/b"),
-        (60, 7000, 70, 40, "mnt/nas/c"),
-        (90, 9000, 90, 60, "mnt/nas/d"),
-    ])
-    detail = observed_source_statistics(
-        history, ["/srv", "/mnt/nas"], final_total_bytes=10_000, final_total_files=100,
-    )
-    assert detail["quality"] == "observed"
-    assert sum(item["size_bytes"] for item in detail["sources"]) == 10_000
-    assert sum(item["file_count"] for item in detail["sources"]) == 100
-    assert detail["sources"][0]["size_bytes"] > detail["sources"][1]["size_bytes"]
 
 
 def test_fixed_eta_uses_frozen_bytes_and_nominal_1g_assumption():
@@ -148,3 +120,23 @@ def test_current_source_is_derived_from_current_path_only():
     assert "current_source_percent" not in result
     assert "completed_source_count" not in result
     assert "total_source_count" not in result
+
+
+def test_source_statistics_hide_normal_quality_and_expose_only_real_limitations():
+    assert source_stats_limitations(json.dumps({"quality": "high", "scan_method": "python-borg-excludes"})) == []
+    assert source_stats_limitations(json.dumps({"quality": "observed"})) == []
+    assert source_stats_limitations(json.dumps({"quality": "high", "warning_count": 1})) == [
+        {"code": "read-warnings", "count": 1},
+    ]
+    assert source_stats_limitations(json.dumps({
+        "quality": "partial",
+        "scan_method": "find-stat-fallback",
+        "unsupported_patterns": ["re:("],
+        "nodump_supported": False,
+        "warning_count": 2,
+    })) == [
+        {"code": "fallback"},
+        {"code": "unsupported-patterns", "count": 1},
+        {"code": "nodump-unavailable"},
+        {"code": "read-warnings", "count": 2},
+    ]

@@ -179,13 +179,16 @@ def test_live_dialog_exposes_manager_network_and_direct_stop_controls():
     assert '.bbm-network-chip' in style
 
 
-def test_repository_and_mount_parallel_limit_controls_are_present():
+def test_repository_is_fixed_exclusive_and_mount_parallel_controls_are_present():
     index = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
     script = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
-    assert 'name="parallel_limit"' in index
+    assert 'Maximal parallele Backup-Läufe' not in index
     assert 'id="mount-parallel-editor"' in index
     assert 'mount_parallel_limits: collectMountParallelLimits()' in script
-    assert 'repo.parallel_limit || 1' in script
+    assert 'external_storage_parallel_limits: collectExternalStorageParallelLimits()' in script
+    assert 'Externe Repository-Dateisysteme' in script
+    assert 'repo.parallel_limit' not in script
+    assert 'Parallel: Repository exklusiv' in script
 
 
 def test_live_dialog_keeps_stop_and_close_controls_in_fixed_slots():
@@ -242,3 +245,9 @@ def test_run_delete_action_is_centralized_and_dashboard_receives_retention_prote
     assert 'retention_protected=run.id in protected_run_ids' in backend
     assert "row.id in retained_run_ids_for_existing_jobs(db)" in backend
 
+
+
+def test_archive_duration_and_file_columns_have_separate_minimum_widths():
+    style = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    assert "minmax(11rem, 1.35fr) minmax(8.5rem, .9fr)" in style
+    assert "column-gap: 1.25rem" in style

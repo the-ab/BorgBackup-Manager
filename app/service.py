@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
+from collections import deque
 from collections.abc import Callable
 
 from sqlalchemy import select
@@ -18,11 +19,10 @@ from app.borg_stats import merge_archive_statistics, parse_archive_listing, pars
 from app.archive_metadata import sort_archives_newest_first
 from app.borg_progress import (
     BorgItemActivityStreamFilter, BorgNetworkStreamFilter, BorgProgressStreamFilter,
-    clear_run_live_activity, clear_run_progress, get_run_network_activity, get_run_progress_history, set_run_item_activity,
+    clear_run_live_activity, clear_run_progress, get_run_network_activity, set_run_item_activity,
     set_run_network_activity, set_run_progress,
 )
 from app.backup_stats import parse_backup_statistics, parse_source_scan_statistics
-from app.backup_eta import observed_source_statistics
 from app.borg_warnings import BorgWarningCollector, unresolved_warning_summary
 from app.config import (
     REPOSITORY_AUTHORIZED_KEYS_PATH,
@@ -32,6 +32,9 @@ from app.config import (
     REPOSITORY_SSH_PORT,
 )
 from app.database import SessionLocal
+from app.debug_logging import (
+    detail_requires_debug_log, log_unexpected_exception, public_error_message,
+)
 from app.models import ArchiveMount, BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, Repository, Run
 from app.repository_sizes import (
     managed_repository_filesystem_size, repository_statistics_from_borg_info,
@@ -69,7 +72,10 @@ from app.runner import (
     rename_archive_command,
     restore_command,
 )
-from app.external_repository import generate_ed25519_keypair, storage_probe_target_from_location
+from app.external_repository import (
+    external_filesystem_parallel_identity, generate_ed25519_keypair,
+    storage_probe_target_from_location,
+)
 from app.vault import get_system_secret, set_repository_secret, set_system_secret
 from app.log_filter import extract_error_output, strip_borg_item_lines
 from app.notifications import notify_run_completion
@@ -134,8 +140,8 @@ _initializing_repositories: set[int] = set()
 _active_run_lock = Lock()
 _active_run_tasks: dict[int, asyncio.Task] = {}
 _executing_run_ids: set[int] = set()
-_repository_locks: dict[tuple[int, str], tuple[int, asyncio.Semaphore]] = {}
-_mount_locks: dict[tuple[int, str], tuple[int, asyncio.Semaphore]] = {}
+_repository_locks: dict[tuple[int, str], "_AdjustableCapacity"] = {}
+_mount_locks: dict[tuple[int, str], "_AdjustableCapacity"] = {}
 _manager_borg_locks: dict[tuple[int, int], asyncio.Lock] = {}
 _run_claim_lock = Lock()
 _repository_chain_lock = Lock()
@@ -399,18 +405,17 @@ def _execution_mounts(*, max_age_seconds: float = 1.0) -> list[Path]:
         return list(mounts)
 
 
-def _repository_parallel_limit(repository: Repository | None) -> int:
-    try:
-        return max(1, min(64, int(repository.parallel_limit or 1))) if repository is not None else 1
-    except (TypeError, ValueError):
-        return 1
-
-
 def _repository_mount_key(repository: Repository | None, *, mounts=None) -> str | None:
-    if repository is None or not repository.storage_path:
+    """Return the managed or external filesystem parallelism group key."""
+    if repository is None:
         return None
-    mount = repository_mount_path(repository.storage_path, REPOSITORY_ROOT, mounts=mounts)
-    return str(mount) if mount is not None else None
+    if repository.storage_path:
+        mount = repository_mount_path(repository.storage_path, REPOSITORY_ROOT, mounts=mounts)
+        return str(mount) if mount is not None else None
+    identity = external_filesystem_parallel_identity(
+        repository.location, repository.external_storage_path
+    )
+    return identity[0] if identity else None
 
 
 def _mount_parallel_limit(mount_key: str | None, settings=None) -> int:
@@ -418,7 +423,12 @@ def _mount_parallel_limit(mount_key: str | None, settings=None) -> int:
         return 0
     active_settings = settings or load_settings()
     try:
-        return max(0, min(64, int((active_settings.mount_parallel_limits or {}).get(mount_key, 0))))
+        limits = (
+            active_settings.external_storage_parallel_limits
+            if mount_key.startswith("external:")
+            else active_settings.mount_parallel_limits
+        )
+        return max(0, min(64, int((limits or {}).get(mount_key, 0))))
     except (AttributeError, TypeError, ValueError):
         return 0
 
@@ -432,30 +442,99 @@ def _source_stats_parallel_limit(settings=None) -> int:
         return 1
 
 
-def _capacity_semaphore(cache, key: tuple[int, str], limit: int) -> asyncio.Semaphore:
-    entry = cache.get(key)
-    if entry is not None:
-        old_limit, semaphore = entry
-        waiters = getattr(semaphore, "_waiters", None)
-        idle = getattr(semaphore, "_value", 0) == old_limit and not waiters
-        if old_limit == limit or not idle:
-            return semaphore
-    semaphore = asyncio.Semaphore(limit)
-    cache[key] = (limit, semaphore)
-    return semaphore
+class _AdjustableCapacity:
+    """Small event-loop-local capacity limiter whose limit can change live.
+
+    ``asyncio.Semaphore`` cannot be resized safely.  The previous cache kept an
+    old semaphore until it became completely idle; with a continuous queue a
+    mount changed from 1 to 2 therefore remained stuck at 1 indefinitely.
+    This limiter tracks occupied slots explicitly, applies increases
+    immediately and lets decreases take effect as soon as active users leave.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self._limit = max(1, int(limit))
+        self._in_use = 0
+        self._waiters: deque[asyncio.Future[bool]] = deque()
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    @property
+    def in_use(self) -> int:
+        return self._in_use
+
+    def set_limit(self, limit: int) -> None:
+        self._limit = max(1, int(limit))
+        self._wake_waiters()
+
+    async def acquire(self) -> bool:
+        if self._in_use < self._limit and not self._waiters:
+            self._in_use += 1
+            return True
+        loop = asyncio.get_running_loop()
+        waiter: asyncio.Future[bool] = loop.create_future()
+        self._waiters.append(waiter)
+        self._wake_waiters()
+        try:
+            await waiter
+            return True
+        except BaseException:
+            if waiter.done() and not waiter.cancelled():
+                # The slot was already reserved by _wake_waiters().
+                self._in_use = max(0, self._in_use - 1)
+                self._wake_waiters()
+            else:
+                try:
+                    self._waiters.remove(waiter)
+                except ValueError:
+                    pass
+                waiter.cancel()
+            raise
+
+    def release(self) -> None:
+        if self._in_use <= 0:
+            raise ValueError("capacity limiter released too many times")
+        self._in_use -= 1
+        self._wake_waiters()
+
+    def _wake_waiters(self) -> None:
+        while self._in_use < self._limit and self._waiters:
+            waiter = self._waiters.popleft()
+            if waiter.done():
+                continue
+            self._in_use += 1
+            waiter.set_result(True)
 
 
-def _repository_lock(repository_id: int | None) -> asyncio.Semaphore | None:
+def _capacity_semaphore(cache, key: tuple[int, str], limit: int) -> _AdjustableCapacity:
+    limiter = cache.get(key)
+    if limiter is None:
+        limiter = _AdjustableCapacity(limit)
+        cache[key] = limiter
+    else:
+        limiter.set_limit(limit)
+    return limiter
+
+
+def _repository_lock(repository_id: int | None) -> _AdjustableCapacity | None:
+    """Return the runtime lock for one repository database record.
+
+    Persisted runs are serialized by the atomic queue planner using the stable
+    physical repository key.  This additional lock only coordinates a queued
+    run with direct interactive calls for the same repository record.  Keying
+    it by the database ID prevents two distinct repositories on one filesystem
+    from being accidentally collapsed by path canonicalization before the
+    queue planner can apply the configured mount parallelism.
+    """
     if repository_id is None:
         return None
     loop = asyncio.get_running_loop()
     with SessionLocal() as db:
-        repository = db.get(Repository, repository_id)
-        if repository is None:
+        if db.get(Repository, repository_id) is None:
             return None
-        key = (id(loop), _repository_execution_key(repository, repository_id))
-        limit = _repository_parallel_limit(repository)
-    return _capacity_semaphore(_repository_locks, key, limit)
+    return _capacity_semaphore(_repository_locks, (id(loop), f"repository-id:{repository_id}"), 1)
 
 
 def _manager_borg_lock(repository_id: int | None) -> asyncio.Lock | None:
@@ -463,7 +542,7 @@ def _manager_borg_lock(repository_id: int | None) -> asyncio.Lock | None:
 
     Backup jobs run Borg on the source client and do not use this lock. Manager
     operations such as info/list/prune/compact share /data/borg-cache and must
-    never overlap for one repository, regardless of its backup parallel limit.
+    never overlap for one repository.
     """
     if repository_id is None:
         return None
@@ -494,7 +573,7 @@ def _cleanup_external_manager_cache_locks(repository_id: int | None) -> dict[str
     return clear_repository_manager_cache_locks(repository)
 
 
-def _mount_lock(repository_id: int | None) -> asyncio.Semaphore | None:
+def _mount_lock(repository_id: int | None) -> _AdjustableCapacity | None:
     if repository_id is None:
         return None
     loop = asyncio.get_running_loop()
@@ -509,38 +588,42 @@ def _mount_lock(repository_id: int | None) -> asyncio.Semaphore | None:
     return _capacity_semaphore(_mount_locks, (id(loop), mount_key), limit)
 
 
+async def _acquire_mount_capacity(repository_id: int | None) -> _AdjustableCapacity | None:
+    """Acquire mount capacity while reloading live limit changes.
+
+    A task may already be waiting when an administrator raises a mount limit.
+    Re-resolving every 250 ms applies the new value immediately instead of
+    requiring the entire mount queue to drain first.  Setting the limit to 0
+    also releases the task from mount limiting on the next refresh.
+    """
+    while True:
+        limiter = _mount_lock(repository_id)
+        if limiter is None:
+            return None
+        try:
+            await asyncio.wait_for(limiter.acquire(), timeout=0.25)
+            return limiter
+        except TimeoutError:
+            continue
 
 
-async def _acquire_repository_exclusive(repository_id: int) -> tuple[asyncio.Semaphore, int]:
-    """Acquire every configured repository permit for destructive maintenance."""
+async def _acquire_repository_exclusive(repository_id: int) -> tuple[_AdjustableCapacity, int]:
+    """Acquire the single repository execution slot for maintenance."""
     semaphore = _repository_lock(repository_id)
     if semaphore is None:
         raise LookupError("Repository not found")
-    with SessionLocal() as db:
-        repository = db.get(Repository, repository_id)
-        permits = _repository_parallel_limit(repository)
-    acquired = 0
-    try:
-        for _ in range(permits):
-            await semaphore.acquire()
-            acquired += 1
-        return semaphore, acquired
-    except BaseException:
-        for _ in range(acquired):
-            semaphore.release()
-        raise
+    await semaphore.acquire()
+    return semaphore, 1
 
 
-def _release_repository_exclusive(semaphore: asyncio.Semaphore, permits: int) -> None:
+def _release_repository_exclusive(semaphore: _AdjustableCapacity, permits: int) -> None:
     for _ in range(max(0, permits)):
         semaphore.release()
 
 def _repository_run_blocker(run_id: int, repository_id: int) -> int | None:
-    """Return an earlier same-repository run when its configured capacity is full."""
+    """Return the earlier run that owns the repository's single Borg slot."""
     execution_key = _repository_execution_key_by_id(repository_id)
     with SessionLocal() as db:
-        repository = db.get(Repository, repository_id)
-        limit = _repository_parallel_limit(repository)
         rows = db.scalars(
             select(Run)
             .options(joinedload(Run.repository))
@@ -552,7 +635,7 @@ def _repository_run_blocker(run_id: int, repository_id: int) -> int | None:
             if _repository_execution_key(row.repository, row.repository_id) == execution_key
             and (row.status == "running" or row.id < run_id)
         ]
-        return min(blockers) if len(blockers) >= limit else None
+        return min(blockers) if blockers else None
 
 
 
@@ -571,9 +654,9 @@ def _execution_plan(
     """Return queued runs allowed to start now and a reason for blocked runs.
 
     Capacity is evaluated in run-ID order across four independent layers:
-    global, schedule, physical Borg repository and the underlying managed mount.
-    This prevents several repositories on one NFS/disk mount from bypassing a
-    storage-level concurrency limit while preserving per-repository controls.
+    global, schedule, the physical Borg repository and the underlying managed
+    mount. Every Borg repository has exactly one execution slot; mount limits
+    control parallel work only across different repositories on that mount.
     """
     rows = db.scalars(
         select(Run)
@@ -602,7 +685,6 @@ def _execution_plan(
     mounts = _execution_mounts()
     chain_reservations, run_chain_tokens = _repository_chain_snapshot()
 
-    repository_limits: dict[str, int] = {}
     mount_limits: dict[str, int] = {}
     row_repository_keys: dict[int, str | None] = {}
     row_mount_keys: dict[int, str | None] = {}
@@ -612,10 +694,6 @@ def _execution_plan(
             if row.repository_id is not None and row.action != "source-stats" else None
         )
         row_repository_keys[row.id] = repository_key
-        if repository_key:
-            limit = _repository_parallel_limit(row.repository)
-            previous = repository_limits.get(repository_key)
-            repository_limits[repository_key] = min(previous, limit) if previous else limit
         mount_key = (
             _repository_mount_key(row.repository, mounts=mounts)
             if row.action != "source-stats" else None
@@ -627,7 +705,6 @@ def _execution_plan(
                 mount_limits[mount_key] = limit
 
     repository_occupants: dict[str, list[int]] = {}
-    repository_exclusive: dict[str, bool] = {}
     mount_occupants: dict[str, list[int]] = {}
     schedule_occupants: dict[str, list[int]] = {}
     schedule_limits: dict[str, int] = {}
@@ -641,8 +718,6 @@ def _execution_plan(
         repository_key = row_repository_keys.get(row.id)
         if repository_key:
             repository_occupants.setdefault(repository_key, []).append(row.id)
-            if row.action != "backup":
-                repository_exclusive[repository_key] = True
         mount_key = row_mount_keys.get(row.id)
         if mount_key and mount_key in mount_limits:
             mount_occupants.setdefault(mount_key, []).append(row.id)
@@ -671,17 +746,10 @@ def _execution_plan(
                 }
                 continue
         repository_blockers = repository_occupants.get(repository_key, []) if repository_key else []
-        repository_limit = repository_limits.get(repository_key, 1) if repository_key else 0
-        repository_is_exclusive = row.action != "backup"
-        repository_busy_exclusive = repository_exclusive.get(repository_key, False) if repository_key else False
-        if repository_key and (
-            repository_busy_exclusive
-            or (repository_is_exclusive and repository_blockers)
-            or (not repository_is_exclusive and len(repository_blockers) >= repository_limit)
-        ):
+        if repository_key and repository_blockers:
             blockers[row.id] = {
                 "kind": "repository", "blocker_id": min(repository_blockers),
-                "limit": (1 if repository_is_exclusive or repository_busy_exclusive else repository_limit),
+                "limit": 1,
                 "repository": row.repository.name if row.repository else "Repository",
             }
             continue
@@ -727,8 +795,6 @@ def _execution_plan(
             source_stats_occupants.append(row.id)
         if repository_key:
             repository_occupants.setdefault(repository_key, []).append(row.id)
-            if repository_is_exclusive:
-                repository_exclusive[repository_key] = True
         if mount_key and mount_limit > 0:
             mount_occupants.setdefault(mount_key, []).append(row.id)
         if schedule_key:
@@ -762,12 +828,12 @@ def _queue_message(reason: dict[str, int | str] | None) -> str:
     wait_target = f"Ausführung #{blocker}" if blocker else "freie Kapazität"
     if reason.get("kind") == "repository":
         return (
-            f"WARTESCHLANGE: Repository „{reason.get('repository', 'Repository')}“ erlaubt maximal "
-            f"{reason.get('limit', 1)} parallele Ausführung(en); warte auf {wait_target}."
+            f"WARTESCHLANGE: Repository „{reason.get('repository', 'Repository')}“ wird bereits von "
+            f"{wait_target} verwendet; Borg erlaubt dort nur einen schreibenden Lauf gleichzeitig."
         )
     if reason.get("kind") == "mount":
         return (
-            f"WARTESCHLANGE: Mount „{reason.get('mount', '/repositories')}“ erlaubt maximal "
+            f"WARTESCHLANGE: Repository-Dateisystem „{reason.get('mount', '/repositories')}“ erlaubt maximal "
             f"{reason.get('limit', 1)} parallele Ausführung(en); warte auf {wait_target}."
         )
     if reason.get("kind") == "schedule":
@@ -817,13 +883,13 @@ async def _wait_for_repository_turn(run_id: int, repository_id: int | None) -> b
 
 async def execute_interactive(repository_id: int | None, command: Command) -> tuple[int, str, str]:
     """Execute an interactive command under repository and manager-cache limits."""
-    mount_lock = _mount_lock(repository_id)
+    mount_lock = None
     repository_lock = _repository_lock(repository_id)
     manager_lock = _manager_borg_lock(command.manager_cache_repository_id)
     mount_acquired = repository_acquired = manager_acquired = False
     try:
-        if mount_lock:
-            await mount_lock.acquire(); mount_acquired = True
+        mount_lock = await _acquire_mount_capacity(repository_id)
+        mount_acquired = mount_lock is not None
         if repository_lock:
             await repository_lock.acquire(); repository_acquired = True
         if manager_lock:
@@ -940,6 +1006,14 @@ async def refresh_external_repository_storage(repository_id: int) -> dict:
     code, output, error = await execute(command, capture_limit_bytes=64 * 1024)
     if code != 0:
         message = _external_storage_error_text(output, error, code)
+        technical = "\n".join(part for part in (output, error) if part).strip()
+        if detail_requires_debug_log(technical):
+            error_id = log_unexpected_exception(
+                f"External filesystem probe for repository {repository_id} returned technical output",
+                detail=technical,
+                logger_name="bbm.background",
+            )
+            message += f" Technische Details: Debug-Log, Fehler-ID {error_id}."
         _store_external_storage_error(repository_id, message)
         raise ValueError(message)
     try:
@@ -1038,7 +1112,11 @@ async def refresh_repository_statistics(repository_id: int) -> dict[str, int | N
             external_storage = None
     code, output, error = await execute_interactive(repository_id, command)
     if code not in {0, 1}:
-        raise ValueError(error.strip() or output.strip() or f"Borg exit code {code}")
+        summary, _details = compact_repository_diagnostic(output, error, code)
+        raise ValueError(_repository_command_error_summary(
+            f"Repository statistics refresh for repository {repository_id} returned technical Borg output",
+            summary, output, error,
+        ))
     statistics = repository_statistics_from_borg_info(output)
     stored = store_repository_statistics(
         repository_id,
@@ -1082,6 +1160,7 @@ async def _execute_run_inner(
     pending_stdout: list[str] = []
     pending_warning_summary_json: str | None = None
     pending_borg_version: str | None = None
+    technical_error_id: str | None = None
     version_probe_bytes = bytearray()
     backup_preview_filter = _BackupSqlitePreviewFilter() if action == "backup" else None
     warning_collector = BorgWarningCollector(max_items=100) if action == "backup" else None
@@ -1195,10 +1274,9 @@ async def _execute_run_inner(
         # provide decoded strings. The built-in runner uses append_output_bytes.
         await append_output_bytes(stream, text.encode("utf-8", errors="replace"))
 
-    mount_lock = None
     repository_lock = None
     manager_lock = _manager_borg_lock(command.manager_cache_repository_id)
-    mount_acquired = repository_acquired = manager_acquired = False
+    repository_acquired = manager_acquired = False
     external_storage_monitor_task: asyncio.Task[None] | None = None
     external_storage_abort_event: asyncio.Event | None = None
     external_storage_abort_state: dict[str, str] = {}
@@ -1210,37 +1288,29 @@ async def _execute_run_inner(
                 current = db.get(Run, run_id)
                 if not current or current.status != "queued":
                     return
-            # Re-resolve both capacities on every queue attempt so a remounted
-            # NFS target or a changed limit is picked up before the run starts.
-            if action == "source-stats":
-                # Source statistics only read the configured source device. They
-                # consume global/source-scan capacity but must not reserve a
-                # Borg repository or its storage mount.
-                mount_lock = None
-                repository_lock = None
-            else:
-                mount_lock = _mount_lock(repository_id)
-                repository_lock = _repository_lock(repository_id)
-            if mount_lock:
-                await mount_lock.acquire()
-                mount_acquired = True
-            if repository_lock:
-                await repository_lock.acquire()
-                repository_acquired = True
+            # The database-backed planner is the single admission controller
+            # for persisted runs.  Older releases reserved a process-local mount
+            # slot before asking the planner, effectively applying mount limits
+            # twice and allowing a stale/incorrect limiter to keep a second job
+            # queued even when the configured mount limit was 2.
             claimed, reason = _claim_execution_turn(run_id)
             if claimed:
                 break
-            if repository_lock and repository_acquired:
-                repository_lock.release()
-                repository_acquired = False
-            if mount_lock and mount_acquired:
-                mount_lock.release()
-                mount_acquired = False
             message = _queue_message(reason)
             if message != last_queue_message:
                 log_writer.append(message + "\n")
                 last_queue_message = message
             await asyncio.sleep(0.25)
+
+        # Repository locking remains as a physical safety net against direct
+        # interactive operations that do not use the persisted queue.  It is
+        # acquired only after the queue slot has been claimed, so an invisible
+        # process-local lock can no longer leave the run displayed as queued.
+        if action != "source-stats":
+            repository_lock = _repository_lock(repository_id)
+            if repository_lock:
+                await repository_lock.acquire()
+                repository_acquired = True
         if manager_lock:
             await manager_lock.acquire()
             manager_acquired = True
@@ -1405,14 +1475,23 @@ async def _execute_run_inner(
         # occur before the subprocess has been created.
         code, output, error, status = 130, "", "Execution cancelled by user", "cancelled"
     except Exception as exc:
-        code, output, error, status = 255, "", str(exc), "failed"
+        error_id = log_unexpected_exception(
+            f"Execution #{run_id} failed unexpectedly",
+            exc=exc,
+            logger_name="bbm.run",
+        )
+        code, output, error, status = 255, "", public_error_message(error_id), "failed"
     finally:
         try:
             await flush_output(force=True)
-        except Exception:
+        except Exception as exc:
             # The file-backed log remains authoritative even if a final SQLite
             # preview update fails during shutdown or cancellation.
-            pass
+            log_unexpected_exception(
+                f"Final SQLite preview update for execution #{run_id} failed",
+                exc=exc,
+                logger_name="bbm.run",
+            )
         if external_storage_monitor_task is not None:
             external_storage_monitor_task.cancel()
             await asyncio.gather(external_storage_monitor_task, return_exceptions=True)
@@ -1423,8 +1502,14 @@ async def _execute_run_inner(
             manager_lock.release()
         if repository_lock and repository_acquired:
             repository_lock.release()
-        if mount_lock and mount_acquired:
-            mount_lock.release()
+
+    technical_stream = "\n".join(part for part in (output, error) if part).strip()
+    if detail_requires_debug_log(technical_stream):
+        technical_error_id = log_unexpected_exception(
+            f"Borg execution #{run_id} returned traceback/technical output",
+            detail=technical_stream,
+            logger_name="bbm.run",
+        )
 
     # Invalidate before publishing the terminal run status. The browser follows
     # that status and may request the archive list immediately afterwards.
@@ -1459,6 +1544,16 @@ async def _execute_run_inner(
             clean_source = output if action == "backup" else (run.output or output)
             clean_output = strip_borg_item_lines(clean_source)[-stdout_tail_bytes:]
             filtered_error = strip_borg_item_lines(extract_error_output(error))[-stderr_tail_bytes:]
+            if technical_error_id:
+                if detail_requires_debug_log(filtered_error):
+                    filtered_error = public_error_message(technical_error_id)
+                elif filtered_error:
+                    filtered_error = (
+                        filtered_error.rstrip()
+                        + f"\nTechnische Details: Debug-Log, Fehler-ID {technical_error_id}."
+                    )[-stderr_tail_bytes:]
+                else:
+                    filtered_error = public_error_message(technical_error_id)
             run.output = clean_output
             run.error = filtered_error
             preview_parts = [part for part in (clean_output, filtered_error) if part]
@@ -1502,27 +1597,20 @@ async def _execute_run_inner(
                     job.source_stats_origin = "backup" if action == "backup" else "scan"
                     if action == "source-stats":
                         job.source_stats_detail_json = json.dumps({
-                            "version": 1,
+                            "version": 2,
                             "quality": statistics.get("quality") or "partial",
                             "scan_method": statistics.get("scan_method"),
-                            "sources": statistics.get("sources") or [],
-                            "excluded_file_count": statistics.get("excluded_file_count") or 0,
-                            "excluded_size_bytes": statistics.get("excluded_size_bytes") or 0,
+                            "warning_count": statistics.get("warning_count") or 0,
+                            "path_excluded_count": statistics.get("path_excluded_count") or 0,
                             "unsupported_patterns": statistics.get("unsupported_patterns") or [],
+                            "nodump_supported": statistics.get("nodump_supported"),
                             "checked_at": datetime.now(timezone.utc).isoformat(),
                         }, ensure_ascii=False, separators=(",", ":"))
                     elif action == "backup":
-                        observed = observed_source_statistics(
-                            get_run_progress_history(run_id),
-                            json.loads(job.source_paths_json or "[]"),
-                            final_total_bytes=statistics.get("original_size_bytes"),
-                            final_total_files=statistics.get("file_count"),
-                        )
-                        if observed:
-                            observed["checked_at"] = datetime.now(timezone.utc).isoformat()
-                            job.source_stats_detail_json = json.dumps(
-                                observed, ensure_ascii=False, separators=(",", ":")
-                            )
+                        # A successful Borg run supplies the new total baseline.
+                        # Scan-specific limitation metadata from an older manual
+                        # refresh must not remain attached to that fresh backup.
+                        job.source_stats_detail_json = "{}"
             if terminal_db_hook is not None:
                 terminal_db_hook(db, run, status)
             run.finished_at = datetime.now(timezone.utc)
@@ -1660,11 +1748,16 @@ async def execute_repository_init(run_id: int, repository_id: int, command: Comm
                     if key_path:
                         key_path.unlink(missing_ok=True)
         except Exception as exc:
+            error_id = log_unexpected_exception(
+                f"Repository initialization finalization for execution #{run_id} failed",
+                exc=exc,
+                logger_name="bbm.run",
+            )
             with SessionLocal() as db:
                 run = db.get(Run, run_id)
                 if run:
                     run.status = "failed"
-                    run.error = str(exc)
+                    run.error = public_error_message(error_id)
                     run.finished_at = datetime.now(timezone.utc)
                     db.commit()
     finally:
@@ -1856,6 +1949,18 @@ def queue_host_ssh_action(action_id: int) -> int:
 
 
 
+def _repository_command_error_summary(
+    context: str, summary: str, output: str, error: str,
+) -> str:
+    technical = "\n".join(part for part in (output, error) if part).strip()
+    if not detail_requires_debug_log(technical):
+        return summary
+    error_id = log_unexpected_exception(
+        context, detail=technical, logger_name="bbm.run",
+    )
+    return f"{summary} Technische Details: Debug-Log, Fehler-ID {error_id}."
+
+
 async def execute_repository_archive_refresh(
     run_id: int,
     repository_id: int,
@@ -1905,7 +2010,10 @@ async def execute_repository_archive_refresh(
         info_code, info_output, info_error = await execute_interactive(repository_id, info_command)
         if info_code not in {0, 1}:
             diagnostic, _details = compact_repository_diagnostic(info_output, info_error, info_code)
-            raise ValueError(diagnostic)
+            raise ValueError(_repository_command_error_summary(
+                f"Archive scan execution #{run_id} received technical Borg output",
+                diagnostic, info_output, info_error,
+            ))
         normalized = parse_borg_info(info_output + "\n" + info_error)
         repository_statistics = normalized.get("repository", {})
         archives = normalized.get("archives", [])
@@ -1928,7 +2036,10 @@ async def execute_repository_archive_refresh(
             list_code, list_output, list_error = await execute_interactive(repository_id, list_command)
             if list_code not in {0, 1}:
                 diagnostic, _details = compact_repository_diagnostic(list_output, list_error, list_code)
-                raise ValueError(diagnostic)
+                raise ValueError(_repository_command_error_summary(
+                    f"Archive list execution #{run_id} received technical Borg output",
+                    diagnostic, list_output, list_error,
+                ))
             listed = parse_archive_listing(list_output + "\n" + list_error)
             archives = merge_archive_statistics(listed, archives)
             final_code = max(final_code, list_code)
@@ -1936,6 +2047,12 @@ async def execute_repository_archive_refresh(
         archives = sort_archives_newest_first(archives)
         dataset = {"repository_statistics": repository_statistics, "archives": archives}
         cached = store_archive_cache(repository_id, consider_checkpoints, dataset)
+        # The normal repository-wide ``borg info`` output already includes
+        # checkpoint archives on supported Borg versions.  Keep the explicit
+        # checkpoint cache in sync when such entries are detected so selecting
+        # a checkpoint for restore does not require a redundant second scan.
+        if not consider_checkpoints and any(bool(item.get("checkpoint")) for item in archives):
+            store_archive_cache(repository_id, True, dataset)
         if repository_statistics.get("deduplicated_size") is not None:
             store_repository_statistics(
                 repository_id,
@@ -1963,9 +2080,18 @@ async def execute_repository_archive_refresh(
         status = "cancelled"
         error_text = "Archivscan wurde vor dem Start abgebrochen."
         append_run_log(run_id, f"ABBRUCH: {error_text}\n", max_log_bytes)
-    except Exception as exc:
+    except (LookupError, ValueError) as exc:
         status = "failed"
         error_text = str(exc)
+        append_run_log(run_id, f"FEHLER: {error_text}\n", max_log_bytes)
+    except Exception as exc:
+        status = "failed"
+        error_id = log_unexpected_exception(
+            f"Archive scan execution #{run_id} failed unexpectedly",
+            exc=exc,
+            logger_name="bbm.run",
+        )
+        error_text = public_error_message(error_id)
         append_run_log(run_id, f"FEHLER: {error_text}\n", max_log_bytes)
     finally:
         with SessionLocal() as db:
@@ -2278,6 +2404,15 @@ async def _wait_for_run(run_id: int) -> str:
                 return run.status
 
 
+def _background_error_message(context: str, exc: BaseException) -> str:
+    if isinstance(exc, (LookupError, ValueError)):
+        return str(exc)
+    error_id = log_unexpected_exception(
+        context, exc=exc, logger_name="bbm.background",
+    )
+    return public_error_message(error_id)
+
+
 def _record_schedule_error(
     job_id: int,
     message: str,
@@ -2367,11 +2502,15 @@ async def _finish_manual_backup_chain(
             )
             await _wait_for_run(compact_run)
     except Exception as exc:
-        # The backup run already exists and remains authoritative. Preserve an
-        # actionable note if a follow-up action could not even be queued.
+        # Keep expected queue/validation errors actionable. Unexpected failures
+        # receive a short public reference while the complete traceback stays
+        # in debug.log.
+        detail = _background_error_message(
+            f"Manual backup maintenance chain after execution #{backup_run_id} failed", exc,
+        )
         append_run_log(
             backup_run_id,
-            f"\nNACHBEREITUNG FEHLER: {exc}\n",
+            f"\nNACHBEREITUNG FEHLER: {detail}\n",
             load_settings().run_log_max_mib * 1024 * 1024,
         )
     finally:
@@ -2453,7 +2592,7 @@ async def _scheduled_backup_group(
         except Exception as exc:
             failed_run_id = _record_schedule_error(
                 job_id,
-                str(exc),
+                _background_error_message(f"Scheduled backup queueing failed for job {job_id}", exc),
                 schedule_name,
                 schedule_id=schedule_id,
                 schedule_parallel_limit=schedule_parallel_limit,
@@ -2485,9 +2624,10 @@ async def _scheduled_backup_group(
             prune_runs[job_id] = queue_job_action(job_id, "prune", **queue_kwargs)
             prune_repository[job_id] = repository_id
         except Exception as exc:
+            detail = _background_error_message(f"Scheduled prune queueing failed for job {job_id}", exc)
             failed_run_id = _record_schedule_error(
                 job_id,
-                f"Prune konnte nicht gestartet werden: {exc}",
+                f"Prune konnte nicht gestartet werden: {detail}",
                 schedule_name,
                 schedule_id=schedule_id,
                 schedule_parallel_limit=schedule_parallel_limit,
@@ -2515,9 +2655,12 @@ async def _scheduled_backup_group(
                     **queue_kwargs,
                 ))
             except Exception as exc:
+                detail = _background_error_message(
+                    f"Scheduled compact queueing failed for job {representative_job_id}", exc,
+                )
                 failed_run_id = _record_schedule_error(
                     representative_job_id,
-                    f"Compact konnte nicht gestartet werden: {exc}",
+                    f"Compact konnte nicht gestartet werden: {detail}",
                     schedule_name,
                     schedule_id=schedule_id,
                     schedule_parallel_limit=schedule_parallel_limit,

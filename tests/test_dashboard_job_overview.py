@@ -39,7 +39,9 @@ def test_dashboard_uses_compact_stacked_job_metadata_blocks():
     assert 'class="dashboard-run-trigger"' in javascript
     assert "const sourceLabel = job.source_stats_origin === 'scan' ? 'Ausschlussbereinigter Quellen-Scan' : 'Letztes Backup'" in javascript
     assert "const detail = [sourceLabel, checked" in javascript
-    assert "source_stats_by_path" in javascript
+    assert "source_stats_limitations" in javascript
+    assert "Qualität hoch" not in javascript
+    assert "aus letztem Borg-Lauf beobachtet" not in javascript
     assert ".dashboard-size-stack > span" in stylesheet
     assert "grid-template-columns: minmax(6.8rem, 1fr) auto" in stylesheet
 

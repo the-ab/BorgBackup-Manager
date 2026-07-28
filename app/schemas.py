@@ -181,7 +181,6 @@ class RepositoryIn(BaseModel):
     extra_env: dict[str, str] = Field(default_factory=dict)
     storage_guard_enabled: bool | None = None
     storage_guard_threshold_percent: int | None = Field(default=None, ge=1, le=100)
-    parallel_limit: int = Field(default=1, ge=1, le=64)
 
     @model_validator(mode="after")
     def valid_repository_mode(self):
@@ -297,7 +296,6 @@ class RepositoryOut(BaseModel):
     size_checked_at: Any | None = None
     storage_guard_enabled: bool | None = None
     storage_guard_threshold_percent: int | None = None
-    parallel_limit: int = 1
     mount_path: str | None = None
     storage_guard_effective_enabled: bool = False
     storage_guard_effective_threshold_percent: int = 95
@@ -311,6 +309,8 @@ class RepositoryOut(BaseModel):
     storage_usage_error: str | None = None
     storage_usage_source: str | None = None
     storage_guard_blocked: bool = False
+    external_parallel_key: str | None = None
+    external_parallel_label: str | None = None
 
 
 class RepositoryImportIn(BaseModel):
@@ -322,7 +322,6 @@ class RepositoryImportIn(BaseModel):
     keyfile: SecretStr | None = None
     storage_guard_enabled: bool | None = None
     storage_guard_threshold_percent: int | None = Field(default=None, ge=1, le=100)
-    parallel_limit: int = Field(default=1, ge=1, le=64)
 
     @field_validator("name")
     @classmethod
@@ -418,6 +417,7 @@ class SettingsIn(BaseModel):
     update_check_enabled: bool = True
     update_check_interval_hours: int = Field(default=24, ge=1, le=720)
     mount_parallel_limits: dict[str, int] = Field(default_factory=dict)
+    external_storage_parallel_limits: dict[str, int] = Field(default_factory=dict)
     repository_size_after_run: bool = True
     compact_after_prune: bool = True
     storage_guard_enabled: bool = True
@@ -451,6 +451,25 @@ class SettingsIn(BaseModel):
                 raise ValueError("mount parallel limits must be between 0 and 64")
             if limit > 0:
                 normalized[path] = limit
+        return normalized
+
+    @field_validator("external_storage_parallel_limits")
+    @classmethod
+    def safe_external_storage_parallel_limits(cls, values: dict[str, int]) -> dict[str, int]:
+        normalized: dict[str, int] = {}
+        for raw_key, raw_limit in values.items():
+            key = str(raw_key).strip()
+            if (
+                not key.startswith("external:")
+                or len(key) > 1000
+                or any(char in key for char in "\x00\r\n")
+            ):
+                raise ValueError("external filesystem parallel limit key is invalid")
+            limit = int(raw_limit)
+            if not 0 <= limit <= 64:
+                raise ValueError("external filesystem parallel limits must be between 0 and 64")
+            if limit > 0:
+                normalized[key] = limit
         return normalized
 
     @field_validator("header_network_interfaces")
@@ -506,7 +525,6 @@ class RepositoryUpdate(BaseModel):
     extra_env: dict[str, str] = Field(default_factory=dict)
     storage_guard_enabled: bool | None = None
     storage_guard_threshold_percent: int | None = Field(default=None, ge=1, le=100)
-    parallel_limit: int = Field(default=1, ge=1, le=64)
 
     @field_validator("name")
     @classmethod
@@ -677,8 +695,7 @@ class JobOut(JobIn):
     source_file_count: int | None = None
     source_stats_checked_at: datetime | None = None
     source_stats_origin: str | None = None
-    source_stats_by_path: list[dict[str, Any]] = Field(default_factory=list)
-    source_stats_quality: str | None = None
+    source_stats_limitations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class BackupScheduleIn(BaseModel):

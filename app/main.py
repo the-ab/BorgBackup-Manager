@@ -26,6 +26,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import joinedload
@@ -35,7 +36,7 @@ from app.archive_cache import invalidate_archive_cache, load_archive_cache
 from app.archive_metadata import annotate_archive_devices, infer_archive_device, sort_archives_newest_first
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
 from app.borg_progress import get_run_item_activity, get_run_network_activity, get_run_progress
-from app.backup_eta import estimate_fixed_baseline_remaining, parse_source_detail
+from app.backup_eta import estimate_fixed_baseline_remaining, source_stats_limitations
 from app.manager_backup_progress import begin_task as begin_manager_backup_task, current_task as current_manager_backup_task, fail_task as fail_manager_backup_task, finish_task as finish_manager_backup_task, get_task as get_manager_backup_task, update_task as update_manager_backup_task
 from app.borg_warnings import (
     parse_borg_warnings,
@@ -76,7 +77,7 @@ from app.backups import (
 )
 from app.database import Base, SessionLocal, engine, migrate_schema
 from app.external_repository import (
-    fingerprint_known_hosts, generate_ed25519_keypair, normalize_known_hosts,
+    external_filesystem_parallel_identity, fingerprint_known_hosts, generate_ed25519_keypair, normalize_known_hosts,
     public_key_from_private, repository_location_uses_ssh, scan_repository_host_key,
     storage_probe_target_from_location,
 )
@@ -84,7 +85,10 @@ from app.repository_diagnostics import compact_repository_diagnostic
 from app.system_network import sample_manager_network
 from app.header_network import discover_interfaces as discover_header_network_interfaces, sample_interfaces as sample_header_network_interfaces
 from app.system_diagnostics import repository_access_diagnostic
-from app.debug_logging import configure_debug_logging, install_asyncio_exception_handler
+from app.debug_logging import (
+    configure_debug_logging, detail_requires_debug_log, install_asyncio_exception_handler,
+    log_unexpected_exception, public_error_message,
+)
 from app.notifications import (
     NotificationSettingsInput, NotificationSettingsOut, NotificationTestIn,
     cleanup_deliveries, clear_deliveries, list_deliveries, notification_settings_out,
@@ -105,7 +109,6 @@ from app.runner import (
     repository_keyfile_path,
     repository_validation_command,
     repository_size_command,
-    repository_list_command,
     repository_archive_info_command,
     repository_browse_archive_command,
     job_archive_prefixes,
@@ -293,6 +296,10 @@ def repo_out(row: Repository, *, mounts: list[Path] | None = None) -> Repository
     guard_blocked = bool(
         effective_enabled and storage_percent is not None and float(storage_percent) >= effective_threshold
     )
+    external_parallel = (
+        external_filesystem_parallel_identity(row.location, row.external_storage_path)
+        if not row.storage_path else None
+    )
     return RepositoryOut(
         id=row.id, name=row.name, enabled=bool(row.enabled), location=row.location,
         passphrase_env=None, extra_env=json.loads(row.extra_env_json or "{}"),
@@ -315,7 +322,6 @@ def repo_out(row: Repository, *, mounts: list[Path] | None = None) -> Repository
         size_checked_at=row.size_checked_at,
         storage_guard_enabled=row.storage_guard_enabled,
         storage_guard_threshold_percent=row.storage_guard_threshold_percent,
-        parallel_limit=max(1, int(row.parallel_limit or 1)),
         mount_path=str(mount) if mount is not None else None,
         storage_guard_effective_enabled=effective_enabled,
         storage_guard_effective_threshold_percent=effective_threshold,
@@ -329,6 +335,8 @@ def repo_out(row: Repository, *, mounts: list[Path] | None = None) -> Repository
         storage_usage_error=storage_error,
         storage_usage_source=storage_source,
         storage_guard_blocked=guard_blocked,
+        external_parallel_key=external_parallel[0] if external_parallel else None,
+        external_parallel_label=external_parallel[1] if external_parallel else None,
     )
 
 
@@ -481,8 +489,7 @@ def job_out(
         source_file_count=row.source_file_count,
         source_stats_checked_at=row.source_stats_checked_at,
         source_stats_origin=row.source_stats_origin,
-        source_stats_by_path=parse_source_detail(getattr(row, "source_stats_detail_json", "{}" )).get("sources", []),
-        source_stats_quality=parse_source_detail(getattr(row, "source_stats_detail_json", "{}" )).get("quality"),
+        source_stats_limitations=source_stats_limitations(getattr(row, "source_stats_detail_json", "{}")),
     )
 
 
@@ -702,8 +709,23 @@ def resolve_archive_devices(archives: list[dict], repository_jobs: list[Job]) ->
     return archives
 
 
+def compact_repository_error_with_debug(
+    context: str, output: str, error: str, return_code: int,
+) -> tuple[str, str]:
+    summary, details = compact_repository_diagnostic(output, error, return_code)
+    technical = "\n".join(part for part in (output, error) if part).strip()
+    if detail_requires_debug_log(technical):
+        error_id = log_unexpected_exception(
+            context, detail=technical, logger_name="bbm.http",
+        )
+        summary = f"{summary} Technische Details: Debug-Log, Fehler-ID {error_id}."
+    return summary, details
+
+
 def borg_operation_error(output: str, error: str, return_code: int) -> HTTPException:
-    summary, _details = compact_repository_diagnostic(output, error, return_code)
+    summary, _details = compact_repository_error_with_debug(
+        "Repository operation returned technical Borg output", output, error, return_code,
+    )
     return HTTPException(400, summary)
 
 
@@ -1134,6 +1156,41 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="BorgBackup Manager", version=APP_VERSION, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def compact_http_exception(request: Request, exc: StarletteHTTPException):
+    """Sanitize tracebacks and record application-side HTTP 5xx incidents."""
+    detail_text = str(exc.detail or "").strip()
+    already_referenced = bool(re.search(r"\bBBM-[A-F0-9]{8}\b", detail_text))
+    technical = detail_requires_debug_log(exc.detail)
+    server_error = int(exc.status_code) >= 500
+    if (technical or server_error) and not already_referenced:
+        cause = exc.__cause__ if isinstance(exc.__cause__, BaseException) else None
+        error_id = log_unexpected_exception(
+            f"HTTP {exc.status_code} response was recorded",
+            exc=cause,
+            detail=exc.detail,
+            method=request.method,
+            path=request.url.path,
+            logger_name="bbm.http",
+        )
+        request.state.debug_error_logged = True
+        if technical:
+            public_detail = public_error_message(error_id)
+        else:
+            concise = detail_text if detail_text and len(detail_text) <= 300 else f"HTTP {exc.status_code}"
+            public_detail = f"{concise} Technische Details: Debug-Log, Fehler-ID {error_id}."
+        return JSONResponse(
+            {"detail": public_detail},
+            status_code=exc.status_code,
+            headers=exc.headers,
+        )
+    if already_referenced:
+        request.state.debug_error_logged = True
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+
+
 protected = [Depends(require_token)]
 
 
@@ -1158,11 +1215,28 @@ async def browser_security_headers(request: Request, call_next):
                 return JSONResponse({"detail": "Request origin does not match this BorgBackup Manager"}, status_code=403)
     try:
         response = await call_next(request)
-    except Exception:
-        logging.getLogger("bbm.http").exception(
-            "Unhandled HTTP exception: %s %s", request.method, request.url.path,
+    except Exception as exc:
+        error_id = log_unexpected_exception(
+            "Unhandled HTTP exception",
+            exc=exc,
+            method=request.method,
+            path=request.url.path,
+            logger_name="bbm.http",
         )
-        raise
+        request.state.debug_error_logged = True
+        response = JSONResponse(
+            {"detail": public_error_message(error_id)},
+            status_code=500,
+        )
+    if response.status_code >= 500 and not getattr(request.state, "debug_error_logged", False):
+        log_unexpected_exception(
+            f"HTTP {response.status_code} response completed without an exception reference",
+            detail={"status_code": response.status_code},
+            method=request.method,
+            path=request.url.path,
+            logger_name="bbm.http",
+        )
+        request.state.debug_error_logged = True
     if request_uses_https(request):
         response.headers["Strict-Transport-Security"] = "max-age=31536000"
     response.headers["Content-Security-Policy"] = (
@@ -1810,6 +1884,9 @@ def _group_external_repository_filesystems(rows: list[dict]) -> list[dict]:
             continue
         current["repositories"].extend(row.get("repositories") or [])
         current["guard_blocked"] = bool(current.get("guard_blocked") or row.get("guard_blocked"))
+        for state in ("running", "queued"):
+            current[f"{state}_runs"] = int(current.get(f"{state}_runs") or 0) + int(row.get(f"{state}_runs") or 0)
+            current.setdefault(f"{state}_repositories", []).extend(row.get(f"{state}_repositories") or [])
 
         # Prefer the newest successful measurement when multiple repository
         # paths on one remote filesystem were probed independently.
@@ -1852,6 +1929,41 @@ async def system_diagnostics() -> dict:
         ))
     filesystems = repository_storage_filesystems(managed_repositories, REPOSITORY_ROOT, settings)
 
+    # Show the real queue occupancy beside each effective mount limit.  This is
+    # intentionally derived from the persisted run state so an operator can see
+    # immediately whether a mount is at capacity or whether a queued run is
+    # blocked by another layer such as repository or schedule exclusivity.
+    filesystem_by_path = {str(item.get("path")): item for item in filesystems}
+    managed_mounts = [Path(path) for path in filesystem_by_path]
+    for item in filesystems:
+        item["running_runs"] = 0
+        item["queued_runs"] = 0
+        item["running_repositories"] = []
+        item["queued_repositories"] = []
+    with SessionLocal() as db:
+        active_runs = list(db.scalars(
+            select(Run)
+            .options(joinedload(Run.repository))
+            .where(Run.status.in_(["queued", "running"]), Run.action != "source-stats")
+            .order_by(Run.id)
+        ))
+    for run in active_runs:
+        repository = run.repository
+        if not repository or not repository.storage_path:
+            continue
+        mount = repository_mount_path(repository.storage_path, REPOSITORY_ROOT, mounts=managed_mounts)
+        item = filesystem_by_path.get(str(mount)) if mount is not None else None
+        if item is None:
+            continue
+        key = "running" if run.status == "running" else "queued"
+        item[f"{key}_runs"] += 1
+        item[f"{key}_repositories"].append({
+            "run_id": int(run.id),
+            "repository_id": int(repository.id),
+            "repository": str(repository.name),
+            "action": str(run.action),
+        })
+
     async def external_filesystem_row(repository: Repository) -> dict:
         try:
             usage = await refresh_external_repository_storage(repository.id)
@@ -1875,9 +1987,13 @@ async def system_diagnostics() -> dict:
                 f"{target.username}@{target.host}:{target.port}" if target else stored.location
             )
             path = stored.external_storage_path or (target.repository_path if target else stored.location)
+            parallel_identity = external_filesystem_parallel_identity(
+                stored.location, stored.external_storage_path
+            )
             blocked = bool(enabled and percent is not None and float(percent) >= threshold)
             return {
-                "path": f"{remote} · {path}",
+                "path": parallel_identity[1] if parallel_identity else f"{remote} · {path}",
+                "parallel_key": parallel_identity[0] if parallel_identity else None,
                 "total": total, "used": used, "free": free, "percent": percent,
                 "repositories": [{
                     "id": int(stored.id), "name": str(stored.name), "path": str(stored.location),
@@ -1885,12 +2001,40 @@ async def system_diagnostics() -> dict:
                     "guard_source": source, "guard_blocked": blocked, "external": True,
                 }],
                 "guard_blocked": blocked, "external": True,
+                "parallel_limit": int(
+                    (settings.external_storage_parallel_limits or {}).get(parallel_identity[0], 0)
+                ) if parallel_identity else None,
+                "running_runs": 0, "queued_runs": 0,
+                "running_repositories": [], "queued_repositories": [],
                 "checked_at": checked_at, "error": stored_error,
             }
 
     if external_repositories:
         external_rows = await asyncio.gather(*(external_filesystem_row(repo) for repo in external_repositories))
-        filesystems.extend(_group_external_repository_filesystems([row for row in external_rows if row]))
+        grouped_external = _group_external_repository_filesystems([row for row in external_rows if row])
+        external_by_key = {
+            str(item.get("parallel_key")): item
+            for item in grouped_external if item.get("parallel_key")
+        }
+        for run in active_runs:
+            repository = run.repository
+            if not repository or repository.storage_path:
+                continue
+            identity = external_filesystem_parallel_identity(
+                repository.location, repository.external_storage_path
+            )
+            item = external_by_key.get(identity[0]) if identity else None
+            if item is None:
+                continue
+            state_key = "running" if run.status == "running" else "queued"
+            item[f"{state_key}_runs"] = int(item.get(f"{state_key}_runs") or 0) + 1
+            item.setdefault(f"{state_key}_repositories", []).append({
+                "run_id": int(run.id),
+                "repository_id": int(repository.id),
+                "repository": str(repository.name),
+                "action": str(run.action),
+            })
+        filesystems.extend(grouped_external)
     storage = next((item for item in filesystems if Path(item["path"]) == REPOSITORY_ROOT.resolve()), None)
     if storage is not None:
         storage = {
@@ -1962,6 +2106,8 @@ async def system_diagnostics() -> dict:
         checks["managed_repositories_shared_across_hosts"] = len(shared)
     return {
         "borg_version": borg_version, "repository_storage": storage,
+        "global_parallel_limit": int(settings.max_parallel_runs or 0),
+        "source_stats_parallel_limit": int(settings.source_stats_parallel_limit or 1),
         "repository_storage_filesystems": filesystems,
         "repository_server_checks": checks, "borg_serve_log": server_log,
         "sshd_log": sshd_log, "debug_log": debug_log,
@@ -2317,7 +2463,6 @@ async def import_repository(data: RepositoryImportIn):
             initialized=False,
             storage_guard_enabled=data.storage_guard_enabled,
             storage_guard_threshold_percent=data.storage_guard_threshold_percent,
-            parallel_limit=data.parallel_limit,
             extra_env_json="{}",
         )
         db.add(row)
@@ -2351,7 +2496,11 @@ async def import_repository(data: RepositoryImportIn):
             command = repository_validation_command(row)
         code, output, error = await execute_interactive(repository_id, command)
         if code not in {0, 1}:
-            raise ValueError(error.strip() or output.strip() or f"Borg exit code {code}")
+            summary, _details = compact_repository_error_with_debug(
+                "Existing repository import returned technical Borg output",
+                output, error, code,
+            )
+            raise ValueError(summary)
         with SessionLocal() as db:
             row = db.get(Repository, repository_id)
             if not row:
@@ -2359,7 +2508,7 @@ async def import_repository(data: RepositoryImportIn):
             row.initialized = True
             db.commit()
             return repo_out(row)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         with SessionLocal() as db:
             row = db.get(Repository, repository_id)
             if row:
@@ -2367,6 +2516,21 @@ async def import_repository(data: RepositoryImportIn):
                 db.commit()
         delete_repository_secrets(repository_id)
         raise HTTPException(400, f"Existing repository could not be opened: {exc}") from exc
+    except Exception as exc:
+        with SessionLocal() as db:
+            row = db.get(Repository, repository_id)
+            if row:
+                db.delete(row)
+                db.commit()
+        delete_repository_secrets(repository_id)
+        error_id = log_unexpected_exception(
+            "Existing repository import failed unexpectedly",
+            exc=exc,
+            method="POST",
+            path="/api/repositories/import",
+            logger_name="bbm.http",
+        )
+        raise HTTPException(500, public_error_message(error_id)) from None
     finally:
         if key_path:
             key_path.unlink(missing_ok=True)
@@ -2408,7 +2572,10 @@ async def refresh_size(repository_id: int) -> dict:
 
     code, output, error = await execute_interactive(repository_id, command)
     if code not in {0, 1}:
-        summary, details = compact_repository_diagnostic(output, error, code)
+        summary, details = compact_repository_error_with_debug(
+            f"Repository size refresh for repository {repository_id} returned technical Borg output",
+            output, error, code,
+        )
         with SessionLocal() as db:
             stored = db.get(Repository, repository_id)
             if stored:
@@ -2489,7 +2656,6 @@ async def create_repository(data: RepositoryIn):
             validation_details=None,
             storage_guard_enabled=data.storage_guard_enabled,
             storage_guard_threshold_percent=data.storage_guard_threshold_percent,
-            parallel_limit=data.parallel_limit,
             extra_env_json="{}",
         )
         db.add(row)
@@ -2553,7 +2719,6 @@ async def update_repository(row_id: int, data: RepositoryUpdate):
         row.encryption_mode = data.encryption_mode
         row.storage_guard_enabled = data.storage_guard_enabled
         row.storage_guard_threshold_percent = data.storage_guard_threshold_percent
-        row.parallel_limit = data.parallel_limit
         if not data.managed:
             next_location = data.location or row.location
             next_public_key = external_credentials.get("external_ssh_public_key")
@@ -3076,7 +3241,10 @@ async def repository_archive_info(repository_id: int, archive: str) -> dict:
         command = repository_archive_info_command(repository, archive)
     code, output, error = await execute_interactive(repository_id, command)
     if code not in {0, 1}:
-        summary, _details = compact_repository_diagnostic(output, error, code)
+        summary, _details = compact_repository_error_with_debug(
+            f"Archive info for repository {repository_id} returned technical Borg output",
+            output, error, code,
+        )
         raise HTTPException(400, summary)
     try:
         normalized = parse_borg_info(output + "\n" + error)
@@ -3135,22 +3303,26 @@ async def delete_repository_archives(repository_id: int, data: ArchiveBulkDelete
         repository_jobs = list(db.scalars(
             select(Job).options(joinedload(Job.host)).where(Job.repository_id == repository_id)
         ))
-        command = repository_list_command(repository, consider_checkpoints=True)
         repository_name = repository.name
 
-    code, output, error = await execute_interactive(repository_id, command)
-    if code not in {0, 1}:
-        raise borg_operation_error(output, error, code)
-    try:
-        archives = parse_archive_listing(output + "\n" + error)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    archive_map = {archive["name"]: archive for archive in archives}
-    missing = [archive for archive in data.archives if archive not in archive_map]
-    if missing:
-        raise HTTPException(404, f"Archives not found in this repository: {', '.join(missing)}")
+    # Never enumerate a large Borg repository inside this HTTP request.  The
+    # selected names already passed the strict archive-name validator and come
+    # from the persistent archive view in normal UI use.  Cached metadata is
+    # used only for the human-readable device label; the queued Borg command is
+    # the authoritative existence check and reports stale/missing names in the
+    # visible run log instead of leaving the browser on "Löschung wird
+    # gestartet …" for minutes or until a reverse-proxy timeout occurs.
+    archive_map: dict[str, dict] = {}
+    for consider_checkpoints in (False, True):
+        cached = load_archive_cache(repository_id, consider_checkpoints)
+        if not cached:
+            continue
+        for archive in cached["data"].get("archives", []):
+            name = str(archive.get("name") or "")
+            if name in data.archives and name not in archive_map:
+                archive_map[name] = copy.deepcopy(archive)
 
-    selected = [archive_map[name] for name in data.archives]
+    selected = [archive_map.get(name, {"name": name}) for name in data.archives]
     assign_archive_owners(selected, repository_jobs)
     resolve_archive_devices(selected, repository_jobs)
     labels = [str(archive.get("device_name") or "").strip() for archive in selected]
@@ -3994,8 +4166,10 @@ def _manager_backup_task_worker(
         backup = next(item for item in list_full_backups() if item["name"] == path.name)
         finish_manager_backup_task(task_id, backup=backup)
     except Exception as exc:
-        logging.getLogger(__name__).exception("Manager backup task %s failed", task_id)
-        fail_manager_backup_task(task_id, str(exc))
+        error_id = log_unexpected_exception(
+            f"Manager backup task {task_id} failed", exc=exc, logger_name="bbm.background",
+        )
+        fail_manager_backup_task(task_id, public_error_message(error_id))
 
 
 def _cache_backup_task_worker(
@@ -4021,8 +4195,10 @@ def _cache_backup_task_worker(
         backup = next(item for item in list_full_backups() if item["name"] == path.name)
         finish_manager_backup_task(task_id, backup=backup)
     except Exception as exc:
-        logging.getLogger(__name__).exception("Cache backup task %s failed", task_id)
-        fail_manager_backup_task(task_id, str(exc))
+        error_id = log_unexpected_exception(
+            f"Cache backup task {task_id} failed", exc=exc, logger_name="bbm.background",
+        )
+        fail_manager_backup_task(task_id, public_error_message(error_id))
 
 
 @app.post("/api/backups", status_code=201, dependencies=admin_protected)

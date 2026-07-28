@@ -1,5 +1,93 @@
 # Release Notes
 
+## v1.2.0 – 28.07.2026
+
+### Debug-Log auf echte Störfälle begrenzt
+
+- Die bisherige Größenregel wurde entfernt: Lange, aber normale Backup-Ausgaben und Quellenstatistik-Scans werden nicht mehr allein wegen ihres Umfangs als technischer Fehler behandelt und nicht mehr in `/data/logs/debug.log` kopiert.
+- Das Debug-Log arbeitet jetzt als reines Störungsprotokoll. Erfasst werden unerwartete Tracebacks, unbehandelte Anwendungs-/Hintergrundfehler, kritische Framework- oder Systemfehler sowie managerseitige HTTP-5xx-Antworten. Normale INFO-/WARNING-Einträge bleiben auch dann ausgeschlossen, wenn eine ältere Installation noch `BBM_DEBUG_LOG_LEVEL` gesetzt hat.
+- Managerseitige HTTP-Fehler 500, 502, 503 und 504 werden mit HTTP-Methode, Pfad, Status und Fehler-ID protokolliert. Bereits vorhandene `BBM-...`-Referenzen werden nicht erneut protokolliert.
+- Die Browser-Sicherung erkennt nur noch tatsächliche Traceback-/Framework-Muster. Eine lediglich lange Fehlermeldung wird nicht mehr fälschlich durch den allgemeinen Debug-Log-Hinweis ersetzt.
+- Der kurze rote Hinweis nach einem fehlgeschlagenen oder abgebrochenen Lauf verschwindet jetzt nach sechs Sekunden automatisch. Er kann währenddessen weiterhin über `×` geschlossen werden; andere handlungsrelevante Fehlermeldungen bleiben bis zum Schließen sichtbar.
+- Regressionstests und Projekt-Audit prüfen den Ausschluss normaler Backup-/Quellenstatistik-Ausgaben, die feste Incident-Filterung, HTTP-504-Protokollierung und den Sechs-Sekunden-Timeout der Laufmeldung.
+
+## v1.1.10 – 28.07.2026
+
+### Zentrale Traceback-Protokollierung und kompakte Browserfehler
+
+- Unerwartete HTTP- und Hintergrundfehler erhalten jetzt eine kurze `BBM-...`-Fehler-ID. Browser und Laufstatus zeigen nur diesen kompakten Verweis; der vollständige Traceback wird unter derselben ID in `/data/logs/debug.log` geschrieben.
+- HTTP-Fehler mit Python-Traceback, Framework-Interna oder ungewöhnlich großen technischen Nutzdaten werden zentral bereinigt. Erwartbare Validierungsfehler und kompakte Borg-Diagnosen bleiben konkret und handlungsorientiert.
+- Beim Einbinden vorhandener Repositorys werden rohe Borg-/Python-Tracebacks nicht mehr an den Browser ausgegeben. Unerwartete Importfehler werden vollständig protokolliert, bevor der temporäre Repository-Eintrag und seine Geheimnisse entfernt werden.
+- Backup-Läufe, Repository-Initialisierung, Archivscans, manuelle Nachbearbeitungsketten, geplante Warteschlangen, Manager-/Cache-Backup-Worker und Fehler bei Benachrichtigungszustellungen schreiben unerwartete Tracebacks jetzt ins Debug-Log, statt sie anzuzeigen oder zu verwerfen.
+- Rote WebUI-Fehlermeldungen verschwinden nicht mehr automatisch. Sie bleiben bis zum ausdrücklichen Schließen lesbar; eine zusätzliche Browser-Sicherung ersetzt versehentlich durchgereichte Traceback-Ausgaben durch den kurzen Debug-Log-Hinweis.
+- Projekt-Audit und Regressionstests sichern die zentrale Fehlergrenze, Traceback-Speicherung, Fehler-ID-Antwort, dauerhafte Fehleranzeige und das Repository-Einbinden ab.
+
+## v1.1.9 – 28.07.2026
+
+### Externe Dateisystem-Parallelität und breitere Archivstatistik
+
+- Unter **Einstellungen → Parallelitätsgrenzen** können jetzt auch erkannte externe SSH-Dateisysteme begrenzt werden. Mehrere externe Borg-Repositorys derselben SSH-Identität auf demselben durch `df` erkannten Dateisystem teilen eine gemeinsame Grenze; `0` bedeutet unbegrenzt.
+- Die Warteschlangenplanung und direkte managerseitige Borg-Aufrufe verwenden dieselbe externe Dateisystemgruppe. Pro Repository bleibt weiterhin genau eine Ausführung zulässig.
+- Externe Gruppen erscheinen nach einer erfolgreichen Dateisystemprüfung beziehungsweise nach dem Laden der Systemdiagnose. Ohne erkannten Remote-Mount bleibt die sichere repositoryweise Serialisierung erhalten.
+- **Systemdiagnose → Repository-Dateisysteme** zeigt für externe Dateisysteme jetzt ebenfalls die konfigurierte Grenze sowie aktive und wartende Läufe.
+- In der Archivübersicht wurden die Spalten **Dauer** und **Dateien** verbreitert und mit größerem Abstand versehen, damit lange Laufzeiten nicht mehr in die Dateianzahl hineinragen.
+
+## v1.1.8 – 28.07.2026
+
+### Archivscan-Mount-Sperre freigegeben und Checkpoint-Anzeige vereinfacht
+
+- Direkte managerseitige Borg-Aufrufe gaben ihre reservierte Mount-Kapazität nach Abschluss nicht frei. Nach einem ersten Archivscan blieb dadurch ein unsichtbarer Mount-Platz belegt; ein weiterer Scan konnte dauerhaft warten, bis der Container neu gestartet wurde.
+- Die Mount-Kapazität wird jetzt im `finally`-Pfad zuverlässig freigegeben – bei Erfolg, Warnung, Fehler und Abbruch.
+- Ein Scan mit Checkpoints konnte sich bei Mount-Grenze `1` selbst blockieren: `borg info` belegte den Platz dauerhaft und der nachfolgende `borg list --consider-checkpoints` wartete auf denselben Platz. Dieser Selbst-Deadlock ist behoben.
+- Die normale Archivübersicht zeigt erkannte Checkpoint-Archive weiterhin automatisch und kennzeichnet sie als unvollständig. Die Checkpoint-Kennzeichnung wird jetzt auch direkt aus `borg info` zuverlässig übernommen; der dabei erzeugte Cache kann unmittelbar für die bewusste Restore-Auswahl wiederverwendet werden. Die redundante Option **Unvollständige Checkpoint-Archive anzeigen** wurde aus dieser Ansicht entfernt.
+- Die separate Checkpoint-Freigabe im Restore-Dialog bleibt erhalten, damit eine Wiederherstellung aus einem unvollständigen Archiv bewusst bestätigt wird.
+- Regressionstests prüfen die Mount-Freigabe und verhindern, dass die redundante Checkpoint-Option in die Archivübersicht zurückkehrt.
+
+## v1.1.7 – 28.07.2026
+
+### Archivlöschung bei großen Repositorys sofort sichtbar
+
+- Die repositoryweite Archivlöschung führt vor der Run-Erstellung keinen synchronen vollständigen `borg list`-Scan mehr innerhalb der HTTP-Anfrage aus. Bei großen Repositorys konnte die Oberfläche dadurch dauerhaft auf **Löschung wird gestartet …** stehen oder vor einer sichtbaren Ausführung in einen HTTP-/Reverse-Proxy-Timeout laufen.
+- Ausgewählte Archivnamen werden weiterhin streng validiert. Vorhandene Cache-Metadaten dienen nur noch zur Geräte-/Laufbezeichnung; anschließend wird die exakte Borg-Löschung sofort als normale Repository-Ausführung eingereiht.
+- Ein veralteter Archivcache beziehungsweise ein außerhalb des Managers bereits gelöschtes Archiv wird von Borg im sichtbaren Löschlauf gemeldet. Der Browser bleibt nicht mehr vor der Run-ID-Erstellung blockiert.
+- Die WebUI startet Statusüberwachung, Toast und Live-Protokoll unmittelbar nach Erhalt der Run-ID. Dashboard- und Ausführungslisten werden erst danach aktualisiert.
+- Repository-Exklusivität, Schutz gemounteter Archive, optionale einmalige Compact-Ausführung und Cache-Invalidierung auch bei teilweise wirksamer fehlgeschlagener Löschung bleiben unverändert erhalten.
+- Der Projekt-Audit verhindert künftig erneut synchrone Repositoryscans im Archivlösch-Endpunkt und prüft, dass das Live-Protokoll vor nachgelagerten Ansichtsaktualisierungen geöffnet wird.
+
+## v1.1.6 – 28.07.2026
+
+### Mount-Parallelität auf eine einzige Warteschlangenentscheidung umgestellt
+
+- Persistierte Backup- und Repository-Läufe reservieren die Mount-Kapazität nicht mehr doppelt. Bis v1.1.5 wurde vor der datenbankgestützten Warteschlangenentscheidung zusätzlich ein prozesslokaler Mount-Begrenzer belegt. Unter realen Mount-/Pfadkonstellationen konnte dadurch trotz wirksamer Mount-Grenze `2` weiterhin nur ein Lauf starten.
+- Globale, Zeitplan-, Mount- und Repository-Grenzen werden jetzt ausschließlich atomar durch den datenbankgestützten FIFO-Ausführungsplan vergeben. Ein startfähiger zweiter Job auf einem anderen Repository desselben Mounts kann dadurch den zweiten Mount-Platz tatsächlich nutzen.
+- Die zusätzliche Repository-Laufzeitsperre wird erst nach erfolgreicher Queue-Zulassung erworben und ist pro Repository-Datensatz getrennt. Sie koordiniert nur noch direkte interaktive Borg-Aufrufe mit dem betreffenden Repository und kann unterschiedliche Repositorys auf demselben Mount nicht mehr unsichtbar serialisieren.
+- Die feste physische Repository-Exklusivität bleibt im Queue-Plan erhalten: Mehrere Jobs desselben tatsächlichen Borg-Repositorys laufen weiterhin niemals parallel.
+- **Systemdiagnose → Repository-Dateisysteme** zeigt neben der wirksamen Grenze jetzt auch die aktuelle Belegung als `aktiv X · wartend Y`. Dadurch ist direkt erkennbar, ob die Mount-Grenze selbst erreicht ist oder ein Lauf von einer anderen Ebene blockiert wird.
+- Neue Regressionstests stellen sicher, dass persistierte Läufe keinen zweiten prozesslokalen Mount-Slot mehr anfordern und zwei unterschiedliche Repositorys bei Mount-Grenze `2` gleichzeitig in die Ausführung gelangen.
+
+## v1.1.5 – 28.07.2026
+
+### Live-Aktualisierung der Mount-Grenze und erweiterte Diagnose
+
+- Eine veraltete prozesslokale Mount-Semaphor-Grenze wurde korrigiert. War ein Mount zunächst auf `1` begrenzt und wurde während eines laufenden beziehungsweise wartenden Jobs auf `2` erhöht, konnte der alte Semaphor bei einer dauerhaft belegten Warteschlange weiterhin auf `1` bleiben.
+- Die Mount-Kapazität verwendet jetzt einen live anpassbaren Begrenzer. Wartende Läufe lesen die konfigurierte Mount-Grenze alle 250 ms neu ein; Erhöhungen, Verringerungen und der Wechsel auf `0` (unbegrenzt) wirken dadurch ohne vorheriges Leeren der gesamten Warteschlange.
+- Die datenbankgestützte Warteschlangenplanung bleibt maßgeblich: Die globale Grenze `0` bedeutet weiterhin unbegrenzt, die Quellenstatistik-Grenze `1` gilt nur für manuelle Quellenscans und zwei unterschiedliche Repositorys dürfen bei Mount-Grenze `2` parallel laufen.
+- Unter **Systemdiagnose → Repository-Dateisysteme** wird jetzt für jeden erkannten verwalteten Mount die tatsächlich wirksame Parallelitätsgrenze angezeigt. Im Diagnosekopf stehen zusätzlich die globale Grenze und die Quellenstatistik-Grenze, sodass falsche Mount-Zuordnungen oder unerwartete Serialisierung leichter erkennbar sind.
+- Externe Repository-Dateisysteme werden für verwaltete Mount-Grenzen als nicht anwendbar gekennzeichnet, weil dort weiterhin die Repository-Identität serialisiert wird.
+- Ein Regressionstest deckt das Erhöhen einer Mount-Grenze von `1` auf `2` ab, während bereits ein Lauf aktiv ist und ein weiterer wartet.
+
+## v1.1.4 – 28.07.2026
+
+### Ausschlussoptimierter Quellen-Scan und eindeutige Parallelität
+
+- Der bevorzugte manuelle Quellenstatistik-Scanner prüft pfadbasierte Borg-Ausschlussmuster jetzt vor `stat()`. Ausgeschlossene Dateien und komplette Verzeichnisbäume verursachen dadurch insbesondere auf NFS-/CIFS-Quellen keine vermeidbaren Metadatenabfragen mehr. `CACHEDIR.TAG`, `nodump` und **Nur jeweiliges Quelldateisystem** bleiben unverändert wirksam.
+- Der Scanner zählt vor der Metadatenabfrage verworfene Pfade separat und kennzeichnet Lese-/Zugriffswarnungen, nicht sicher nachbildbare Muster, fehlende `nodump`-Prüfung oder den `find/stat`-Fallback als konkrete Einschränkung. Ein normaler vollständiger Scan zeigt keine Qualitätsstufe mehr.
+- Die Quellenstatistik-Zeile wurde vereinfacht: Im Normalfall stehen nur **Ausschlussbereinigter Quellen-Scan · Datum/Uhrzeit** beziehungsweise **Letztes Backup · Datum/Uhrzeit**. Quellenanzahl, **Qualität hoch** und **aus letztem Borg-Lauf beobachtet** entfallen; echte Einschränkungen bleiben mit Ursache sichtbar.
+- Jedes physische Borg-Repository besitzt jetzt fest genau einen Ausführungsslot. Die bisherige Repository-Einstellung **Maximal parallele Backup-Läufe** wurde aus WebUI, API, Datenmodell und aktueller Dokumentation entfernt, weil Borg schreibende Vorgänge auf demselben Repository ohnehin exklusiv sperrt.
+- Mount-Grenzen gelten unabhängig davon für unterschiedliche Repositorys auf demselben Dateisystem. Bei einer Mount-Grenze von `2` dürfen zwei verschiedene Repositorys parallel laufen; ein drittes wartet. Läufe desselben Repositorys bleiben immer serialisiert.
+- Nicht mehr benötigte Progress-History- und beobachtete per-source Statistikhelfer wurden entfernt. Der Live-Status hält nur den aktuellen Borg-Fortschrittspunkt; die feste Restzeitberechnung und die Quellenanzeige benötigen keinen fortlaufenden Verlauf.
+- Der Projekt-Audit prüft jetzt zusätzlich die vorgezogene Ausschlussprüfung, die feste Repository-Exklusivität, das Fehlen der alten Repository-Parallelitätseinstellung, die kompakte Quellenstatistik und entfernte Progress-History-Reste.
+
 ## v1.1.3 – 27.07.2026
 
 ### Einheitliches modernes Button-Design
