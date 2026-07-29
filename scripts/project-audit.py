@@ -201,6 +201,51 @@ def audit_current_source_stats_and_parallelism() -> None:
 
 
 
+def audit_eta_fallback_search_and_modal_editing() -> None:
+    eta = _read(APP / "backup_eta.py")
+    app_js = _read(STATIC / "app.js")
+    index = _read(STATIC / "index.html")
+    css = _read(STATIC / "style.css")
+
+    required_eta = (
+        '"estimate_baseline_exceeded": byte_baseline_exceeded',
+        '"estimate_byte_fallback_active": byte_fallback_active',
+        'byte_fallback_active = bool(',
+    )
+    for marker in required_eta:
+        if marker not in eta:
+            error(f"Size-based ETA fallback marker missing: {marker}")
+    if '"estimate_baseline_exceeded": byte_baseline_exceeded or file_baseline_exceeded' in eta:
+        error("File-count overflow still suppresses the byte-based ETA")
+
+    for marker in ('id="repo-search"', 'id="host-search"', 'id="entity-edit-dialog"'):
+        if marker not in index:
+            error(f"Search/modal UI marker missing: {marker}")
+    for marker in (
+        "state.repositorySearch", "state.hostSearch", "function openEntityEditDialog",
+        "function closeEntityEditDialog", "entity-edit-form-placeholder",
+    ):
+        if marker not in app_js and marker not in css:
+            error(f"Search/modal implementation marker missing: {marker}")
+    if "body.entity-edit-dialog-open" not in css:
+        error("Modal editor does not lock background scrolling")
+
+    edit_blocks = (
+        ("editHost", "resetHostSshActionForm"),
+        ("editRepository", "prepareRepositoryImport"),
+        ("editJob", "bindForm"),
+    )
+    for function_name, next_name in edit_blocks:
+        if f"function {function_name}" not in app_js or f"function {next_name}" not in app_js:
+            error(f"Modal edit function boundary missing: {function_name}")
+            continue
+        block = app_js.split(f"function {function_name}", 1)[1].split(f"function {next_name}", 1)[0]
+        if "openEntityEditDialog" not in block:
+            error(f"{function_name} does not open the modal editor")
+        if "scrollIntoView" in block:
+            error(f"{function_name} still scrolls the page to the form")
+
+
 def audit_archive_scan_locking_and_checkpoint_ui() -> None:
     service = _read(APP / "service.py")
     index = _read(STATIC / "index.html")
@@ -557,6 +602,7 @@ def main() -> int:
     audit_version_consistency(version)
     audit_document_feature_alignment()
     audit_current_source_stats_and_parallelism()
+    audit_eta_fallback_search_and_modal_editing()
     audit_archive_scan_locking_and_checkpoint_ui()
     audit_archive_delete_queueing()
     audit_python_modules()

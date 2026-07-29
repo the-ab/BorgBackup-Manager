@@ -6,26 +6,26 @@
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
-<link href="/static/favicon.svg?v=1.2.0" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.2.0"></script>
-<link href="/static/style.css?v=1.2.0" rel="stylesheet"/>
+<link href="/static/favicon.svg?v=1.2.1" rel="icon" type="image/svg+xml"/>
+<script src="/static/theme-init.js?v=1.2.1"></script>
+<link href="/static/style.css?v=1.2.1" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
 <form class="login-card" id="login-form">
-<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.2.0"/>
+<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.2.1"/>
 <p class="eyebrow">BorgBackup Manager</p>
 <h1>Zentrale für deine Backups.</h1>
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.2.0</b></p>
+<p class="login-version">Version <b id="login-version">v1.2.1</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
 <div class="app-shell hidden" id="app">
 <aside>
-<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.2.0"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
+<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.2.1"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
 <nav id="main-navigation">
 <span class="nav-label">Betrieb</span>
 <button class="active" data-view="dashboard">Übersicht</button>
@@ -61,7 +61,7 @@
 
 </section>
 <section class="view" id="view-hosts">
-<div class="hosts-stack"><form class="panel host-form" id="host-form"><h2 id="host-form-title">Gerät hinzufügen</h2>
+<div class="hosts-stack"><template id="host-form-anchor"></template><form class="panel host-form" id="host-form"><h2 id="host-form-title">Gerät hinzufügen</h2>
 <input name="id" type="hidden"/>
 <p class="hint">Installiere zuerst diesen Controller-Schlüssel beim SSH-Benutzer des Geräts:</p>
 <div class="key-copy-row"><code class="key-box" id="controller-key">Wird geladen …</code><button class="secondary compact-copy-button" id="copy-controller-key" title="Controller-Schlüssel kopieren" type="button">Kopieren</button></div>
@@ -77,7 +77,7 @@
 </div>
 <label class="check"><input checked="" name="enabled" type="checkbox"/> Gerät aktivieren</label>
 <div class="form-actions"><button id="host-submit" type="submit">Gerät speichern</button><button class="secondary hidden" id="cancel-host-edit" type="button">Abbrechen</button></div></form>
-<div class="panel"><div class="panel-head responsive-head"><h2>Verbundene Geräte</h2><div class="list-controls"><label>Sortierung<select id="host-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="status-active">Aktive zuerst</option><option value="address-asc">Adresse</option><option value="borg-desc">Borg-Version absteigend</option></select></label></div></div><div class="bounded-list" id="host-list"></div></div>
+<div class="panel"><div class="panel-head responsive-head"><h2>Verbundene Geräte</h2><div class="list-controls"><label>Suche<input id="host-search" placeholder="Name, Adresse, SSH-Benutzer oder Borg-Version" type="search"/></label><label>Sortierung<select id="host-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="status-active">Aktive zuerst</option><option value="address-asc">Adresse</option><option value="borg-desc">Borg-Version absteigend</option></select></label></div></div><div class="bounded-list" id="host-list"></div></div>
 <div class="panel" data-admin-only-block="" id="host-ssh-actions-panel">
 <div class="panel-head responsive-head"><div><h2>Gespeicherte SSH-Aktionen</h2><span>Wiederkehrende Wartungsbefehle auf verbundenen Geräten kontrolliert ausführen.</span></div></div>
 <form id="host-ssh-action-form" class="ssh-action-form">
@@ -98,6 +98,7 @@
 </section>
 <section class="view" id="view-repositories">
 <div class="repositories-stack">
+<template id="repo-form-anchor"></template>
 <form class="panel repository-form" data-admin-only-block="" id="repo-form">
 <div class="panel-head"><div><h2 id="repo-form-title">Repository hinzufügen</h2><span>Verwaltete Repositories neu erstellen oder ein bereits vorhandenes externes Borg-Repository anbinden.</span></div></div>
 <input name="id" type="hidden"/>
@@ -143,7 +144,7 @@
 <div class="form-actions"><button id="repo-submit" type="submit">Repository erstellen</button><button class="secondary hidden" id="cancel-repo-edit" type="button">Abbrechen</button></div>
 </form>
 <div class="panel repositories-panel">
-<div class="panel-head responsive-head"><div><h2>Repositories</h2><span>Verbindung, Borg-Nutzdaten, Archive und Verwaltung zentral im Manager.</span></div><div class="list-controls"><button class="secondary" id="refresh-repositories" type="button">Status aktualisieren</button><label>Sortierung<select id="repo-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="status-ready">Bereite zuerst</option><option value="type-managed">Verwaltete zuerst</option><option value="jobs-desc">Meiste Jobs zuerst</option><option value="size-desc">Größe absteigend</option></select></label></div></div>
+<div class="panel-head responsive-head"><div><h2>Repositories</h2><span>Verbindung, Borg-Nutzdaten, Archive und Verwaltung zentral im Manager.</span></div><div class="list-controls"><button class="secondary" id="refresh-repositories" type="button">Status aktualisieren</button><label>Suche<input id="repo-search" placeholder="Name, ID, Typ, Pfad oder Verschlüsselung" type="search"/></label><label>Sortierung<select id="repo-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="status-ready">Bereite zuerst</option><option value="type-managed">Verwaltete zuerst</option><option value="jobs-desc">Meiste Jobs zuerst</option><option value="size-desc">Größe absteigend</option></select></label></div></div>
 <div aria-live="polite" class="persistent-info hidden" id="repo-operation-status" role="status"></div>
 <div class="bounded-list" id="repo-list"></div>
 </div>
@@ -152,6 +153,7 @@
 </section>
 <section class="view" id="view-jobs">
 <div class="jobs-stack">
+<template id="job-form-anchor"></template>
 <form class="panel job-form-compact" data-admin-only-block="" id="job-form"><div class="panel-head"><div><h2 id="job-form-title">Backup-Job erstellen</h2><span>Grunddaten kompakt festlegen; erweiterte Optionen bei Bedarf öffnen.</span></div></div>
 <input name="id" type="hidden"/>
 <div class="job-create-layout">
@@ -510,6 +512,10 @@
 <button class="danger" type="submit">Schlüssel endgültig erneuern</button>
 </form>
 </dialog>
+<dialog class="entity-edit-dialog" id="entity-edit-dialog">
+<div class="panel-head entity-edit-dialog-head"><div><p class="eyebrow">Bearbeitung</p><h2 id="entity-edit-dialog-title">Eintrag bearbeiten</h2></div><button class="secondary" id="close-entity-edit-dialog" type="button">Schließen</button></div>
+<div class="entity-edit-dialog-body" id="entity-edit-dialog-body"></div>
+</dialog>
 <dialog class="run-dialog" id="log-dialog">
 <div class="panel-head run-dialog-head"><div class="run-dialog-title"><p class="eyebrow">Ausführung</p><h2>Ausführungsdetails</h2><span id="log-live-state"></span></div><div class="run-dialog-head-actions"><div class="run-dialog-head-buttons"><span class="run-dialog-stop-slot" id="stop-live-run-slot"><button aria-hidden="true" class="danger run-dialog-stop-button" disabled id="stop-live-run" tabindex="-1" type="button">Job stoppen</button></span><button class="secondary run-dialog-close-button" id="close-dialog" type="button">Schließen</button></div><div class="run-dialog-head-live-data"><div class="client-network-chip hidden" id="client-network-live" title="Aktuelle Netzwerkinterfaces des Backup-Clients"></div><div class="bbm-network-chip hidden" id="bbm-network-live" title="Gesamtverkehr des BorgBackup-Manager-Containers"></div></div></div></div>
 <div class="run-dialog-body">
@@ -525,6 +531,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.2.0"></script><script src="/static/app.js?v=1.2.0"></script>
+<script src="/static/i18n.js?v=1.2.1"></script><script src="/static/app.js?v=1.2.1"></script>
 </body>
 </html>

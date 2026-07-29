@@ -1,5 +1,16 @@
 # Release Notes
 
+## v1.2.1 – 29.07.2026
+
+### Size-based ETA fallback, list search and modal editing
+
+- When a running backup exceeds only the frozen file-count baseline, the remaining-time estimate now stays active. From that point it uses only the still-valid size baseline and the fixed effective 1-Gbit/s throughput; no file factor is applied without a reliable remaining-file count.
+- **Source baseline exceeded** is shown for remaining time only after the stored source size has also been exceeded. Progress and ETA therefore remain useful longer when many new small files have appeared.
+- The repository list now adds search by name, manager ID, type, path and encryption alongside sorting. Connected devices can be searched by name, address, SSH user, port and Borg version.
+- **Edit** for backup jobs, repositories and connected devices opens a dedicated modal dialog. The existing validated form is reused, preserving fingerprint checks and repository-secret handling.
+- An equal-height placeholder keeps the original list position stable. After save, cancel, close or Escape, the form returns to its original location and the page stays at the previously selected table row.
+- The edit dialog has its own vertical scrolling area on desktop and mobile and locks background-page scrolling while open.
+
 ## v1.2.0 – 28.07.2026
 
 ### Debug log restricted to real incidents

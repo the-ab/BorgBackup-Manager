@@ -376,6 +376,26 @@ def test_operational_views_use_compact_tables_and_filtered_runs():
     assert "Europe/Berlin" in html
 
 
+def test_repository_and_device_lists_have_search_and_modal_editing():
+    html = (PROJECT_ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
+
+    assert 'id="repo-search"' in html
+    assert 'id="host-search"' in html
+    assert 'id="entity-edit-dialog"' in html
+    assert "state.repositorySearch" in javascript
+    assert "state.hostSearch" in javascript
+    assert "function openEntityEditDialog" in javascript
+    assert "function closeEntityEditDialog" in javascript
+    for function_name, next_name in (("editHost", "resetHostSshActionForm"), ("editRepository", "prepareRepositoryImport"), ("editJob", "bindForm")):
+        block = javascript.split(f"function {function_name}", 1)[1].split(f"function {next_name}", 1)[0]
+        assert "scrollIntoView" not in block
+        assert "openEntityEditDialog" in block
+    assert "entity-edit-form-placeholder" in css
+    assert "body.entity-edit-dialog-open" in css
+
+
 def test_container_and_remote_borg_commands_use_europe_berlin():
     compose = (PROJECT_ROOT / "compose.yaml").read_text(encoding="utf-8")
     runner_source = (PROJECT_ROOT / "app/runner.py").read_text(encoding="utf-8")

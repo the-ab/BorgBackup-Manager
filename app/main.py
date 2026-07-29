@@ -3893,6 +3893,7 @@ def run_json(
                     "estimate_baseline_exceeded": False,
                     "estimate_byte_baseline_exceeded": False,
                     "estimate_file_baseline_exceeded": False,
+                    "estimate_byte_fallback_active": False,
                     "estimate_assumed_interface_gbps": 1.0,
                     "estimate_assumed_utilization_percent": 80,
                     "estimate_assumed_bytes_per_second": 100_000_000,

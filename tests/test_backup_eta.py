@@ -95,6 +95,25 @@ def test_eta_is_unavailable_when_frozen_byte_baseline_is_exceeded():
     assert result["estimated_percent"] == 80.0
 
 
+def test_eta_falls_back_to_size_when_file_baseline_is_exceeded():
+    result = estimate_fixed_baseline_remaining(
+        progress={"original_bytes": 812 * 1024 ** 3, "files": 1_300_000, "path": "srv/a"},
+        source_paths=["/srv"],
+        total_bytes=int(1.2 * 1024 ** 4),
+        total_files=1_200_000,
+        total_origin="scan",
+    )
+    assert result["estimate_file_baseline_exceeded"] is True
+    assert result["estimate_byte_baseline_exceeded"] is False
+    assert result["estimate_baseline_exceeded"] is False
+    assert result["estimate_byte_fallback_active"] is True
+    assert result["estimated_remaining_files"] is None
+    assert result["estimate_file_factor"] == 1.0
+    assert result["estimated_remaining_bytes"] > 0
+    assert result["estimated_eta_seconds"] is not None
+    assert 0 < result["estimated_percent"] < 100
+
+
 def test_eta_stays_unavailable_without_known_source_size():
     result = estimate_fixed_baseline_remaining(
         progress={"original_bytes": 1000, "files": 10, "path": "srv/a"},

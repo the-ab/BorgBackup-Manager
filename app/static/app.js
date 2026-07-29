@@ -4,7 +4,7 @@ const state = {
   liveRunId: null, liveLogOffset: 0, liveLogSession: 0, liveLogRequestPending: false, liveTimer: null, refreshTimer: null,
   archiveData: null, archiveRequestId: 0, archiveSelection: new Set(), activeBrowser: null, browserPath: '', browserSelection: new Set(),
   openJobActions: new Set(), backgroundRefresh: false,
-  runFilter: 'all', runSearch: '', jobSearch: '', jobStatus: 'all',
+  runFilter: 'all', runSearch: '', jobSearch: '', jobStatus: 'all', hostSearch: '', repositorySearch: '',
   repositoryStatusDetails: '', dashboard: null,
   actionRuns: new Map(), activeRuns: [], refreshQueue: Promise.resolve(), syncResetTimer: null,
   syncDisplay: {message: 'Aktuell', kind: 'idle', persistent: false}, helpLanguage: '',
@@ -13,6 +13,7 @@ const state = {
   managerBackupTask: null, managerBackupTimer: null,
   systemHealth: null, systemHealthTimer: null, systemHealthRequestPending: false,
   headerNetwork: null, headerNetworkTimer: null, headerNetworkRequestPending: false, headerNetworkInterfacesSignature: '',
+  entityEditForm: null, entityEditPlaceholder: null, entityEditScrollY: 0,
 };
 
 const SORT_DEFAULTS = {
@@ -773,7 +774,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.2.0`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.2.1`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -1163,7 +1164,19 @@ function renderHosts() {
     renderHostSshActions();
     return;
   }
-  const rows = sortedHosts(state.hosts).map((host) => {
+  const hostQuery = String(state.hostSearch || '').trim().toLocaleLowerCase(currentLocale());
+  const visibleHosts = state.hosts.filter((host) => {
+    if (!hostQuery) return true;
+    const searchable = [host.name, host.address, host.username, host.port, host.borg_version, host.borg_version_status]
+      .map((value) => String(value ?? '')).join(' ').toLocaleLowerCase(currentLocale());
+    return searchable.includes(hostQuery);
+  });
+  if (!visibleHosts.length) {
+    $('#host-list').innerHTML = '<div class="empty">Keine verbundenen Geräte passen zur Suche.</div>';
+    renderHostSshActions();
+    return;
+  }
+  const rows = sortedHosts(visibleHosts).map((host) => {
     const assignments = state.jobs.filter((job) => job.host_id === host.id && state.repos.some((repo) => repo.id === job.repository_id && repo.managed));
     const ready = host.repository_ready && assignments.length > 0;
     const versionText = host.borg_version ? `Borg ${esc(host.borg_version)}` : 'nicht geprüft';
@@ -1199,7 +1212,16 @@ function renderHostSshActions() {
 
 function renderRepos() {
   if (!state.repos.length) { $('#repo-list').innerHTML = '<div class="empty">Noch keine Repositories angelegt.</div>'; return; }
-  const rows = sortedRepositories(state.repos).map((repo) => {
+  const repositoryQuery = String(state.repositorySearch || '').trim().toLocaleLowerCase(currentLocale());
+  const visibleRepositories = state.repos.filter((repo) => {
+    if (!repositoryQuery) return true;
+    const repositoryType = repo.managed ? 'verwaltet managed' : 'extern external ssh';
+    const searchable = [repo.id, repo.name, repo.location, repo.encryption_mode, repositoryType]
+      .map((value) => String(value ?? '')).join(' ').toLocaleLowerCase(currentLocale());
+    return searchable.includes(repositoryQuery);
+  });
+  if (!visibleRepositories.length) { $('#repo-list').innerHTML = '<div class="empty">Keine Repositories passen zur Suche.</div>'; return; }
+  const rows = sortedRepositories(visibleRepositories).map((repo) => {
     const jobs = state.jobs.filter((job) => job.repository_id === repo.id);
     const hosts = new Set(jobs.map((job) => job.host_id)).size;
     const keyInfo = !repo.managed && repo.external_ssh_public_key
@@ -2783,6 +2805,8 @@ function renderBackupProgress(run, active) {
   const percent = progress.estimated_percent == null ? null : Number(progress.estimated_percent);
   const eta = progress.estimated_eta_seconds == null ? null : Number(progress.estimated_eta_seconds);
   const baselineExceeded = Boolean(progress.estimate_baseline_exceeded);
+  const fileBaselineExceeded = Boolean(progress.estimate_file_baseline_exceeded);
+  const byteFallbackActive = Boolean(progress.estimate_byte_fallback_active);
   const assumedInterface = Number(progress.estimate_assumed_interface_gbps || 1);
   const assumedUtilization = Number(progress.estimate_assumed_utilization_percent || 80);
   const fileFactor = Number(progress.estimate_file_factor || 1);
@@ -2803,9 +2827,13 @@ function renderBackupProgress(run, active) {
   } else if (Number.isFinite(eta) && eta >= 0) {
     etaLabel = `${english ? 'approx.' : 'ca.'} ${formatDuration(eta)}`;
   }
-  const etaTitle = english
-    ? `Calculated from the frozen source baseline. Assumption: ${assumedInterface.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} Gbit/s interface × ${assumedUtilization.toLocaleString(currentLocale(), {maximumFractionDigits: 0})}% usable throughput${fileFactor > 1 ? `; file factor ×${fileFactor.toLocaleString(currentLocale(), {maximumFractionDigits: 2})}` : ''}.`
-    : `Berechnet aus der beim Start eingefrorenen Quellenbasis. Annahme: ${assumedInterface.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} Gbit/s Interface × ${assumedUtilization.toLocaleString(currentLocale(), {maximumFractionDigits: 0})} % nutzbarer Durchsatz${fileFactor > 1 ? `; Dateifaktor ×${fileFactor.toLocaleString(currentLocale(), {maximumFractionDigits: 2})}` : ''}.`;
+  const etaTitle = byteFallbackActive
+    ? (english
+      ? `The stored file count has been exceeded; the estimate continues from the still-valid size baseline only. Assumption: ${assumedInterface.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} Gbit/s interface × ${assumedUtilization.toLocaleString(currentLocale(), {maximumFractionDigits: 0})}% usable throughput.`
+      : `Die gespeicherte Dateianzahl wurde überschritten; die Schätzung läuft ausschließlich mit der weiterhin gültigen Größenbasis weiter. Annahme: ${assumedInterface.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} Gbit/s Interface × ${assumedUtilization.toLocaleString(currentLocale(), {maximumFractionDigits: 0})} % nutzbarer Durchsatz.`)
+    : (english
+      ? `Calculated from the frozen source baseline. Assumption: ${assumedInterface.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} Gbit/s interface × ${assumedUtilization.toLocaleString(currentLocale(), {maximumFractionDigits: 0})}% usable throughput${fileFactor > 1 ? `; file factor ×${fileFactor.toLocaleString(currentLocale(), {maximumFractionDigits: 2})}` : ''}.`
+      : `Berechnet aus der beim Start eingefrorenen Quellenbasis. Annahme: ${assumedInterface.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} Gbit/s Interface × ${assumedUtilization.toLocaleString(currentLocale(), {maximumFractionDigits: 0})} % nutzbarer Durchsatz${fileFactor > 1 ? `; Dateifaktor ×${fileFactor.toLocaleString(currentLocale(), {maximumFractionDigits: 2})}` : ''}.`);
   const progressTag = Number.isFinite(percent)
     ? `<progress max="100" value="${Math.max(0, Math.min(100, percent))}"></progress>`
     : '<progress max="100"></progress>';
@@ -2829,7 +2857,7 @@ function renderBackupProgress(run, active) {
       <div><span>${english ? 'Original' : 'Original'}</span><strong>${esc(originalLabel)}</strong></div>
       <div><span>${english ? 'Compressed' : 'Komprimiert'}</span><strong>${esc(formatBytes(progress.compressed_bytes))}</strong></div>
       <div><span>${english ? 'Deduplicated' : 'Dedupliziert'}</span><strong>${esc(formatBytes(progress.deduplicated_bytes))}</strong></div>
-      <div class="backup-progress-eta"><span>${english ? 'Remaining estimate' : 'Restzeitschätzung'}</span><strong title="${esc(etaTitle)}">${esc(etaLabel)}</strong></div>
+      <div class="backup-progress-eta"><span>${english ? 'Remaining estimate' : 'Restzeitschätzung'}</span><strong title="${esc(etaTitle)}">${esc(etaLabel)}</strong>${fileBaselineExceeded && !baselineExceeded ? `<small>${english ? 'size basis' : 'Größenbasis'}</small>` : ''}</div>
     </div>
     <div class="backup-item-statuses" aria-label="${english ? 'Borg item status counters' : 'Borg-Dateistatus-Zähler'}">${statusRow}</div>
     ${progress.current_source ? `<div class="backup-progress-path"><span>${english ? 'Current source' : 'Aktuelle Quelle'}</span><code data-i18n-skip title="${esc(progress.current_source)}">${esc(progress.current_source)}</code></div>` : ''}
@@ -3068,6 +3096,52 @@ function acceptPendingHostKey() {
   toast('SSH-Fingerprint bestätigt');
 }
 
+function entityEditResetActiveForm() {
+  const form = state.entityEditForm;
+  if (!form) return;
+  if (form.id === 'host-form') resetHostForm();
+  else if (form.id === 'repo-form') resetRepositoryForm();
+  else if (form.id === 'job-form') resetJobForm();
+}
+
+function restoreEntityEditForm() {
+  const form = state.entityEditForm;
+  const placeholder = state.entityEditPlaceholder;
+  if (form && placeholder?.parentNode) placeholder.parentNode.replaceChild(form, placeholder);
+  form?.classList.remove('entity-edit-form-active');
+  state.entityEditForm = null;
+  state.entityEditPlaceholder = null;
+}
+
+function closeEntityEditDialog({reset = true} = {}) {
+  const dialog = $('#entity-edit-dialog');
+  const scrollY = state.entityEditScrollY;
+  if (reset) entityEditResetActiveForm();
+  restoreEntityEditForm();
+  if (dialog?.open) dialog.close();
+  document.body.classList.remove('entity-edit-dialog-open');
+  requestAnimationFrame(() => window.scrollTo({top: scrollY, behavior: 'auto'}));
+}
+
+function openEntityEditDialog(form, title) {
+  if (!form) return;
+  if (state.entityEditForm && state.entityEditForm !== form) closeEntityEditDialog();
+  state.entityEditScrollY = window.scrollY;
+  const placeholder = document.createElement('div');
+  placeholder.className = 'entity-edit-form-placeholder';
+  placeholder.style.height = `${Math.ceil(form.getBoundingClientRect().height)}px`;
+  form.parentNode.insertBefore(placeholder, form);
+  state.entityEditForm = form;
+  state.entityEditPlaceholder = placeholder;
+  form.classList.add('entity-edit-form-active');
+  $('#entity-edit-dialog-title').textContent = title;
+  $('#entity-edit-dialog-body').appendChild(form);
+  const dialog = $('#entity-edit-dialog');
+  if (!dialog.open) dialog.showModal();
+  document.body.classList.add('entity-edit-dialog-open');
+  requestAnimationFrame(() => form.querySelector('input:not([type="hidden"]), select, textarea, button')?.focus({preventScroll: true}));
+}
+
 function resetHostForm() {
   const form = $('#host-form'); form.reset(); form.elements.id.value = ''; form.elements.port.value = '22'; form.elements.enabled.checked = true; form.elements.host_key.value = '';
   $('#host-form-title').textContent = 'Gerät hinzufügen'; $('#host-submit').textContent = 'Gerät speichern'; $('#cancel-host-edit').classList.add('hidden');
@@ -3076,14 +3150,13 @@ function resetHostForm() {
 
 function editHost(id) {
   const host = state.hosts.find((item) => item.id === id); if (!host) return;
-  goToView('hosts');
   const form = $('#host-form');
   for (const name of ['id', 'name', 'address', 'username', 'port', 'host_key']) form.elements[name].value = host[name] ?? '';
   form.elements.enabled.checked = host.enabled;
   $('#host-form-title').textContent = 'Gerät bearbeiten'; $('#host-submit').textContent = 'Änderungen speichern'; $('#cancel-host-edit').classList.remove('hidden');
   clearPendingHostKey(host.host_key ? 'Gespeicherter Hostschlüssel wird beibehalten.' : 'SSH-Fingerprint muss geprüft werden.');
   $('#host-fingerprint-box').classList.toggle('confirmed', Boolean(host.host_key));
-  form.scrollIntoView({behavior: 'smooth', block: 'start'});
+  openEntityEditDialog(form, currentLanguage() === 'en' ? 'Edit device' : 'Gerät bearbeiten');
 }
 
 function resetHostSshActionForm() {
@@ -3147,7 +3220,6 @@ function resetRepositoryForm() {
 
 function editRepository(id) {
   const repo = state.repos.find((item) => item.id === id); if (!repo) return;
-  goToView('repositories');
   const form = $('#repo-form');
   form.elements.id.value = repo.id; form.elements.import_directory.value = ''; form.elements.name.value = repo.name;
   form.elements.managed.value = String(repo.managed); form.elements.location.value = repo.managed ? '' : repo.location;
@@ -3162,7 +3234,8 @@ function editRepository(id) {
     keyInfo.innerHTML = `<b>Öffentlicher Manager-Schlüssel</b><code>${esc(repo.external_ssh_public_key)}</code><small>SSH-Hostkey: ${esc(repo.external_host_fingerprint || 'gespeichert')}</small><small>Privater Schlüssel: verschlüsselt in /data/security/security.db · Schutzschlüssel: /data/security/master.key</small><button type="button" class="secondary" ${bbmAction('copyRepositoryPublicKey', repo.id)}>Public Key kopieren</button>`;
   } else { keyInfo.classList.add('hidden'); keyInfo.innerHTML = ''; }
   $('#repo-form-title').textContent = 'Repository bearbeiten'; $('#repo-submit').textContent = 'Änderungen speichern'; $('#cancel-repo-edit').classList.remove('hidden');
-  toggleRepositoryMode(); form.scrollIntoView({behavior: 'smooth', block: 'start'});
+  toggleRepositoryMode();
+  openEntityEditDialog(form, currentLanguage() === 'en' ? 'Edit repository' : 'Repository bearbeiten');
 }
 
 function prepareRepositoryImport(directoryName, suggestedName) {
@@ -3295,7 +3368,6 @@ function resetJobForm() {
 
 function editJob(id) {
   const job = state.jobs.find((item) => item.id === id); if (!job) return;
-  goToView('jobs');
   const form = $('#job-form'); const options = job.create_options || {};
   form.elements.id.value = job.id; form.elements.name.value = job.name; form.elements.host_id.value = job.host_id; form.elements.repository_id.value = job.repository_id;
   form.elements.source_paths.value = job.source_paths.join('\n'); form.elements.exclude_patterns.value = job.exclude_patterns.join('\n');
@@ -3309,16 +3381,22 @@ function editJob(id) {
   form.elements.manual_prune_after_backup.checked = Boolean(job.manual_prune_after_backup); form.elements.manual_compact_after_prune.checked = Boolean(job.manual_compact_after_prune);
   $('#archive-prefix-hint').textContent = 'Effektiver Archivname: ' + job.archive_prefix + job.archive_template;
   $('#job-form-title').textContent = 'Backup-Job bearbeiten'; $('#job-submit').textContent = 'Änderungen speichern'; $('#cancel-job-edit').classList.remove('hidden');
-  toggleCompressionMode(); syncManualMaintenanceOptions(); form.scrollIntoView({behavior: 'smooth', block: 'start'});
+  toggleCompressionMode(); syncManualMaintenanceOptions();
+  openEntityEditDialog(form, currentLanguage() === 'en' ? 'Edit backup job' : 'Backup-Job bearbeiten');
 }
 
 function bindForm(selector, handler, impacts) {
   $(selector).addEventListener('submit', async (event) => {
     event.preventDefault();
     const release = markButtonBusy(event.submitter, 'Wird gespeichert …');
+    let busyReleased = false;
     setSyncState('Änderungen werden gespeichert …', 'pending', true);
     try {
       await handler(new FormData(event.target));
+      release();
+      busyReleased = true;
+      const modalEdit = state.entityEditForm === event.target;
+      if (modalEdit) closeEntityEditDialog({reset: false});
       if (selector === '#host-form') resetHostForm();
       else if (selector === '#host-ssh-action-form') resetHostSshActionForm();
       else if (selector === '#job-form') resetJobForm();
@@ -3327,7 +3405,7 @@ function bindForm(selector, handler, impacts) {
       await refreshAreas(impacts, 'Gespeicherte Änderungen werden angezeigt …');
       toast('Gespeichert');
     } catch (error) { setSyncState('Speichern fehlgeschlagen', 'error'); toast(error.message, true); }
-    finally { release(); }
+    finally { if (!busyReleased) release(); }
   });
 }
 
@@ -4064,6 +4142,8 @@ $('#remove-exclude-template').onclick = () => {
   renderExcludeTemplateEditor();
 };
 $('#job-search').oninput = (event) => { state.jobSearch = event.target.value; renderJobs(); };
+$('#host-search').oninput = (event) => { state.hostSearch = event.target.value; renderHosts(); };
+$('#repo-search').oninput = (event) => { state.repositorySearch = event.target.value; renderRepos(); };
 $('#job-status-filter').onchange = (event) => { state.jobStatus = event.target.value; renderJobs(); };
 $('#runs-filter').onchange = (event) => goToRuns(event.target.value);
 $('#runs-search').oninput = (event) => { state.runSearch = event.target.value; renderRuns(); };
@@ -4071,6 +4151,9 @@ $('#sync-state').onclick = openCurrentActiveRun;
 $('#refresh').onclick = async (event) => { const release = markButtonBusy(event.currentTarget, 'Aktualisiere …'); try { await loadAll(false); } finally { release(); } };
 $('#close-dialog').onclick = () => { state.liveRunId = null; state.liveLogOffset = 0; state.liveLogSession += 1; state.liveLogRequestPending = false; $('#log-dialog').close(); document.body.classList.remove('run-dialog-open'); };
 $('#log-dialog').addEventListener('close', () => document.body.classList.remove('run-dialog-open'));
+$('#close-entity-edit-dialog').onclick = () => closeEntityEditDialog();
+$('#entity-edit-dialog').addEventListener('cancel', (event) => { event.preventDefault(); closeEntityEditDialog(); });
+$('#entity-edit-dialog').addEventListener('close', () => { if (state.entityEditForm) closeEntityEditDialog(); });
 $('#stop-live-run').onclick = (event) => { const runId = Number(event.currentTarget.dataset.runId || state.liveRunId || 0); if (runId) cancelExecution(runId, event.currentTarget); };
 $('#scan-host-key').onclick = async (event) => {
   const form = $('#host-form'); const address = form.elements.address.value.trim(); const port = +form.elements.port.value;
@@ -4091,14 +4174,14 @@ $('#scan-host-key').onclick = async (event) => {
 $('#accept-host-key').onclick = acceptPendingHostKey;
 $('#discard-host-key').onclick = () => { $('#host-form').elements.host_key.value = ''; clearPendingHostKey(); };
 ['address', 'port'].forEach((name) => $('#host-form').elements[name].addEventListener('input', () => { $('#host-form').elements.host_key.value = ''; clearPendingHostKey(); }));
-$('#cancel-host-edit').onclick = resetHostForm;
+$('#cancel-host-edit').onclick = () => state.entityEditForm === $('#host-form') ? closeEntityEditDialog() : resetHostForm();
 $('#cancel-host-ssh-action-edit').onclick = resetHostSshActionForm;
-$('#cancel-repo-edit').onclick = resetRepositoryForm;
+$('#cancel-repo-edit').onclick = () => state.entityEditForm === $('#repo-form') ? closeEntityEditDialog() : resetRepositoryForm();
 $('#repo-form').elements.managed.onchange = toggleRepositoryMode;
 $('#repo-form').elements.encryption_mode.onchange = toggleRepositoryMode;
 $('#repo-form').elements.generate_external_ssh_key.onchange = toggleRepositoryMode;
 $('#repo-form').elements.scan_external_host_key.onchange = toggleRepositoryMode;
-$('#cancel-job-edit').onclick = resetJobForm;
+$('#cancel-job-edit').onclick = () => state.entityEditForm === $('#job-form') ? closeEntityEditDialog() : resetJobForm();
 $('#cancel-schedule-edit').onclick = resetScheduleForm;
 $('#schedule-target-mode').onchange = toggleScheduleTarget;
 $('#job-form').elements.compression.onchange = toggleCompressionMode;

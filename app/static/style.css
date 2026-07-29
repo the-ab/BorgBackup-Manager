@@ -2372,3 +2372,32 @@ body.run-dialog-open { overflow: hidden; }
 
 /* Compact remaining-time value without extra live-progress rows. */
 .backup-progress-eta strong { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+
+
+/* 1.2.1: modal editing keeps the selected list position stable */
+.entity-edit-form-placeholder { min-height: 1px; pointer-events: none; }
+body.entity-edit-dialog-open { overflow: hidden; }
+.entity-edit-dialog {
+  width: min(1180px, calc(100vw - 38px));
+  max-height: calc(100dvh - 38px);
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 24px 80px rgba(0,0,0,.32);
+}
+.entity-edit-dialog::backdrop { background: rgba(7, 13, 18, .6); backdrop-filter: blur(3px); }
+.entity-edit-dialog-head { margin: 0; padding: 16px 20px 13px; border-bottom: 1px solid var(--line); }
+.entity-edit-dialog-head h2 { font-size: 1.12rem; }
+.entity-edit-dialog-body { max-height: calc(100dvh - 112px); padding: 16px; overflow-y: auto; overscroll-behavior: contain; }
+.entity-edit-dialog-body > .panel { margin: 0; box-shadow: none; }
+.entity-edit-dialog .entity-edit-form-active > .panel-head:first-child,
+.entity-edit-dialog .entity-edit-form-active > #host-form-title { display: none; }
+@media (max-width: 720px) {
+  .entity-edit-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .entity-edit-dialog-head { align-items: stretch; gap: 10px; padding: 12px; }
+  .entity-edit-dialog-head button { width: 100%; }
+  .entity-edit-dialog-body { max-height: calc(100dvh - 102px); padding: 10px; }
+}

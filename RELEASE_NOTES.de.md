@@ -1,5 +1,16 @@
 # Release Notes
 
+## v1.2.1 – 29.07.2026
+
+### Größenbasierter ETA-Fallback, Listensuche und modale Bearbeitung
+
+- Überschreitet ein laufendes Backup nur die eingefrorene Dateianzahl, bleibt die Restzeitschätzung jetzt aktiv. Sie verwendet ab diesem Punkt ausschließlich die weiterhin gültige Größenbasis und den festen effektiven 1-Gbit/s-Durchsatz; ein Dateifaktor wird ohne belastbare Restdateizahl nicht mehr angewendet.
+- **Quellenbasis überschritten** erscheint für die Restzeit erst, wenn auch die gespeicherte Quellgröße überschritten wurde. Fortschrittsanzeige und Restzeit können dadurch bei neu hinzugekommenen vielen kleinen Dateien länger sinnvoll weiterlaufen.
+- Die Repository-Liste besitzt jetzt zusätzlich zur Sortierung eine Suche nach Name, Manager-ID, Typ, Pfad und Verschlüsselung. Die Liste der verbundenen Geräte kann nach Name, Adresse, SSH-Benutzer, Port und Borg-Version durchsucht werden.
+- **Bearbeiten** für Backup-Jobs, Repositories und verbundene Geräte öffnet einen eigenen modalen Dialog. Das bestehende Formular wird dabei weiterverwendet; Validierung, Fingerprint-Prüfung und Repository-Geheimnisbehandlung bleiben unverändert.
+- Ein höhengleicher Platzhalter hält die ursprüngliche Listenposition stabil. Nach Speichern, Abbrechen, Schließen oder Escape wird das Formular an seine Ausgangsstelle zurückgesetzt und die Seite bleibt an der zuvor ausgewählten Tabellenzeile.
+- Der Bearbeitungsdialog besitzt auf Desktop und Mobilgeräten einen eigenen vertikalen Scrollbereich und sperrt währenddessen das Scrollen des Seitenhintergrunds.
+
 ## v1.2.0 – 28.07.2026
 
 ### Debug-Log auf echte Störfälle begrenzt

@@ -155,6 +155,12 @@ def estimate_fixed_baseline_remaining(
     # source percentage created transient/redundant 0% output.
     current_source = source_for_archive_path(str(progress.get("path") or ""), source_paths)
 
+    byte_fallback_active = bool(
+        file_baseline_exceeded
+        and not byte_baseline_exceeded
+        and effective_total_bytes is not None
+    )
+
     return {
         "estimated_total_bytes": effective_total_bytes,
         "estimated_total_files": effective_total_files,
@@ -167,9 +173,12 @@ def estimate_fixed_baseline_remaining(
         "estimate_file_factor": file_factor,
         "estimate_basis": "fixed-1g-source-baseline",
         "estimate_total_origin": total_origin,
-        "estimate_baseline_exceeded": byte_baseline_exceeded or file_baseline_exceeded,
+        # Remaining time is byte-based. A stale file count therefore switches
+        # to a pure size fallback instead of suppressing a still-valid ETA.
+        "estimate_baseline_exceeded": byte_baseline_exceeded,
         "estimate_byte_baseline_exceeded": byte_baseline_exceeded,
         "estimate_file_baseline_exceeded": file_baseline_exceeded,
+        "estimate_byte_fallback_active": byte_fallback_active,
         "estimate_assumed_interface_gbps": ASSUMED_INTERFACE_GBIT_PER_SECOND,
         "estimate_assumed_utilization_percent": int(round(ASSUMED_LINK_UTILIZATION * 100)),
         "estimate_assumed_bytes_per_second": ASSUMED_TRANSFER_BYTES_PER_SECOND,

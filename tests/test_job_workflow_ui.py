@@ -165,6 +165,8 @@ def test_live_backup_progress_widget_is_present_and_lightweight():
     assert 'assumedInterface = Number(progress.estimate_assumed_interface_gbps || 1)' in script
     assert 'assumedUtilization' in script
     assert 'current_source_percent' not in script
+    assert 'estimate_byte_fallback_active' in script
+    assert "fileBaselineExceeded && !baselineExceeded" in script
 
 
 def test_live_dialog_exposes_manager_network_and_direct_stop_controls():
