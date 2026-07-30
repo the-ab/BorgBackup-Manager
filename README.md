@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.2.1
+# BorgBackup Manager 1.2.2
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -17,7 +17,8 @@ German documentation is available in [`README.de.md`](README.de.md). Installatio
 - Managed-repository service: integrated OpenSSH with restricted `borg serve`
 - Persistent application data: `/docker_data/borgbackup-manager/data` by default
 - Persistent managed repositories: `/docker_data/borgbackup-manager/repositories` by default
-- Docker image: `borgbackup-manager:latest`
+- Published GHCR image: `ghcr.io/the-ab/borgbackup-manager:latest` or pinned `ghcr.io/the-ab/borgbackup-manager:v1.2.2`
+- Local source build: `borgbackup-manager:latest`
 - Default timezone: `Europe/Berlin`
 - Container name: `borgbackup-manager`
 - Container hostname: `bbm`
@@ -28,12 +29,16 @@ Every release ZIP contains the same top-level directory:
 
 ```text
 BorgBackup-Manager/
+├── compose.yaml                  # local build with install.sh
+└── docker-compose/
+    ├── compose.yaml              # standalone GHCR deployment
+    └── .env.example
 ```
 
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.2.1.zip
+BorgBackup-Manager-1.2.2.zip
 ```
 
 The documentation naming convention is:
@@ -390,15 +395,45 @@ System diagnostics cover:
 
 ## Installation
 
+Two separate deployment paths are provided.
+
+### Guided local source build
+
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.2.1.zip
+unzip /path/BorgBackup-Manager-1.2.2.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
 ```
 
-The guided installer creates `.env`, validates paths and ports, builds the image and starts the services. See [`INSTALLATION.md`](INSTALLATION.md) for the complete procedure.
+The guided installer creates `.env`, validates paths and ports, builds the image locally and starts the services.
+
+### Published GHCR image
+
+A deployment without project source files needs only the two files from `docker-compose/`: `compose.yaml` and `.env.example`.
+
+```bash
+mkdir -p /opt/borgbackup-manager
+cd /opt/borgbackup-manager
+cp /path/BorgBackup-Manager/docker-compose/compose.yaml .
+cp /path/BorgBackup-Manager/docker-compose/.env.example .env
+chmod 600 .env
+editor .env
+docker compose pull
+docker compose up -d
+docker compose logs --tail=200 borg-manager
+```
+
+On a genuinely new installation, the container writes the administrator username and temporary password exactly once to the local startup log. The image-only example enables this with `BBM_SHOW_INITIAL_ADMIN_ON_START=1`. Until the mandatory password change, the encrypted bootstrap credentials can also be displayed explicitly:
+
+```bash
+docker compose exec -T borg-manager python -m app.initial_admin
+```
+
+Set `BBM_SHOW_INITIAL_ADMIN_ON_START=0` to disable automatic log output. When enabled, the temporary password is present in Docker logs, so change it immediately and restrict administrative access to Docker and its logs.
+
+The standalone Compose file uses `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` follows the current published image; pin a release such as `v1.2.2` for reproducible deployments. On first start the entrypoint safely initializes a fresh empty repository mount that Docker created as `root`. Existing non-empty repository data is never recursively re-owned automatically; correct host ownership, group permissions or ACLs instead. See [`INSTALLATION.md`](INSTALLATION.md) for the complete procedure.
 
 Default endpoints and paths:
 
@@ -407,7 +442,8 @@ Web UI:          https://SERVER:8443
 Repository SSH:  SERVER:2222
 Data:            /docker_data/borgbackup-manager/data
 Repositories:    /docker_data/borgbackup-manager/repositories
-Image:           borgbackup-manager:latest
+Local build:     borgbackup-manager:latest
+GHCR:            ghcr.io/the-ab/borgbackup-manager:latest or :v1.2.2
 Container:       borgbackup-manager
 ```
 

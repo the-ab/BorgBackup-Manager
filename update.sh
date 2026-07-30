@@ -283,7 +283,7 @@ project_items() {
     .dockerignore .env.example .gitattributes .gitignore \
     LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md pytest.ini scripts \
     compose.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh INSTALLATION.md INSTALLATION.de.md README.md README.de.md \
-    RELEASE_NOTES.md RELEASE_NOTES.de.md VERSION requirements.in requirements.txt requirements-dev.txt app docker tests
+    RELEASE_NOTES.md RELEASE_NOTES.de.md VERSION requirements.in requirements.txt requirements-dev.txt app docker docker-compose tests
 }
 
 validate_runtime_paths() {
@@ -420,7 +420,7 @@ if len(candidates) != 1:
     raise SystemExit("Release-ZIP enthält keinen eindeutigen BorgBackup-Manager-Projektordner")
 source = candidates[0]
 required = [
-    ".env.example", "VERSION", "compose.yaml", "Dockerfile", "requirements.in", "requirements.txt", "app", "docker",
+    ".env.example", "VERSION", "compose.yaml", "docker-compose", "Dockerfile", "requirements.in", "requirements.txt", "app", "docker",
     "install.sh", "update.sh", "recovery.sh", "restore-backup.sh",
     "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md", "THIRD-PARTY-NOTICES.md",
     "README.md", "README.de.md", "INSTALLATION.md", "INSTALLATION.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
@@ -431,7 +431,7 @@ if missing:
 allowed = [
     ".dockerignore", ".env.example", ".gitattributes", ".gitignore",
     "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md", "THIRD-PARTY-NOTICES.md", "pytest.ini", "scripts",
-    "compose.yaml", "Dockerfile", "install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "INSTALLATION.md",
+    "compose.yaml", "docker-compose", "Dockerfile", "install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "INSTALLATION.md",
     "INSTALLATION.de.md", "README.md", "README.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
     "VERSION", "requirements.in", "requirements.txt",
     "requirements-dev.txt", "app", "docker", "tests",

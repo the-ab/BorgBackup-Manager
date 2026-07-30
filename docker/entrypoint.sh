@@ -26,10 +26,38 @@ chown root:borg /data/logs/sshd.log
 chmod 640 /data/logs/borg-serve.log /data/logs/sshd.log /data/logs/debug.log
 chmod 600 /data/repository-ssh/authorized_keys
 
+repository_access_ok() {
+  for access in r w x; do
+    runuser -u borg -- test "-$access" /repositories || return 1
+  done
+}
+
+# A directory created automatically by Docker for a fresh bind mount normally
+# belongs to root. Initialize only an empty mount root; existing repository data
+# is never changed recursively or silently. ACLs and already-correct group
+# permissions remain untouched when the borg user already has full access.
+if ! repository_access_ok; then
+  repository_entry=""
+  repository_scan_ok=0
+  if repository_entry="$(find /repositories -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)"; then
+    repository_scan_ok=1
+  fi
+  if [ "$repository_scan_ok" -eq 1 ] && [ -z "$repository_entry" ]; then
+    echo "[borgbackup-manager] Initializing empty repository directory /repositories for UID:GID ${borg_uid}:${borg_gid}."
+    if ! chown "${borg_uid}:${borg_gid}" /repositories || ! chmod u+rwx /repositories; then
+      echo "[borgbackup-manager] Automatic initialization of /repositories failed." >&2
+    fi
+  elif [ "$repository_scan_ok" -eq 1 ]; then
+    echo "[borgbackup-manager] Repository directory /repositories contains existing data; automatic recursive ownership changes are disabled." >&2
+  else
+    echo "[borgbackup-manager] Repository directory /repositories could not be inspected for safe first-start initialization." >&2
+  fi
+fi
+
 for access in r w x; do
   if ! runuser -u borg -- test "-$access" /repositories; then
     echo "Repository directory /repositories lacks -$access access for UID:GID ${borg_uid}:${borg_gid}." >&2
-    echo "Correct the ownership/permissions of BBM_REPOSITORY_PATH on the Docker host." >&2
+    echo "Correct the ownership/permissions or ACLs of BBM_REPOSITORY_PATH on the Docker host." >&2
     exit 1
   fi
 done
@@ -57,6 +85,17 @@ export BBM_ADMIN_TOKEN BBM_SECRET_KEY
 # ausschließlich die für die Containerlaufzeit erforderlichen Schlüssel unter
 # /run/bbm-secrets. /run ist nicht persistent.
 python -m app.security_bootstrap
+
+show_initial_admin_on_start="${BBM_SHOW_INITIAL_ADMIN_ON_START:-0}"
+case "$show_initial_admin_on_start" in
+  0|1) ;;
+  *) echo "BBM_SHOW_INITIAL_ADMIN_ON_START must be 0 or 1" >&2; exit 1 ;;
+esac
+if [ "$show_initial_admin_on_start" = "1" ]; then
+  echo "[borgbackup-manager] Checking for one-time administrator credentials."
+  python -m app.initial_admin --announce-once
+fi
+
 # Prevent the unprivileged Web API from repeating the root-only runtime
 # materialization during FastAPI startup.
 export BBM_RUNTIME_SECURITY_PREPARED=1

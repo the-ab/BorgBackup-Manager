@@ -597,9 +597,40 @@ def audit_release_layout() -> None:
             error(f"Release-note compatibility copy differs: {compatibility_copy.relative_to(ROOT)}")
 
 
+
+def audit_standalone_image_deployment(version: str) -> None:
+    compose_path = ROOT / "docker-compose" / "compose.yaml"
+    env_path = ROOT / "docker-compose" / ".env.example"
+    if not compose_path.is_file() or not env_path.is_file():
+        error("Standalone docker-compose bundle is incomplete")
+        return
+    compose = _read(compose_path)
+    sample = _read(env_path)
+    entrypoint = _read(ROOT / "docker" / "entrypoint.sh")
+    required = (
+        "image: ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG:-latest}",
+        "${BBM_REPOSITORY_PATH:-/docker_data/borgbackup-manager/repositories}:/repositories:rslave",
+        "./.env:/run/bbm-host.env",
+    )
+    for marker in required:
+        if marker not in compose:
+            error(f"Standalone compose marker missing: {marker}")
+    if "build:" in compose:
+        error("Standalone GHCR compose must not contain a local build")
+    if "BBM_IMAGE_TAG=latest" not in sample or f"v{version}" not in sample:
+        error("Standalone .env example does not document latest and the current fixed tag")
+    if "BBM_DEBUG_LOG_LEVEL" in sample or "BBM_DEBUG_LOG_LEVEL" in _read(ROOT / ".env.example"):
+        error("Obsolete BBM_DEBUG_LOG_LEVEL remains in an example configuration")
+    if 'chown "${borg_uid}:${borg_gid}" /repositories' not in entrypoint:
+        error("Entrypoint does not initialize an empty repository mount root")
+    if "chown -R borg:borg /repositories" in entrypoint:
+        error("Entrypoint must never recursively re-own repository contents")
+
+
 def main() -> int:
     version = _read(ROOT / "VERSION").strip()
     audit_version_consistency(version)
+    audit_standalone_image_deployment(version)
     audit_document_feature_alignment()
     audit_current_source_stats_and_parallelism()
     audit_eta_fallback_search_and_modal_editing()

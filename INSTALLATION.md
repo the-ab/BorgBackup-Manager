@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.2.1
+# Installation and Operations — BorgBackup Manager 1.2.2
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.2.1.zip
+BorgBackup-Manager-1.2.2.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.2.1.zip
+unzip /path/BorgBackup-Manager-1.2.2.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.2.1.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.2.2.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -86,6 +86,55 @@ To create or validate configuration without starting the stack:
 ```bash
 bash install.sh --config-only
 ```
+
+### Standalone installation with the published GHCR image
+
+Hosts that should not keep the project source tree or run `install.sh` can use the separate `docker-compose/` bundle from the release:
+
+```text
+docker-compose/
+├── compose.yaml
+└── .env.example
+```
+
+Copy both files into a dedicated operations directory:
+
+```bash
+sudo mkdir -p /opt/borgbackup-manager
+sudo cp docker-compose/compose.yaml /opt/borgbackup-manager/compose.yaml
+sudo cp docker-compose/.env.example /opt/borgbackup-manager/.env
+cd /opt/borgbackup-manager
+sudo chmod 600 .env
+sudo editor .env
+```
+
+Review at least `BBM_REPOSITORY_PUBLIC_HOST`, `BBM_TLS_HOSTS`, `BBM_DATA_PATH` and `BBM_REPOSITORY_PATH`, then start the published image:
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose ps
+docker compose logs --tail=200 borg-manager
+```
+
+`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.2.2` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
+
+During first start the entrypoint checks `/repositories` using `BBM_BORG_UID` and `BBM_BORG_GID`. If the mount is empty and is owned by `root` only because Docker created the host directory, only the mount root is assigned to the configured UID/GID and receives owner read/write/execute access. The entrypoint never runs recursive `chown` on repositories. Existing non-empty data therefore requires correct host ownership, group permissions or ACLs. NFS deployments with `root_squash` must configure matching numeric UID/GID or server-side permissions.
+
+On a genuinely new installation, the container writes the one-time administrator credentials exactly once to its local startup log. The image-only example enables this with `BBM_SHOW_INITIAL_ADMIN_ON_START=1`:
+
+```bash
+cd /opt/borgbackup-manager
+docker compose logs --tail=200 borg-manager
+```
+
+Until the mandatory password change, the same encrypted bootstrap credentials can be displayed explicitly again:
+
+```bash
+docker compose exec -T borg-manager python -m app.initial_admin
+```
+
+Set `BBM_SHOW_INITIAL_ADMIN_ON_START=0` to disable automatic log output. When enabled, the temporary password is present in the local Docker log; change it immediately and restrict Docker and log access to administrators.
 
 ## 4. `.env` configuration
 

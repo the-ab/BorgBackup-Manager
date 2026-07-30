@@ -637,6 +637,7 @@ def change_own_password(user_id: int, current_password: str, new_password: str) 
     revoke_user_sessions(user_id)
     INITIAL_ADMIN_PATH.unlink(missing_ok=True)
     delete_secret("bootstrap", "initial_admin_password")
+    delete_secret("bootstrap", "initial_admin_startup_announced")
     record_event("password_changed", user_id=user_id, username=username)
 
 

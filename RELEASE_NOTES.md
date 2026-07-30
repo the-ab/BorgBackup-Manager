@@ -1,5 +1,17 @@
 # Release Notes
 
+## v1.2.2 – 30.07.2026
+
+### Standalone GHCR deployment and safe repository first-start initialization
+
+- The release now includes `docker-compose/` with a dedicated `compose.yaml` and `.env.example` for the published image. It uses `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}` with either `latest` or a pinned tag such as `v1.2.2`, requiring neither the project source tree nor `install.sh` on the Docker host.
+- README and installation guides now describe local source builds and image-only deployments as separate operating modes, including startup, updates, initial sign-in and persistent host paths.
+- A genuinely new installation through the GHCR Compose profile writes the administrator username and temporary password exactly once to the local container startup log. `BBM_SHOW_INITIAL_ADMIN_ON_START` controls this behavior, while encrypted manual retrieval remains available until the mandatory password change.
+- Before the existing access check, `docker/entrypoint.sh` initializes a fresh empty `/repositories` mount that Docker created as `root` for the configured `BBM_BORG_UID:BBM_BORG_GID`. Only the mount root is changed; existing contents are never recursively re-owned.
+- Non-empty or safely uninspectable repository directories remain unchanged and continue to produce a clear permission diagnostic. ACLs, group access and NFS UID/GID mappings remain respected.
+- The obsolete `BBM_DEBUG_LOG_LEVEL` variable was removed from the remaining example configurations.
+- The updater now recognizes and preserves the new top-level `docker-compose/` directory for future release transitions.
+
 ## v1.2.1 – 29.07.2026
 
 ### Size-based ETA fallback, list search and modal editing
