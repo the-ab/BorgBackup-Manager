@@ -1,5 +1,14 @@
 # Release Notes
 
+## v1.2.3 – 31.07.2026
+
+### Bilingual `.env` reference for the GHCR Compose stack
+
+- The `docker-compose/` directory now also contains `README.md` and `README.de.md`. Both guides document every variable in the image-only `.env`, including required values, valid ranges, defaults, host paths, UID/GID permissions, TLS, sessions, reverse-proxy trust, sign-in throttling, restore safety limits, parallelism, and log rotation.
+- The reference marks `BBM_REPOSITORY_PUBLIC_HOST` as mandatory and separately highlights the image tag, ports, certificate names, persistent paths, numeric repository permissions, and one-time administrator output that should be reviewed before first start.
+- The root README files and installation guides link to the new language-specific references; `.env.example` and `compose.yaml` also point directly to the detailed documentation.
+- The empty runtime `data/` directory accidentally included in the previous project archive has been removed. Release checks, project audit, and regression tests now reject the top-level runtime directories `data/` and `repositories/`, including empty directory trees.
+
 ## v1.2.2 – 30.07.2026
 
 ### Standalone GHCR deployment and safe repository first-start initialization

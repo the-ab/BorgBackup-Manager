@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.2.2
+# Installation und Betrieb – BorgBackup Manager 1.2.3
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.2.2.zip
+BorgBackup-Manager-1.2.3.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.2.2.zip
+unzip /pfad/BorgBackup-Manager-1.2.3.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -75,7 +75,7 @@ Das Skript erzeugt `.env` und die persistenten Verzeichnisse. Admin-Token und `B
 
 Passwörter werden als scrypt-Prüfwerte gespeichert. Controller-, Repository-SSH- und TLS-Privatschlüssel, Repository-Passphrasen sowie Borg-Keyfiles werden verschlüsselt in `security.db` abgelegt. `master.key` ist der einzige externe Vertrauensanker und besitzt Modus `0600`. Laufzeitdateien werden ausschließlich unter `/run/bbm-secrets` materialisiert.
 
-Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.2.2` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
+Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.2.3` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
 
 ### Installation ausschließlich mit dem GHCR-Image
 
@@ -84,7 +84,9 @@ Für einen Docker-Host, auf dem weder Projektquellcode noch `install.sh` liegen 
 ```text
 docker-compose/
 ├── compose.yaml
-└── .env.example
+├── .env.example
+├── README.de.md
+└── README.md
 ```
 
 Beide Dateien in ein eigenes Betriebsverzeichnis kopieren:
@@ -107,7 +109,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.2.2` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
+`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.2.3` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
 
 Beim ersten Start prüft der Entrypoint den Mount `/repositories` mit der konfigurierten `BBM_BORG_UID` und `BBM_BORG_GID`. Ist der Mount leer und nur wegen der automatischen Docker-Anlage `root` zugeordnet, wird ausschließlich das Stammverzeichnis auf die konfigurierte UID/GID gesetzt und für den Eigentümer lesbar, beschreibbar und betretbar gemacht. Es erfolgt ausdrücklich kein `chown -R`. Enthält das Verzeichnis bereits Daten, werden keine Eigentümer automatisch geändert. In diesem Fall müssen die Rechte oder ACLs auf dem Host passend korrigiert werden. Bei NFS mit `root_squash` ist die Berechtigung serverseitig beziehungsweise über passende numerische UID/GID zu setzen.
 
@@ -127,6 +129,8 @@ docker compose exec -T borg-manager python -m app.initial_admin
 Mit `BBM_SHOW_INITIAL_ADMIN_ON_START=0` wird die automatische Protokollausgabe deaktiviert. Bei aktivierter Ausgabe enthält das lokale Docker-Protokoll das temporäre Passwort. Es ist deshalb unmittelbar zu ändern; Docker-Zugriff und Protokolle dürfen ausschließlich Administratoren zugänglich sein.
 
 ### Vollständige `.env`-Konfiguration
+
+Eine nach Pflichtwerten, Netzwerk, Pfaden, Sitzungen, Sicherheitsgrenzen, Backup-Limits und Leistungswerten gegliederte Referenz liegt direkt beim Image-Stack unter [`docker-compose/README.de.md`](docker-compose/README.de.md). Die englische Fassung befindet sich in [`docker-compose/README.md`](docker-compose/README.md).
 
 Die Datei `.env.example` ist die Referenz für alle vom Compose-Stack unterstützten Hostwerte. `install.sh` erzeugt daraus eine vollständige `.env` und bewahrt bei einer erneuten Konfiguration zusätzliche vorhandene Schlüssel. Besonders relevant sind:
 
@@ -182,7 +186,7 @@ cd /opt/BorgBackup-Manager-alt
 docker compose down
 
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.2.2.zip
+unzip /pfad/BorgBackup-Manager-1.2.3.zip
 cp /opt/BorgBackup-Manager-alt/.env /opt/BorgBackup-Manager/.env
 cd /opt/BorgBackup-Manager
 docker compose up -d --build

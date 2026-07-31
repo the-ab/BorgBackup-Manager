@@ -578,6 +578,9 @@ def audit_markdown_links() -> None:
 
 
 def audit_release_layout() -> None:
+    for runtime_directory in ("data", "repositories"):
+        if (ROOT / runtime_directory).exists():
+            error(f"Runtime directory must not be included: {runtime_directory}/")
     if (ROOT / ".github").exists():
         error(".github must not be included; releases are published manually")
     legacy = ROOT / "RELEASE_NOTES.en.md"
@@ -601,11 +604,15 @@ def audit_release_layout() -> None:
 def audit_standalone_image_deployment(version: str) -> None:
     compose_path = ROOT / "docker-compose" / "compose.yaml"
     env_path = ROOT / "docker-compose" / ".env.example"
-    if not compose_path.is_file() or not env_path.is_file():
+    readme_de_path = ROOT / "docker-compose" / "README.de.md"
+    readme_en_path = ROOT / "docker-compose" / "README.md"
+    if not all(path.is_file() for path in (compose_path, env_path, readme_de_path, readme_en_path)):
         error("Standalone docker-compose bundle is incomplete")
         return
     compose = _read(compose_path)
     sample = _read(env_path)
+    readme_de = _read(readme_de_path)
+    readme_en = _read(readme_en_path)
     entrypoint = _read(ROOT / "docker" / "entrypoint.sh")
     required = (
         "image: ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG:-latest}",
@@ -621,6 +628,11 @@ def audit_standalone_image_deployment(version: str) -> None:
         error("Standalone .env example does not document latest and the current fixed tag")
     if "BBM_DEBUG_LOG_LEVEL" in sample or "BBM_DEBUG_LOG_LEVEL" in _read(ROOT / ".env.example"):
         error("Obsolete BBM_DEBUG_LOG_LEVEL remains in an example configuration")
+    for variable in ("BBM_REPOSITORY_PUBLIC_HOST", "BBM_DATA_PATH", "BBM_REPOSITORY_PATH", "BBM_BORG_UID", "BBM_BORG_GID"):
+        if variable not in readme_de or variable not in readme_en:
+            error(f"Standalone .env reference does not document {variable}")
+    if f"v{version}" not in readme_de or f"v{version}" not in readme_en:
+        error("Standalone .env references do not document the current fixed image tag")
     if 'chown "${borg_uid}:${borg_gid}" /repositories' not in entrypoint:
         error("Entrypoint does not initialize an empty repository mount root")
     if "chown -R borg:borg /repositories" in entrypoint:

@@ -77,3 +77,12 @@ def test_release_metadata_is_inside_updater_managed_app_directory():
 def test_container_image_includes_license_and_notice_files():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md ./" in dockerfile
+
+
+def test_runtime_directories_are_not_shipped_in_project_release():
+    assert not (ROOT / "data").exists()
+    assert not (ROOT / "repositories").exists()
+    release_check = (ROOT / "scripts/release-check.sh").read_text(encoding="utf-8")
+    audit = (ROOT / "scripts/project-audit.py").read_text(encoding="utf-8")
+    assert "Runtime directory must not be released" in release_check
+    assert "Runtime directory must not be included" in audit

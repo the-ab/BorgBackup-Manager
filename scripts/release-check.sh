@@ -8,6 +8,7 @@ required_files=(
   LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md
   .gitignore .dockerignore VERSION app/release.py scripts/project-audit.py
   docker-compose/compose.yaml docker-compose/.env.example
+  docker-compose/README.de.md docker-compose/README.md
 )
 for file in "${required_files[@]}"; do
   test -s "$file" || { echo "Missing required release file: $file" >&2; exit 1; }
@@ -15,6 +16,10 @@ done
 
 for forbidden in .env docker-compose/.env install-config.env docker-compose.override.yml; do
   test ! -e "$forbidden" || { echo "Local-only file must not be released: $forbidden" >&2; exit 1; }
+done
+
+for runtime_directory in data repositories; do
+  test ! -e "$runtime_directory" || { echo "Runtime directory must not be released: $runtime_directory" >&2; exit 1; }
 done
 
 if find . -path './.git' -prune -o -type f \

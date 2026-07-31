@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.2.2
+# Installation and Operations — BorgBackup Manager 1.2.3
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.2.2.zip
+BorgBackup-Manager-1.2.3.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.2.2.zip
+unzip /path/BorgBackup-Manager-1.2.3.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.2.2.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.2.3.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -94,7 +94,9 @@ Hosts that should not keep the project source tree or run `install.sh` can use t
 ```text
 docker-compose/
 ├── compose.yaml
-└── .env.example
+├── .env.example
+├── README.md
+└── README.de.md
 ```
 
 Copy both files into a dedicated operations directory:
@@ -117,7 +119,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.2.2` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
+`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.2.3` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
 
 During first start the entrypoint checks `/repositories` using `BBM_BORG_UID` and `BBM_BORG_GID`. If the mount is empty and is owned by `root` only because Docker created the host directory, only the mount root is assigned to the configured UID/GID and receives owner read/write/execute access. The entrypoint never runs recursive `chown` on repositories. Existing non-empty data therefore requires correct host ownership, group permissions or ACLs. NFS deployments with `root_squash` must configure matching numeric UID/GID or server-side permissions.
 
@@ -137,6 +139,8 @@ docker compose exec -T borg-manager python -m app.initial_admin
 Set `BBM_SHOW_INITIAL_ADMIN_ON_START=0` to disable automatic log output. When enabled, the temporary password is present in the local Docker log; change it immediately and restrict Docker and log access to administrators.
 
 ## 4. `.env` configuration
+
+A focused reference grouped by required values, networking, paths, sessions, security limits, backup limits, and performance settings is included at [`docker-compose/README.md`](docker-compose/README.md). The German version is available at [`docker-compose/README.de.md`](docker-compose/README.de.md).
 
 The guided installer writes a complete `.env`. Supported host variables include:
 
