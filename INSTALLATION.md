@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.2.9
+# Installation and Operations — BorgBackup Manager 1.2.10
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.2.9.zip
+BorgBackup-Manager-1.2.10.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.2.9.zip
+unzip /path/BorgBackup-Manager-1.2.10.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.2.9.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.2.10.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -119,7 +119,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.2.9` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
+`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.2.10` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
 
 During first start the entrypoint checks `/repositories` using `BBM_BORG_UID` and `BBM_BORG_GID`. If the mount is empty and is owned by `root` only because Docker created the host directory, only the mount root is assigned to the configured UID/GID and receives owner read/write/execute access. The entrypoint never runs recursive `chown` on repositories. Existing non-empty data therefore requires correct host ownership, group permissions or ACLs. NFS deployments with `root_squash` must configure matching numeric UID/GID or server-side permissions.
 
@@ -497,18 +497,22 @@ Manager backups contain the application database, security database, master key,
 
 New manager backups are mandatory streaming AES-256-GCM encrypted `.bbm` files protected by a non-stored passphrase of at least twelve characters. Compression is selectable: none, Deflate 1, Deflate 6 (default), or Deflate 9. Import and restore require metadata version v1.1.0 or newer. The Web UI shows live phase/progress/event output and resumes an active status after reload.
 
-### Create separate cache backup
+### Create split cache artifacts
 
-A cache backup is a separate `borgbackup-manager-cache-v...` artifact and may include either or both of:
+Starting with v1.2.10, one cache-backup run no longer creates a single large bundle. It emits independent files:
 
-- manager Borg cache and security state: `/data/borg-cache` and `/data/borg-security`
-- managed client caches: `$HOME/.cache/borgbackup-manager/repository-<ID>` for current device/repository assignments
+- `borgbackup-manager-cache-manager-v...` for `/data/borg-cache` and `/data/borg-security`
+- `borgbackup-manager-cache-client-<device-name>-h<ID>-v...` for each selected device
 
-At least one cache group must be selected. `lock.exclusive` and `lock.roster` are excluded. Client caches are streamed directly over verified controller SSH. Disabled devices are recorded as skipped, a missing cache is allowed, and a connection or transfer failure on one enabled device is recorded as a warning in the manifest and live progress, while the cache backup continues with the remaining reachable clients. Symbolic links are rejected. No run may be queued or active while a cache backup is created.
+Manager cache inclusion is independent. Client collection supports **All devices** or a multi-selection under **Selected devices**. Unselected devices are not contacted over SSH. Each device artifact groups all currently assigned repository caches and matching Borg security state for that device. The device name and stable ID are present in the filename and internal archive paths.
 
-Cache encryption is enabled and recommended by default but may be disabled deliberately. Encrypted cache artifacts use streaming AES-256-GCM/scrypt and `.bbm`; unencrypted cache artifacts use `.zip`. Compression and passphrase are independent from the manager backup. Live progress reports the current device/repository, `Client x/y`, transferred bytes, manager-cache file/byte progress, and the encryption phase when enabled.
+A device failure does not abort the remaining artifacts. The affected device is reported as a warning, and no empty device file is retained when no cache/security data could be saved. `lock.exclusive`, `lock.roster` and symbolic links are excluded. No run may be queued or active during creation.
 
-Under **Manage Borg cache**, manager and client state can be scanned on demand. Client scans can target all devices or a selected subset. BBM checks its managed client cache `$HOME/.cache/borgbackup-manager/`, the normal Borg cache `$HOME/.cache/borg/` or `BORG_CACHE_DIR`, alternate historical cache roots derived from XDG/SSH-user settings, and Borg security state below `$HOME/.config/borg/security/` or `BORG_SECURITY_DIR`. Restore safety copies remain separate. Unknown regular Borg/security directories are never preselected, and every destructive cleanup performs a fresh association check first. Manager-side `/data/borg-cache` and `/data/borg-security` use the same conservative checks.
+Encryption remains enabled and recommended by default. Each artifact is encrypted separately with AES-256-GCM/scrypt and uses `.bbm`; deliberately unencrypted artifacts use `.zip`. All artifacts from one run share the entered passphrase and compression choice. Live progress reports `artifact x/y`, device, repository and transferred bytes.
+
+Under **Cache backup restore**, a manager-cache artifact is restored through its dedicated action. A device artifact lists each contained repository cache. The target can be the original device or another enabled device assigned to the same repository. Existing target caches are preserved under `pre-bbm-restore` names, and existing Borg security state is never overwritten by an older saved state.
+
+Under **Manage Borg cache**, manager and client state can still be scanned, reset and cleaned independently from backup creation. The client scan likewise supports all devices or a multi-selection.
 
 ### Upload
 

@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.2.9
+# BorgBackup Manager 1.2.10
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -17,7 +17,7 @@ Die englische Standarddokumentation befindet sich in `README.md`. Die deutschen 
 - Repository-Dienst: integrierter OpenSSH-Dienst mit eingeschränktem `borg serve`
 - Persistente Daten: standardmäßig `/docker_data/borgbackup-manager/data`
 - Persistente Repositories: standardmäßig `/docker_data/borgbackup-manager/repositories`
-- Veröffentlichtes GHCR-Image: `ghcr.io/the-ab/borgbackup-manager:latest` oder versionsfest `ghcr.io/the-ab/borgbackup-manager:v1.2.9`
+- Veröffentlichtes GHCR-Image: `ghcr.io/the-ab/borgbackup-manager:latest` oder versionsfest `ghcr.io/the-ab/borgbackup-manager:v1.2.10`
 - Lokaler Quellcode-Build: `borgbackup-manager:latest`
 - Zeitzone für WebUI, Cron-Zeitpläne und Borg-Läufe: `Europe/Berlin`
 - Containername: `borgbackup-manager`
@@ -41,7 +41,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.2.9.zip
+BorgBackup-Manager-1.2.10.zip
 ```
 
 ## Sicherheit und Härtung
@@ -632,17 +632,18 @@ Der BorgBackup Manager behandelt ab v1.0.77 zwei getrennte Sicherungstypen. Dadu
 
 Repository-Nutzdaten, vollständige Laufprotokolle und Borg-Caches sind nicht Bestandteil neuer Manager-Backups. Neue Manager-Backups werden immer als AES-256-GCM-verschlüsselte `.bbm`-Dateien mit einer mindestens zwölf Zeichen langen, nicht gespeicherten Passphrase erzeugt. Import und Wiederherstellung setzen ein Backup mit Metadatenversion v1.1.0 oder neuer voraus; ältere Formate werden abgelehnt.
 
-**Cache-Backup** (`borgbackup-manager-cache-v...bbm` beziehungsweise unverschlüsselt `.zip`) ist davon vollständig getrennt. Es kann wahlweise enthalten:
+**Cache-Backups** werden ab v1.2.10 als mehrere unabhängige Artefakte erzeugt:
 
-- den managerseitigen Borg-Cache `/data/borg-cache`
-- Borgs Repository-Sicherheitsstatus `/data/borg-security`
-- die BBM-eigenen Client-Caches `$HOME/.cache/borgbackup-manager/repository-<ID>` einschließlich des zugehörigen Borg-Sicherheitsstatus `$HOME/.config/borg/security/<Borg-Repository-ID>`
+- `borgbackup-manager-cache-manager-v...bbm` beziehungsweise `.zip` enthält ausschließlich den managerseitigen Borg-Cache `/data/borg-cache` und Borgs Repository-Sicherheitsstatus `/data/borg-security`.
+- `borgbackup-manager-cache-client-<Gerätename>-h<ID>-v...bbm` beziehungsweise `.zip` enthält ausschließlich die BBM-Client-Caches und den zugehörigen Borg-Sicherheitsstatus eines Geräts. Alle Repository-Zuordnungen dieses Geräts liegen gemeinsam in dessen Gerätearchiv.
 
-Manager-Cache und Client-Caches können unabhängig voneinander ausgewählt werden. Client-Caches werden über den bestätigten Controller-SSH-Zugang direkt als TAR-Datenstrom in die Cache-Datei geschrieben; es wird kein zusätzlicher vollständiger Client-Cache-Baum unter `/data` angelegt. Deaktivierte Geräte werden dokumentiert übersprungen, ein fehlender Cache wird als nicht vorhanden vermerkt und ein nicht erreichbares aktives Gerät erzeugt eine Warnung, ohne das übrige Cache-Backup abzubrechen. Das Manifest nennt die Zahl der nicht gesicherten Client-Zuordnungen und die Fortschrittsanzeige nennt Gerät und Repository. Flüchtige `lock.exclusive`-/`lock.roster`-Artefakte und symbolische Links werden nicht gesichert. Cache-Backups sind nur zulässig, wenn keine Ausführung läuft oder wartet.
+Beim Erstellen kann der BBM-Cache unabhängig aktiviert werden. Für Geräte stehen **Alle Geräte** oder eine **Mehrfachauswahl einzelner Geräte** zur Verfügung. Nicht ausgewählte Geräte werden nicht kontaktiert und erzeugen keine Warnungen. Für jedes ausgewählte Gerät wird eine eigene Datei erstellt; ein nicht erreichbares Gerät erzeugt nur für dieses Gerätearchiv eine Warnung, während die übrigen Artefakte weiter erstellt werden. Enthält ein Gerät weder sicherbaren Cache noch Borg-Sicherheitsstatus, wird keine leere Geräte-Datei angelegt.
+
+Die Gerätebezeichnung wird im Dateinamen und in den internen Archivpfaden verwendet. Eine stabile Geräte-ID bleibt zusätzlich enthalten, damit identische oder später geänderte Namen keine Kollision verursachen. Flüchtige `lock.exclusive`-/`lock.roster`-Artefakte und symbolische Links werden nicht gesichert. Cache-Backups sind nur zulässig, wenn keine Ausführung läuft oder wartet.
 
 Die Verschlüsselung des Cache-Backups ist **standardmäßig aktiviert und empfohlen**, kann aber bewusst deaktiviert werden. Verschlüsselte Cache-Backups werden als `.bbm`, unverschlüsselte Cache-Backups als `.zip` gespeichert. Die Einstellung ist unabhängig vom Manager-Backup; dessen Verschlüsselung bleibt verpflichtend.
 
-Für beide Backup-Typen zeigt die WebUI während der Erstellung eine Live-Statusanzeige mit Phase, Fortschrittsbalken und den letzten Statusschritten. Beim Client-Cache-Backup werden aktuelles Gerät/Repository, `Client x/y` und die bereits übertragene Datenmenge angezeigt. Beim Manager-Cache werden verarbeitete Dateien und Bytes gemeldet; bei verschlüsselten Backups wird anschließend der Verschlüsselungsfortschritt angezeigt. Ein Seiten-Reload nimmt einen noch laufenden Backup-Task automatisch wieder auf.
+Für beide Backup-Typen zeigt die WebUI während der Erstellung eine Live-Statusanzeige mit Phase, Fortschrittsbalken und den letzten Statusschritten. Bei einem Geräte-Cache-Backup werden aktuelles Gerätearchiv, Repository und übertragene Datenmenge angezeigt; der Gesamtfortschritt umfasst alle zu erzeugenden Einzeldateien. Beim Manager-Cache werden verarbeitete Dateien und Bytes gemeldet; bei verschlüsselten Backups wird anschließend der Verschlüsselungsfortschritt angezeigt. Ein Seiten-Reload nimmt einen noch laufenden Backup-Task automatisch wieder auf.
 
 Die Kompression ist je Backup wählbar: keine, Deflate 1 (schnell), Deflate 6 (Standard) oder Deflate 9 (maximal). Die Verschlüsselung arbeitet streamend und lädt auch große Cache-Dateien nicht vollständig in den Arbeitsspeicher.
 
@@ -652,7 +653,7 @@ Unter **Backup hochladen** können Manager- und Cache-Backups im vom BBM erzeugt
 
 Ein **Manager-Backup** wird über **Manager-Backup wiederherstellen** vollständig eingespielt. Vorher erzeugt BBM ein separates verschlüsseltes Sicherheitsbackup. Cache-Backups können dort nicht ausgewählt beziehungsweise nicht als Managerzustand eingespielt werden. Unterstützt werden ausschließlich Manager-Backups mit Metadatenversion v1.1.0 oder neuer.
 
-Unter **Cache-Backup wiederherstellen** kann der managerseitige Borg-Cache gezielt zurückgespielt werden; ein bestehender Manager-Cache wird zuvor als `pre-bbm-restore`-Sicherheitskopie erhalten. Gesicherte Client-Caches werden pro aktuellem Gerät/Repository einzeln angeboten. Ein vorhandener Zielcache auf dem Client wird vor dem Austausch als `repository-<ID>.pre-bbm-restore-<Zeit>` erhalten. Der mitgesicherte Borg-Sicherheitsstatus wird nur ergänzt, wenn für die echte Borg-Repository-ID noch kein Security-Ordner vorhanden ist; ein bestehender Sicherheitsstatus wird nicht durch einen möglicherweise älteren Backup-Stand überschrieben. Die aktuelle Geräte-/Repository-Zuordnung und ein aktiviertes Zielgerät sind Pflicht.
+Unter **Cache-Backup wiederherstellen** kann der managerseitige Borg-Cache gezielt zurückgespielt werden; ein bestehender Manager-Cache wird zuvor als `pre-bbm-restore`-Sicherheitskopie erhalten. Gesicherte Client-Caches werden pro Gerätearchiv und Repository einzeln angeboten. Als Ziel kann das ursprüngliche Gerät oder ein anderes aktives Gerät gewählt werden, das demselben Repository zugeordnet ist. Ein vorhandener Zielcache auf dem Client wird vor dem Austausch als `repository-<ID>.pre-bbm-restore-<Zeit>` erhalten. Der mitgesicherte Borg-Sicherheitsstatus wird nur ergänzt, wenn für die echte Borg-Repository-ID noch kein Security-Ordner vorhanden ist; ein bestehender Sicherheitsstatus wird nicht durch einen möglicherweise älteren Backup-Stand überschrieben. Die aktuelle Geräte-/Repository-Zuordnung und ein aktiviertes Zielgerät sind Pflicht.
 
 Für einen Serverwechsel wird zuerst das Manager-Backup mit `restore-backup.sh` eingespielt. Separate Cache-Backups werden danach über die WebUI gezielt wiederhergestellt. `restore-backup.sh` weist separate Cache-Backup-Dateien als Manager-Restore-Eingabe ausdrücklich zurück.
 
@@ -720,7 +721,7 @@ Es stehen zwei getrennte Installationswege zur Verfügung.
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.2.9.zip
+unzip /pfad/BorgBackup-Manager-1.2.10.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -792,7 +793,7 @@ Repository-SSH: SERVER:2222
 Daten:          /docker_data/borgbackup-manager/data
 Repositories:   /docker_data/borgbackup-manager/repositories
 Lokaler Build:  borgbackup-manager:latest
-GHCR:           ghcr.io/the-ab/borgbackup-manager:latest oder :v1.2.9
+GHCR:           ghcr.io/the-ab/borgbackup-manager:latest oder :v1.2.10
 Container:      borgbackup-manager
 ```
 

@@ -652,6 +652,38 @@ def audit_standalone_image_deployment(version: str) -> None:
     if "chown -R borg:borg /repositories" in entrypoint:
         error("Entrypoint must never recursively re-own repository contents")
 
+def audit_split_cache_backup_artifacts() -> None:
+    backups = _read(APP / "backups.py")
+    client_cache = _read(APP / "client_cache.py")
+    main = _read(APP / "main.py")
+    schemas = _read(APP / "schemas.py")
+    frontend = _read(APP / "static" / "app.js")
+    html = _read(APP / "static" / "index.html")
+    required = (
+        (backups, "def create_cache_backup_set(", "Split cache-backup orchestration missing"),
+        (backups, "borgbackup-manager-cache-manager", "Manager-cache artifact filename missing"),
+        (backups, "borgbackup-manager-cache-client-", "Device-cache artifact filename missing"),
+        (backups, '"cache_artifact_kind": artifact_kind', "Cache artifact kind metadata missing"),
+        (client_cache, "def _client_archive_paths", "Named client archive paths missing"),
+        (client_cache, "host_ids:", "Selected-device collection filter missing"),
+        (main, "create_cache_backup_set", "API still uses a combined cache-backup creator"),
+        (schemas, 'client_scope: str = "all"', "Cache-backup device scope missing"),
+        (schemas, "target_host_id", "Cross-device cache restore target missing"),
+        (frontend, "renderCacheBackupHostOptions", "Cache-backup device selector missing"),
+        (frontend, "target_host_id: targetHostId", "Cross-device restore payload missing"),
+        (html, 'id="cache-backup-client-scope"', "Cache-backup scope control missing"),
+        (html, 'id="cache-backup-client-hosts"', "Cache-backup multi-select missing"),
+    )
+    for text, item, message in required:
+        if item not in text:
+            error(message)
+    if "collect_client_borg_caches(archive)" in backups:
+        error("Cache backup still collects every client into one combined artifact")
+    for path, marker_text in ((ROOT / "README.de.md", "borgbackup-manager-cache-client-<Gerätename>"), (ROOT / "README.md", "borgbackup-manager-cache-client-<device-name>")):
+        if marker_text not in _read(path):
+            error(f"Split cache-backup documentation missing in {path.name}")
+
+
 def audit_manager_archive_mounts() -> None:
     main = _read(APP / "main.py")
     service = _read(APP / "service.py")
@@ -693,6 +725,7 @@ def main() -> int:
     audit_version_consistency(version)
     audit_standalone_image_deployment(version)
     audit_manager_archive_mounts()
+    audit_split_cache_backup_artifacts()
     audit_document_feature_alignment()
     audit_current_source_stats_and_parallelism()
     audit_eta_fallback_search_and_modal_editing()

@@ -774,7 +774,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.2.9`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.2.10`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -2142,7 +2142,10 @@ function renderBackups() {
       ? `<button class="secondary" data-client-cache-open="${esc(backup.name)}">Caches</button>`
       : '';
     const restoreAction = cacheOnly ? '' : `<button class="secondary" data-backup-restore="${esc(backup.name)}">Wiederherstellen</button>`;
-    const typeLabel = cacheOnly ? 'Cache' : (cacheIncluded || clientCacheIncluded ? 'Manager · Legacy-Cache' : 'Manager');
+    const artifactKind = backup.manifest?.cache_artifact_kind;
+    const typeLabel = cacheOnly
+      ? (artifactKind === 'manager' ? 'BBM-Cache' : artifactKind === 'client' ? `Geräte-Cache · ${backup.manifest?.source_host_name || 'Gerät'}` : 'Legacy-Cache')
+      : (cacheIncluded || clientCacheIncluded ? 'Manager · Legacy-Cache' : 'Manager');
     const encryption = backup.encrypted ? 'verschlüsselt' : 'unverschlüsselt';
     return `<div class="entity"><div class="backup-meta"><div class="entity-title"><h3>${esc(backup.name)}</h3><span class="badge ${cacheOnly ? 'warning' : 'success'}">${typeLabel}</span></div><p>${encryption} · Version ${esc(backup.manifest?.app_version || '?')} · ${esc(formatDate(backup.modified_at))} · ${formatBytes(backup.size_bytes)}${backup.manifest?.label ? ' · ' + esc(backup.manifest.label) : ''}${cacheLabel}${compression}</p></div><div class="actions">${restoreAction}${cacheAction}<button data-backup-download="${esc(backup.name)}">Download</button><button class="danger" data-backup-delete="${esc(backup.name)}">Löschen</button></div></div>`;
   };
@@ -2154,6 +2157,7 @@ function renderBackups() {
     ? cacheBackups.map((backup) => renderItem(backup, true)).join('')
     : '<div class="empty">Noch keine separaten Cache-Backups vorhanden.</div>';
   renderClientCacheScanHostOptions();
+  renderCacheBackupHostOptions();
   renderBorgCacheStatus();
   $$('[data-backup-restore]').forEach((button) => button.onclick = () => {
     const select = $('#backup-restore-form').elements.name;
@@ -2186,6 +2190,23 @@ function renderClientCacheScanHostOptions() {
   const previous = new Set([...select.selectedOptions].map((option) => Number(option.value)));
   select.innerHTML = sortedHosts(state.hosts).map((host) => `<option value="${Number(host.id)}"${previous.has(Number(host.id)) ? ' selected' : ''}>${esc(host.name)} · ${esc(host.username)}@${esc(host.address)}${host.enabled ? '' : ' · deaktiviert'}</option>`).join('');
   const selectedMode = mode.value === 'selected';
+  select.disabled = !selectedMode;
+  wrap.classList.toggle('muted', !selectedMode);
+}
+
+function renderCacheBackupHostOptions() {
+  const include = $('#cache-backup-form')?.elements.include_client_borg_cache;
+  const scope = $('#cache-backup-client-scope');
+  const select = $('#cache-backup-client-hosts');
+  const wrap = $('#cache-backup-client-hosts-wrap');
+  const selection = $('#cache-backup-client-selection');
+  if (!include || !scope || !select || !wrap || !selection) return;
+  const previous = new Set([...select.selectedOptions].map((option) => Number(option.value)));
+  select.innerHTML = sortedHosts(state.hosts).map((host) => `<option value="${Number(host.id)}"${previous.has(Number(host.id)) ? ' selected' : ''}>${esc(host.name)} · ${esc(host.username)}@${esc(host.address)}${host.enabled ? '' : ' · deaktiviert'}</option>`).join('');
+  const enabled = include.checked;
+  const selectedMode = enabled && scope.value === 'selected';
+  selection.classList.toggle('muted', !enabled);
+  scope.disabled = !enabled;
   select.disabled = !selectedMode;
   wrap.classList.toggle('muted', !selectedMode);
 }
@@ -4733,7 +4754,12 @@ function managerBackupTaskDetail(task) {
   if (task?.host_name || task?.repository_name) parts.push([task.host_name, task.repository_name].filter(Boolean).join(' · '));
   if (task?.status === 'failed' && task?.error) parts.push(task.error);
   if (task?.status === 'warning' && task?.warning) parts.push(translateMessage(task.warning));
-  if (['finished', 'warning'].includes(task?.status) && task?.backup?.size_bytes) parts.push(`${english ? 'Backup size' : 'Backup-Größe'}: ${formatBytes(task.backup.size_bytes)}`);
+  if (['finished', 'warning'].includes(task?.status)) {
+    const artifacts = Array.isArray(task?.backups) ? task.backups : (task?.backup ? [task.backup] : []);
+    if (artifacts.length > 1) parts.push(`${artifacts.length} ${english ? 'separate artifacts' : 'getrennte Archive'}`);
+    const totalSize = artifacts.reduce((sum, item) => sum + Number(item?.size_bytes || 0), 0);
+    if (totalSize > 0) parts.push(`${english ? 'Total size' : 'Gesamtgröße'}: ${formatBytes(totalSize)}`);
+  }
   return parts.join(' · ') || (english ? 'Progress is updated automatically.' : 'Der Fortschritt wird automatisch aktualisiert.');
 }
 
@@ -4828,7 +4854,7 @@ async function pollManagerBackupTask() {
         : (cacheTask ? 'Cache-Backup erstellt' : 'Manager-Backup erstellt'), task.status === 'warning');
       const form = cacheTask ? $('#cache-backup-form') : $('#backup-form');
       if (form) form.reset();
-      if (cacheTask) toggleCacheBackupEncryption();
+      if (cacheTask) { toggleCacheBackupEncryption(); renderCacheBackupHostOptions(); }
       await refreshAreas(['backups']);
     } else if (task.status === 'failed') {
       toast(task.error || `${backupTaskNoun(task, false)} konnte nicht erstellt werden`, true);
@@ -4873,7 +4899,10 @@ function toggleCacheBackupEncryption() {
 }
 
 $('#cache-backup-encrypted').onchange = toggleCacheBackupEncryption;
+$('#cache-backup-form').elements.include_client_borg_cache.onchange = renderCacheBackupHostOptions;
+$('#cache-backup-client-scope').onchange = renderCacheBackupHostOptions;
 toggleCacheBackupEncryption();
+renderCacheBackupHostOptions();
 
 $('#cache-backup-form').onsubmit = async (event) => {
   event.preventDefault();
@@ -4884,6 +4913,10 @@ $('#cache-backup-form').onsubmit = async (event) => {
     encrypted,
     include_manager_borg_cache: form.get('include_manager_borg_cache') === 'on',
     include_client_borg_cache: form.get('include_client_borg_cache') === 'on',
+    client_scope: form.get('client_scope') || 'all',
+    client_host_ids: form.get('client_scope') === 'selected'
+      ? [...event.target.querySelectorAll('#cache-backup-client-hosts option:checked')].map((option) => Number(option.value))
+      : null,
     compression: form.get('compression') || 'standard',
     passphrase: encrypted ? form.get('passphrase') : null,
     passphrase_confirm: encrypted ? form.get('passphrase_confirm') : null,
@@ -4948,12 +4981,13 @@ function renderClientCacheRestoreInventory(data) {
   const status = $('#client-cache-restore-status');
   if (!list || !status) return;
   if (!data?.included) {
-    status.textContent = 'Dieses Cache-Backup enthält keine Client-Borg-Caches.';
+    status.textContent = 'Dieses Cache-Archiv enthält keine Client-Borg-Caches.';
     status.classList.remove('hidden', 'error-state');
     list.innerHTML = '';
     return;
   }
-  status.textContent = `${Number(data.saved_count || 0)} Cache(s) gesichert · ${Number(data.security_saved_count || 0)} Sicherheitsstände gesichert · ${Number(data.security_missing_count || 0)} Sicherheitsstände fehlen · ${Number(data.security_unresolved_count || 0)} nicht eindeutig zugeordnet · ${Number(data.skipped_count || 0)} übersprungen · ${Number(data.warning_count || 0)} Warnung(en)`;
+  const sourceLabel = data.source_host_name ? ` · Quelle: ${data.source_host_name}` : '';
+  status.textContent = `${Number(data.saved_count || 0)} Cache(s) gesichert · ${Number(data.security_saved_count || 0)} Sicherheitsstände gesichert · ${Number(data.warning_count || 0)} Warnung(en)${sourceLabel}`;
   status.classList.remove('hidden', 'error-state');
   list.innerHTML = (data.entries || []).length ? data.entries.map((item) => {
     const saved = item.status === 'saved';
@@ -4961,46 +4995,52 @@ function renderClientCacheRestoreInventory(data) {
     const badge = saved ? 'success' : item.status === 'missing' ? 'inactive' : 'warning';
     const size = saved && item.tar_bytes ? ` · ${formatBytes(item.tar_bytes)}` : '';
     const reason = item.reason ? `<small>${esc(item.reason)}</small>` : '';
-    const securityLabel = item.security_status === 'saved' ? 'Security gesichert' : item.security_status === 'missing' ? 'Security fehlt' : item.security_status === 'unresolved' ? 'Security nicht eindeutig zugeordnet' : item.security_status ? 'Security übersprungen' : 'kein Security-Stand im älteren Backup';
+    const securityLabel = item.security_status === 'saved' ? 'Security gesichert' : item.security_status === 'missing' ? 'Security fehlt' : item.security_status === 'unresolved' ? 'Security nicht eindeutig zugeordnet' : item.security_status ? 'Security übersprungen' : 'kein Security-Stand';
     const securityInfo = `<p><small>${esc(securityLabel)}${item.borg_repository_id ? ` · Borg-ID ${esc(item.borg_repository_id)}` : ''}</small></p>`;
-    const action = saved
-      ? `<button class="secondary" type="button" data-client-cache-restore="${Number(item.host_id)}:${Number(item.repository_id)}">Wiederherstellen</button>`
+    const targetHosts = sortedHosts(state.hosts.filter((host) => host.enabled && state.jobs.some((job) => Number(job.host_id) === Number(host.id) && Number(job.repository_id) === Number(item.repository_id))));
+    const preferredTarget = targetHosts.some((host) => Number(host.id) === Number(item.host_id)) ? Number(item.host_id) : Number(targetHosts[0]?.id || 0);
+    const targetSelect = saved
+      ? `<label>Zielgerät<select id="client-cache-target-${Number(item.host_id)}-${Number(item.repository_id)}">${targetHosts.map((host) => `<option value="${Number(host.id)}"${Number(host.id) === preferredTarget ? ' selected' : ''}>${esc(host.name)}${Number(host.id) === Number(item.host_id) ? ' · ursprüngliches Gerät' : ''}</option>`).join('')}</select><small>Es werden nur Geräte angeboten, die demselben Repository zugeordnet sind.</small></label>`
       : '';
-    return `<div class="entity"><div><div class="entity-title"><h3>${esc(item.host_name)} · ${esc(item.repository_name)}</h3><span class="badge ${badge}">${label}</span></div><p><code>${esc(item.cache_path)}</code>${size}</p>${securityInfo}${reason}</div><div class="actions">${action}</div></div>`;
-  }).join('') : '<div class="empty">Keine Geräte-/Repository-Zuordnungen im Backup enthalten.</div>';
+    const action = saved
+      ? `<button class="secondary" type="button" data-client-cache-restore="${Number(item.host_id)}:${Number(item.repository_id)}"${targetHosts.length ? '' : ' disabled'}>Wiederherstellen</button>`
+      : '';
+    return `<div class="entity"><div><div class="entity-title"><h3>${esc(item.host_name)} · ${esc(item.repository_name)}</h3><span class="badge ${badge}">${label}</span></div><p><code>${esc(item.cache_path)}</code>${size}</p>${securityInfo}${reason}${targetSelect}</div><div class="actions">${action}</div></div>`;
+  }).join('') : '<div class="empty">Keine Repository-Caches im Gerätearchiv enthalten.</div>';
   $$('[data-client-cache-restore]').forEach((button) => button.onclick = () => {
-    const [hostId, repositoryId] = button.dataset.clientCacheRestore.split(':').map(Number);
-    restoreClientCacheFromBackup(hostId, repositoryId, button);
+    const [sourceHostId, repositoryId] = button.dataset.clientCacheRestore.split(':').map(Number);
+    restoreClientCacheFromBackup(sourceHostId, repositoryId, button);
   });
 }
 
-async function restoreClientCacheFromBackup(hostId, repositoryId, button) {
+async function restoreClientCacheFromBackup(sourceHostId, repositoryId, button) {
   const form = $('#client-cache-restore-form');
   const name = form.elements.name.value;
   const passphrase = form.elements.passphrase.value || null;
-  const item = state.clientCacheInventory?.entries?.find((entry) => Number(entry.host_id) === hostId && Number(entry.repository_id) === repositoryId);
-  const target = item ? `${item.host_name} / ${item.repository_name}` : `Gerät #${hostId} / Repository #${repositoryId}`;
+  const item = state.clientCacheInventory?.entries?.find((entry) => Number(entry.host_id) === sourceHostId && Number(entry.repository_id) === repositoryId);
+  const targetSelect = $(`#client-cache-target-${sourceHostId}-${repositoryId}`);
+  const targetHostId = Number(targetSelect?.value || 0);
+  const targetHost = state.hosts.find((host) => Number(host.id) === targetHostId);
+  if (!targetHostId || !targetHost) { toast('Bitte ein gültiges Zielgerät auswählen', true); return; }
+  const source = item ? `${item.host_name} / ${item.repository_name}` : `Gerät #${sourceHostId} / Repository #${repositoryId}`;
   const prompt = currentLanguage() === 'en'
-    ? `Really restore the client Borg cache for ${target}?\n\nAn existing BBM client cache is renamed first and kept as a safety copy. A saved Borg security state is restored only when the client does not already have one.`
-    : `Client-Borg-Cache für ${target} wirklich wiederherstellen?\n\nEin vorhandener BBM-Client-Cache wird vorher als Sicherheitskopie umbenannt. Ein gesicherter Borg-Sicherheitsstatus wird nur ergänzt, wenn auf dem Client noch keiner für diese Borg-Repository-ID vorhanden ist.`;
+    ? `Restore the client Borg cache from ${source} to ${targetHost.name}?
+
+An existing target cache is renamed first and kept as a safety copy.`
+    : `Client-Borg-Cache von ${source} auf Zielgerät ${targetHost.name} wiederherstellen?
+
+Ein vorhandener Cache auf dem Zielgerät wird vorher als Sicherheitskopie umbenannt.`;
   if (!confirm(prompt)) return;
   const release = markButtonBusy(button, 'Client-Cache wird wiederhergestellt …');
   const status = $('#client-cache-restore-status');
-  status.textContent = `Client-Cache für ${target} wird authentifiziert und übertragen …`;
+  status.textContent = `Client-Cache wird auf ${targetHost.name} übertragen …`;
   status.classList.remove('hidden', 'error-state');
   try {
-    const result = await api(`/backups/${encodeURIComponent(name)}/client-caches/${hostId}/${repositoryId}/restore`, {
+    const result = await api(`/backups/${encodeURIComponent(name)}/client-caches/${sourceHostId}/${repositoryId}/restore`, {
       method: 'POST',
-      body: JSON.stringify({passphrase, confirm: true}),
+      body: JSON.stringify({passphrase, target_host_id: targetHostId, confirm: true}),
     });
-    const securityText = result.security_restore?.status === 'restored'
-      ? ' Borg-Sicherheitsstatus wurde ebenfalls wiederhergestellt.'
-      : result.security_restore?.status === 'kept_existing'
-        ? ' Vorhandener Borg-Sicherheitsstatus wurde beibehalten.'
-        : '';
-    status.textContent = (result.previous_cache
-      ? `${result.message} Vorheriger Cache: ${result.previous_cache}`
-      : result.message) + securityText;
+    status.textContent = result.previous_cache ? `${result.message} Vorheriger Cache: ${result.previous_cache}` : result.message;
     toast('Client-Borg-Cache wiederhergestellt');
   } catch (error) {
     status.textContent = 'Client-Cache konnte nicht wiederhergestellt werden: ' + error.message;

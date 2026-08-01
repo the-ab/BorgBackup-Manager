@@ -49,6 +49,7 @@ def begin_task(
             "total": None,
             "bytes_done": 0,
             "backup": None,
+            "backups": [],
             "error": None,
             "events": [{"at": _now(), "message": initial_message}],
         }
@@ -75,7 +76,13 @@ def update_task(task_id: str, **changes: Any) -> dict[str, Any] | None:
         return deepcopy(task)
 
 
-def finish_task(task_id: str, *, backup: dict[str, Any] | None = None, warning: str | None = None) -> dict[str, Any] | None:
+def finish_task(
+    task_id: str,
+    *,
+    backup: dict[str, Any] | None = None,
+    backups: list[dict[str, Any]] | None = None,
+    warning: str | None = None,
+) -> dict[str, Any] | None:
     global _current_task_id
     with _lock:
         task = _tasks.get(task_id)
@@ -94,6 +101,7 @@ def finish_task(task_id: str, *, backup: dict[str, Any] | None = None, warning: 
             "percent": 100.0,
             "finished_at": _now(),
             "backup": backup,
+            "backups": list(backups or ([backup] if backup else [])),
             "error": None,
             "warning": warning,
             "updated_at": _now(),

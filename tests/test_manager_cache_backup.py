@@ -176,7 +176,7 @@ def test_manager_and_cache_backups_are_separate_artifacts(monkeypatch, tmp_path:
 
     assert manager.name.startswith("borgbackup-manager-backup-v1.1.0-")
     assert manager.suffix == ".bbm"
-    assert cache.name.startswith("borgbackup-manager-cache-v1.1.0-")
+    assert cache.name.startswith("borgbackup-manager-cache-manager-v1.1.0-")
     assert cache.suffix == ".zip"
     listed = {item["name"]: item for item in backups.list_full_backups()}
     assert listed[manager.name]["backup_type"] == "manager"

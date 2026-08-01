@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.2.9
+# Installation und Betrieb – BorgBackup Manager 1.2.10
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.2.9.zip
+BorgBackup-Manager-1.2.10.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.2.9.zip
+unzip /pfad/BorgBackup-Manager-1.2.10.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -75,7 +75,7 @@ Das Skript erzeugt `.env` und die persistenten Verzeichnisse. Beim ersten Contai
 
 Passwörter werden als scrypt-Prüfwerte gespeichert. Controller-, Repository-SSH- und TLS-Privatschlüssel, Repository-Passphrasen sowie Borg-Keyfiles werden verschlüsselt in `security.db` abgelegt. `master.key` ist der einzige externe Vertrauensanker und besitzt Modus `0600`. Laufzeitdateien werden ausschließlich unter `/run/bbm-secrets` materialisiert.
 
-Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.2.9` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
+Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.2.10` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
 
 ### Installation ausschließlich mit dem GHCR-Image
 
@@ -109,7 +109,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.2.9` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
+`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.2.10` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
 
 Beim ersten Start prüft der Entrypoint den Mount `/repositories` mit der konfigurierten `BBM_BORG_UID` und `BBM_BORG_GID`. Ist der Mount leer und nur wegen der automatischen Docker-Anlage `root` zugeordnet, wird ausschließlich das Stammverzeichnis auf die konfigurierte UID/GID gesetzt und für den Eigentümer lesbar, beschreibbar und betretbar gemacht. Es erfolgt ausdrücklich kein `chown -R`. Enthält das Verzeichnis bereits Daten, werden keine Eigentümer automatisch geändert. In diesem Fall müssen die Rechte oder ACLs auf dem Host passend korrigiert werden. Bei NFS mit `root_squash` ist die Berechtigung serverseitig beziehungsweise über passende numerische UID/GID zu setzen.
 
@@ -714,20 +714,22 @@ Neue Manager-Backups werden ausschließlich als AES-256-GCM-verschlüsselte `.bb
 
 Während der Erstellung zeigt die WebUI Phase, Fortschrittsbalken und ein Live-Protokoll. Ein Seiten-Reload nimmt den aktiven Backup-Task wieder auf.
 
-### Separates Cache-Backup erstellen
+### Getrennte Cache-Artefakte erstellen
 
-Das Cache-Backup wird als eigenständige Datei `borgbackup-manager-cache-v...` erzeugt. Es kann unabhängig auswählen:
+Ab v1.2.10 erzeugt ein Cache-Backup-Lauf keine große Sammeldatei mehr. Stattdessen entstehen unabhängig voneinander:
 
-- **Manager-Borg-Cache und Borg-Sicherheitsstatus:** `/data/borg-cache` und `/data/borg-security`
-- **Borg-Caches der Clients:** `$HOME/.cache/borgbackup-manager/repository-<ID>` für aktuell über Backup-Jobs zugeordnete Geräte
+- `borgbackup-manager-cache-manager-v...` für `/data/borg-cache` und `/data/borg-security`
+- `borgbackup-manager-cache-client-<Gerätename>-h<ID>-v...` für jedes ausgewählte Gerät
 
-Mindestens eine der beiden Gruppen muss ausgewählt sein. `lock.exclusive` und `lock.roster` werden ausgelassen. Client-Caches werden per geprüftem Controller-SSH direkt als TAR-Datenstrom in die Cache-Datei geschrieben. Deaktivierte Geräte werden protokolliert übersprungen; ein nicht vorhandener Cache ist zulässig; ein Verbindungs- oder Übertragungsfehler eines aktivierten Geräts wird als Warnung im Manifest und in der Live-Anzeige vermerkt. Das Cache-Backup wird mit den übrigen erreichbaren Clients fortgesetzt. Symbolische Links werden nicht übernommen. Während eines Cache-Backups dürfen keine Ausführungen laufen oder warten.
+Im Formular kann der Manager-Cache separat aktiviert werden. Für Client-Caches gibt es **Alle Geräte** oder **Ausgewählte Geräte** mit Mehrfachauswahl. Nicht ausgewählte Geräte werden nicht per SSH kontaktiert. Jedes Gerätearchiv enthält alle aktuell über Backup-Jobs zugeordneten Repository-Caches dieses Geräts einschließlich des jeweils zuordenbaren Borg-Sicherheitsstatus. Gerätename und stabile ID stehen im Dateinamen und in den internen Archivpfaden.
 
-Die Cache-Verschlüsselung ist standardmäßig eingeschaltet und empfohlen, aber nicht verpflichtend. Verschlüsselte Cache-Backups verwenden streamendes AES-256-GCM/scrypt und die Endung `.bbm`; bewusst unverschlüsselte Cache-Backups werden als `.zip` gespeichert. Die Cache-Passphrase wird nicht gespeichert. Die Kompressionsstufe wird unabhängig vom Manager-Backup gewählt.
+Ein Ausfall eines Geräts bricht die übrigen Archive nicht ab. Das betroffene Gerät wird als Warnung dokumentiert; Geräte ohne sicherbare Cache-/Security-Daten erzeugen keine leere Datei. `lock.exclusive`, `lock.roster` und symbolische Links werden ausgeschlossen. Während der Erstellung dürfen keine Ausführungen laufen oder warten.
 
-Die Live-Anzeige nennt beim Client-Cache das aktuelle Gerät/Repository, `Client x/y` und die übertragenen Bytes; beim Manager-Cache werden verarbeitete Dateien und Bytes angezeigt. Bei verschlüsselten Cache-Backups folgt als eigener Schritt der Verschlüsselungsfortschritt.
+Die Verschlüsselung ist standardmäßig aktiv und empfohlen. Jedes Einzelartefakt wird separat mit AES-256-GCM/scrypt verschlüsselt und erhält `.bbm`; bewusst unverschlüsselte Artefakte verwenden `.zip`. Alle Dateien eines Laufs verwenden dieselbe eingegebene Passphrase und Kompressionsstufe. Die Live-Anzeige zeigt `Archiv x/y`, Gerätename, Repository und übertragene Bytes.
 
-Unter **Borg-Cache verwalten** können Manager- und Client-Zustände bei Bedarf manuell gescannt werden. Der Client-Scan kann alle Geräte oder eine Mehrfachauswahl prüfen. Er berücksichtigt den verwalteten BBM-Client-Cache `$HOME/.cache/borgbackup-manager/`, den normalen Borg-Cache `$HOME/.cache/borg/` beziehungsweise `BORG_CACHE_DIR`, zusätzliche historische Cache-Wurzeln aus XDG-/SSH-Benutzerkonfiguration sowie den Borg-Sicherheitsstatus unter `$HOME/.config/borg/security/` beziehungsweise `BORG_SECURITY_DIR`. Rückfall-Sicherungen wie `repository-<ID>.pre-bbm-restore-<Zeit>` bleiben separat. Unbekannte reguläre Borg-/Security-Verzeichnisse werden nie automatisch vorausgewählt. Vor jeder Löschung werden Zuordnung und aktueller Zustand erneut geprüft; deaktivierte oder nicht erreichbare Geräte werden nicht verändert. Für `/data/borg-cache` und `/data/borg-security` auf der Manager-Seite gelten dieselben konservativen Prüfungen.
+Unter **Cache-Backup wiederherstellen** wird ein Manager-Cache-Artefakt als eigene Aktion eingespielt. Bei einem Gerätearchiv werden die enthaltenen Repository-Caches einzeln angezeigt. Für jeden Eintrag kann als Ziel das ursprüngliche Gerät oder ein anderes aktives Gerät gewählt werden, das demselben Repository zugeordnet ist. Vorhandene Ziel-Caches werden als `pre-bbm-restore`-Sicherheitskopie erhalten; bestehender Borg-Sicherheitsstatus wird nicht durch einen älteren Stand überschrieben.
+
+Unter **Borg-Cache verwalten** können Manager- und Client-Zustände weiterhin unabhängig vom Backup auf Knopfdruck geprüft, zurückgesetzt und bereinigt werden. Der Client-Scan unterstützt ebenfalls alle Geräte oder eine Mehrfachauswahl.
 
 ### Backup hochladen
 

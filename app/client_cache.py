@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import signal
 import subprocess
 import tempfile
@@ -82,15 +83,24 @@ def _start_timeout(process: subprocess.Popen[bytes], timeout_seconds: int) -> tu
     return timer, timed_out
 
 
-def _target_rows() -> list[tuple[Host, Repository]]:
-    """Return unique device/repository pairs that can own a BBM client cache."""
+def _target_rows(host_ids: set[int] | list[int] | tuple[int, ...] | None = None) -> list[tuple[Host, Repository]]:
+    """Return unique device/repository pairs that can own a BBM client cache.
+
+    ``host_ids`` limits collection before any SSH connection is attempted. This
+    is used by the cache-backup multi-selection so unselected devices are not
+    contacted and cannot produce warnings.
+    """
+    normalized = None if host_ids is None else {int(value) for value in host_ids}
     with SessionLocal() as db:
-        rows = db.execute(
+        statement = (
             select(Job, Host, Repository)
             .join(Host, Job.host_id == Host.id)
             .join(Repository, Job.repository_id == Repository.id)
             .order_by(Host.name, Host.id, Repository.name, Repository.id, Job.id)
-        ).all()
+        )
+        if normalized is not None:
+            statement = statement.where(Host.id.in_(normalized))
+        rows = db.execute(statement).all()
         result: list[tuple[Host, Repository]] = []
         seen: set[tuple[int, int]] = set()
         for _job, host, repository in rows:
@@ -103,6 +113,21 @@ def _target_rows() -> list[tuple[Host, Repository]]:
             result.append((host, repository))
         return result
 
+
+
+
+def _archive_slug(value: object, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(value or "").strip()).strip("-")[:64]
+    return cleaned or fallback
+
+
+def _client_archive_paths(host: Host, repository: Repository) -> tuple[str, str]:
+    host_part = f"{_archive_slug(host.name, 'device')}-h{int(host.id)}"
+    repository_part = f"{_archive_slug(repository.name, 'repository')}-r{int(repository.id)}.tar"
+    return (
+        f"{CLIENT_CACHE_ARCHIVE_ROOT}/{host_part}/{repository_part}",
+        f"{CLIENT_SECURITY_ARCHIVE_ROOT}/{host_part}/{repository_part}",
+    )
 
 def _base_metadata(host: Host, repository: Repository) -> dict:
     return {
@@ -239,7 +264,12 @@ def _stream_one_security(
         normalized_status = "saved" if status == "PRESENT" else status.lower()
         return normalized_status, borg_repository_id or None, transferred
 
-def collect_client_borg_caches(archive: zipfile.ZipFile, progress: Callable[[dict], None] | None = None) -> list[dict]:
+def collect_client_borg_caches(
+    archive: zipfile.ZipFile,
+    progress: Callable[[dict], None] | None = None,
+    *,
+    host_ids: set[int] | list[int] | tuple[int, ...] | None = None,
+) -> list[dict]:
     """Stream assigned BBM client caches and their Borg security state into a cache backup.
 
     Disabled devices are recorded but deliberately not contacted. A connection
@@ -248,7 +278,7 @@ def collect_client_borg_caches(archive: zipfile.ZipFile, progress: Callable[[dic
     state and is recorded explicitly.
     """
     entries: list[dict] = []
-    targets = _target_rows()
+    targets = _target_rows() if host_ids is None else _target_rows(host_ids)
     total = len(targets)
     for index, (host, repository) in enumerate(targets, start=1):
         metadata = _base_metadata(host, repository)
@@ -270,8 +300,7 @@ def collect_client_borg_caches(archive: zipfile.ZipFile, progress: Callable[[dic
                 progress({**metadata, "event": "target_done", "component": "complete", "index": index, "total": total, "bytes_done": 0})
             continue
 
-        cache_arcname = f"{CLIENT_CACHE_ARCHIVE_ROOT}/host-{int(host.id)}/repository-{int(repository.id)}.tar"
-        security_arcname = f"{CLIENT_SECURITY_ARCHIVE_ROOT}/host-{int(host.id)}/repository-{int(repository.id)}.tar"
+        cache_arcname, security_arcname = _client_archive_paths(host, repository)
         try:
             def on_cache_bytes(transferred: int) -> None:
                 if progress is not None:

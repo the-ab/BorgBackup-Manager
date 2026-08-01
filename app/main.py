@@ -72,7 +72,7 @@ from app.backups import (
     apply_prepared_restore,
     backup_path,
     client_borg_cache_inventory,
-    create_cache_backup,
+    create_cache_backup_set,
     create_full_backup,
     list_full_backups,
     prepare_full_backup_restore,
@@ -4293,7 +4293,8 @@ def _manager_backup_task_worker(
 
 def _cache_backup_task_worker(
     task_id: str, *, label: str, passphrase: str | None, encrypted: bool,
-    include_manager_borg_cache: bool, include_client_borg_cache: bool, compression: str,
+    include_manager_borg_cache: bool, include_client_borg_cache: bool,
+    client_host_ids: list[int] | None, compression: str,
 ) -> None:
     try:
         update_manager_backup_task(task_id, status="running", stage="prepare", message="Cache-Backup wird vorbereitet …", percent=1.0)
@@ -4301,24 +4302,27 @@ def _cache_backup_task_worker(
         def progress(payload: dict) -> None:
             update_manager_backup_task(task_id, status="running", **payload)
 
-        path = create_cache_backup(
+        result = create_cache_backup_set(
             APP_VERSION,
             label,
             passphrase,
             encrypted=encrypted,
             include_manager_borg_cache=include_manager_borg_cache,
             include_client_borg_cache=include_client_borg_cache,
+            client_host_ids=client_host_ids,
             compression=compression,
             progress=progress,
         )
-        backup = next(item for item in list_full_backups() if item["name"] == path.name)
-        warning_count = int(backup.get("manifest", {}).get("client_borg_cache_warning_count") or 0)
-        warning = (
-            f"{warning_count} Client-Zuordnung(en) konnten nicht gesichert werden. "
-            "Das Cache-Backup wurde ohne diese Clients erstellt."
-            if warning_count else None
+        names = {path.name for path in result["paths"]}
+        backups = [item for item in list_full_backups() if item["name"] in names]
+        backups.sort(key=lambda item: item["name"])
+        warning = " ".join(result.get("warnings") or []) or None
+        finish_manager_backup_task(
+            task_id,
+            backup=backups[0] if backups else None,
+            backups=backups,
+            warning=warning,
         )
-        finish_manager_backup_task(task_id, backup=backup, warning=warning)
     except Exception as exc:
         error_id = log_unexpected_exception(
             f"Cache backup task {task_id} failed", exc=exc, logger_name="bbm.background",
@@ -4371,16 +4375,19 @@ def create_cache_backup_sync(data: CacheBackupCreateIn) -> dict:
             raise HTTPException(409, "Es wird bereits ein Backup erstellt")
         _validate_cache_backup_idle()
         passphrase = data.passphrase.get_secret_value() if data.passphrase else None
-        path = create_cache_backup(
+        result = create_cache_backup_set(
             APP_VERSION,
             data.label,
             passphrase,
             encrypted=data.encrypted,
             include_manager_borg_cache=data.include_manager_borg_cache,
             include_client_borg_cache=data.include_client_borg_cache,
+            client_host_ids=data.client_host_ids,
             compression=data.compression,
         )
-        return next(item for item in list_full_backups() if item["name"] == path.name)
+        names = {path.name for path in result["paths"]}
+        backups = [item for item in list_full_backups() if item["name"] in names]
+        return {"backups": backups, "warnings": result.get("warnings") or []}
     except (OSError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -4409,6 +4416,7 @@ def start_cache_backup(data: CacheBackupCreateIn) -> dict:
             "encrypted": data.encrypted,
             "include_manager_borg_cache": data.include_manager_borg_cache,
             "include_client_borg_cache": data.include_client_borg_cache,
+            "client_host_ids": data.client_host_ids,
             "compression": data.compression,
         },
         name=f"bbm-cache-backup-{task_id[:8]}", daemon=True,
@@ -4446,36 +4454,43 @@ def inspect_manager_backup_client_caches(name: str, data: ManagerClientCacheInsp
 def restore_manager_backup_client_cache(
     name: str, host_id: int, repository_id: int, data: ManagerClientCacheRestoreIn
 ) -> dict:
+    target_host_id = int(data.target_host_id or host_id)
     with SessionLocal() as db:
         active = db.scalar(
             select(func.count()).select_from(Run).where(Run.status.in_(["queued", "running"]))
         ) or 0
         if active:
             raise HTTPException(409, "Client-Cache kann nur ohne laufende oder wartende Ausführungen wiederhergestellt werden")
-        host = db.get(Host, host_id)
+        target_host = db.get(Host, target_host_id)
         repository = db.get(Repository, repository_id)
         assigned = db.scalar(
-            select(Job.id).where(Job.host_id == host_id, Job.repository_id == repository_id).limit(1)
+            select(Job.id).where(Job.host_id == target_host_id, Job.repository_id == repository_id).limit(1)
         )
-        if not host:
-            raise HTTPException(404, "Gerät nicht gefunden")
+        if not target_host:
+            raise HTTPException(404, "Zielgerät nicht gefunden")
         if not repository:
             raise HTTPException(404, "Repository nicht gefunden")
         if not assigned:
-            raise HTTPException(409, "Gerät und Repository sind keinem aktuellen Backup-Job gemeinsam zugeordnet")
-        if not host.enabled:
-            raise HTTPException(409, "Gerät ist deaktiviert; vor der Client-Cache-Wiederherstellung aktivieren")
-        # Only scalar fields are used after the session is closed.
-        host_name = host.name
+            raise HTTPException(409, "Zielgerät ist keinem Backup-Job dieses Repositorys zugeordnet")
+        if not target_host.enabled:
+            raise HTTPException(409, "Zielgerät ist deaktiviert; vor der Client-Cache-Wiederherstellung aktivieren")
+        target_host_name = target_host.name
         repository_name = repository.name
     try:
         source = backup_path(name)
         passphrase = data.passphrase.get_secret_value() if data.passphrase else None
         result = restore_client_borg_cache_from_backup(
-            source, passphrase, host, repository_id
+            source,
+            passphrase,
+            target_host,
+            repository_id,
+            source_host_id=host_id,
+            source_repository_id=repository_id,
         )
+        source_name = result.get("source_host_name") or f"Gerät #{host_id}"
         result["message"] = (
-            f"Client-Borg-Cache für Gerät „{host_name}“ und Repository „{repository_name}“ wurde wiederhergestellt."
+            f"Client-Borg-Cache von Gerät „{source_name}“ wurde auf Zielgerät „{target_host_name}“ "
+            f"für Repository „{repository_name}“ wiederhergestellt."
         )
         if result.get("security_restore", {}).get("status") == "restored":
             result["message"] += " Fehlender Borg-Sicherheitsstatus wurde ebenfalls wiederhergestellt."

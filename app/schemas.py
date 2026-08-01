@@ -1023,6 +1023,8 @@ class CacheBackupCreateIn(BaseModel):
     encrypted: bool = True
     include_manager_borg_cache: bool = True
     include_client_borg_cache: bool = True
+    client_scope: str = "all"
+    client_host_ids: list[int] | None = Field(default=None, max_length=500)
     compression: str = "standard"
     passphrase: SecretStr | None = None
     passphrase_confirm: SecretStr | None = None
@@ -1047,6 +1049,16 @@ class CacheBackupCreateIn(BaseModel):
     def validate_cache_backup(self):
         if not (self.include_manager_borg_cache or self.include_client_borg_cache):
             raise ValueError("cache backup requires manager cache or client caches")
+        if self.client_scope not in {"all", "selected"}:
+            raise ValueError("client scope must be all or selected")
+        if self.include_client_borg_cache and self.client_scope == "selected":
+            if not self.client_host_ids:
+                raise ValueError("selected client cache backup requires at least one device")
+            if any(isinstance(value, bool) or int(value) <= 0 for value in self.client_host_ids):
+                raise ValueError("client host ids must be positive integers")
+            self.client_host_ids = sorted(set(int(value) for value in self.client_host_ids))
+        else:
+            self.client_host_ids = None
         secret = self.passphrase.get_secret_value() if self.passphrase else None
         confirmation = self.passphrase_confirm.get_secret_value() if self.passphrase_confirm else None
         if self.encrypted:
@@ -1130,6 +1142,7 @@ class ManagerCacheRestoreIn(ManagerClientCacheInspectIn):
 
 
 class ManagerClientCacheRestoreIn(ManagerClientCacheInspectIn):
+    target_host_id: int | None = Field(default=None, gt=0)
     confirm: bool = False
 
     @model_validator(mode="after")

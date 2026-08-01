@@ -164,7 +164,7 @@ def test_collect_client_caches_records_disabled_devices_without_contact(monkeypa
 
     assert contacted == [(11, 21)]
     assert entries[0]["status"] == "saved"
-    assert entries[0]["archive_path"] == "data/client-borg-cache/host-11/repository-21.tar"
+    assert entries[0]["archive_path"] == "data/client-borg-cache/client-11-h11/repo-21-r21.tar"
     assert entries[1]["status"] == "skipped_disabled"
     assert client_cache.client_cache_summary(entries) == {
         "target_count": 2,
@@ -213,9 +213,10 @@ def test_cache_backup_contains_inventory_and_selectively_restores_client_cache(m
     security_payload = b"security-state-tar\n"
     borg_repository_id = "a" * 64
 
-    def fake_collect(archive):
-        arcname = "data/client-borg-cache/host-11/repository-21.tar"
-        security_arcname = "data/client-borg-security/host-11/repository-21.tar"
+    def fake_collect(archive, progress=None, *, host_ids=None):
+        assert host_ids == [11]
+        arcname = "data/client-borg-cache/client-11-h11/repo-21-r21.tar"
+        security_arcname = "data/client-borg-security/client-11-h11/repo-21-r21.tar"
         archive.writestr(arcname, cache_payload)
         archive.writestr(security_arcname, security_payload)
         return [{
@@ -237,12 +238,14 @@ def test_cache_backup_contains_inventory_and_selectively_restores_client_cache(m
         }]
 
     monkeypatch.setattr(client_cache, "collect_client_borg_caches", fake_collect)
+    monkeypatch.setattr(backups, "_client_host_record", lambda host_id: (11, "client-11", True))
     backup = backups.create_cache_backup(
         "1.1.0",
         "client-cache",
         "correct horse battery staple",
         include_manager_borg_cache=False,
         include_client_borg_cache=True,
+        client_host_ids=[11],
         compression="standard",
     )
 
@@ -285,26 +288,31 @@ def test_cache_backup_contains_inventory_and_selectively_restores_client_cache(m
     result = backups.restore_client_borg_cache_from_backup(
         backup,
         "correct horse battery staple",
-        _host(11),
+        _host(12),
         21,
+        source_host_id=11,
+        source_repository_id=21,
     )
     assert captured == {
-        "host_id": 11, "repository_id": 21, "payload": cache_payload,
-        "security_host_id": 11, "borg_repository_id": borg_repository_id,
+        "host_id": 12, "repository_id": 21, "payload": cache_payload,
+        "security_host_id": 12, "borg_repository_id": borg_repository_id,
         "security_payload": security_payload,
     }
     assert result["status"] == "restored"
     assert result["security_status"] == "saved"
     assert result["security_restore"]["status"] == "restored"
-    assert result["host_name"] == "client-11"
+    assert result["source_host_name"] == "client-11"
+    assert result["target_host_name"] == "client-12"
     assert result["repository_name"] == "repo-21"
 
-    with pytest.raises(ValueError, match="keinen Client-Cache"):
+    with pytest.raises(ValueError, match="Quell-Client-Cache"):
         backups.restore_client_borg_cache_from_backup(
             backup,
             "correct horse battery staple",
             _host(99),
             21,
+            source_host_id=99,
+            source_repository_id=21,
         )
 
 

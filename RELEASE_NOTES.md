@@ -1,5 +1,32 @@
 # Release Notes
 
+## v1.2.10 – 2026-08-01
+
+### Cache backups split into independent artifacts
+
+- A cache-backup run no longer creates one large combined file. The BBM manager cache is stored as its own `borgbackup-manager-cache-manager-v...` artifact, while each selected device gets a separate `borgbackup-manager-cache-client-<device-name>-h<ID>-v...` artifact.
+- A device artifact contains all repository caches currently assigned to that device through backup jobs, including matching Borg security state. Restore therefore needs to open and authenticate only the required smaller device file.
+- Device name and stable numeric device ID are used in filenames, manifests and internal archive paths. New artifacts no longer use opaque `host-1`, `host-2` directory names. Existing combined cache backups remain readable and restorable.
+- Empty device artifacts are not retained. An unreachable device or a device without saveable cache/security data is reported as a warning or notice while all remaining device artifacts continue.
+
+### All devices or a targeted multi-selection
+
+- Manager-cache inclusion can be enabled or disabled independently in the cache-backup form.
+- Client collection supports **All devices** and **Selected devices** with multi-selection. Unselected devices are neither contacted over SSH nor included in warning counts.
+- Progress spans all independent files and reports `artifact x/y`, device, repository and transferred bytes. The completed task reports artifact count and total size.
+
+### Restore a device cache to another device
+
+- Opening a device artifact lists each contained repository cache separately.
+- Each cache can target the original device or another enabled device assigned to the same repository through a backup job. This supports controlled cache and missing Borg-security migration during device replacement.
+- The repository assignment must remain identical, preventing a cache from being applied to an unrelated repository. Existing target caches are still preserved under timestamped `pre-bbm-restore` names, and existing Borg security state is never overwritten.
+
+### Format and security validation
+
+- New split cache artifacts use manifest format version 2 with `cache_artifact_kind` (`manager` or `client`) plus source device ID and name.
+- Upload, backup listing, encrypted headers and filename validation distinguish manager-cache, device-cache and older combined cache artifacts.
+- New internal paths contain sanitized device/repository names plus stable IDs. Path traversal, mismatched IDs and forged archive mappings are rejected.
+
 ## v1.2.9 – 2026-08-01
 
 ### No delayed mount error after a successful unmount

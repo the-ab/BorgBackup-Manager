@@ -48,10 +48,10 @@ MANAGER_BACKUP_NAME = re.compile(
     r"^borgbackup-manager-backup-v[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}-[a-zA-Z0-9_-]+\.(?:zip|bbm)$"
 )
 CACHE_BACKUP_NAME = re.compile(
-    r"^borgbackup-manager-cache-v[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}-[a-zA-Z0-9_-]+\.(?:zip|bbm)$"
+    r"^borgbackup-manager-cache-(?:(?:manager|client-[a-zA-Z0-9_-]+-h[0-9]+)-)?v[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}-[a-zA-Z0-9_-]+\.(?:zip|bbm)$"
 )
 BACKUP_NAME = re.compile(
-    r"^borgbackup-manager-(?:backup|cache)-v[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}-[a-zA-Z0-9_-]+\.(?:zip|bbm)$"
+    r"^(?:borgbackup-manager-backup-v|borgbackup-manager-cache-(?:(?:manager|client-[a-zA-Z0-9_-]+-h[0-9]+)-)?v)[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}-[a-zA-Z0-9_-]+\.(?:zip|bbm)$"
 )
 RESTORE_COMPONENTS = ("manager.db", "settings.json", "notifications.json", "ssh", "repository-ssh", "repository-keys", "tls", "security", "borg-cache", "borg-security")
 
@@ -280,20 +280,32 @@ def _write_cache_backup(
     app_version: str,
     label: str,
     *,
-    include_manager_borg_cache: bool = True,
-    include_client_borg_cache: bool = True,
+    include_manager_borg_cache: bool = False,
+    include_client_borg_cache: bool = False,
+    client_host_ids: list[int] | set[int] | tuple[int, ...] | None = None,
     compression: str = "standard",
     progress: ProgressCallback | None = None,
 ) -> dict:
-    """Write cache-only data without manager database, keys or settings."""
-    if not (include_manager_borg_cache or include_client_borg_cache):
-        raise ValueError("Cache-Backup benötigt mindestens Manager-Cache oder Client-Caches")
+    """Write one independent cache artifact.
+
+    New backups never combine manager and client caches. A manager artifact
+    contains only the local BBM cache/security state. A client artifact contains
+    all repository caches assigned to exactly one selected device.
+    """
+    if include_manager_borg_cache == include_client_borg_cache:
+        raise ValueError("Ein Cache-Artefakt muss genau Manager-Cache oder genau einen Client enthalten")
+    normalized_host_ids = sorted({int(value) for value in (client_host_ids or [])})
+    if include_client_borg_cache and len(normalized_host_ids) != 1:
+        raise ValueError("Ein Client-Cache-Artefakt benötigt genau ein ausgewähltes Gerät")
+
+    artifact_kind = "manager" if include_manager_borg_cache else "client"
     permissions: dict[str, int] = {}
     compression_type, compression_level, compression_name = _compression_settings(compression)
     manifest = {
         "format": CACHE_BACKUP_FORMAT,
-        "format_version": 1,
+        "format_version": 2,
         "backup_type": "cache",
+        "cache_artifact_kind": artifact_kind,
         "app_version": app_version,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "label": label,
@@ -316,7 +328,7 @@ def _write_cache_backup(
                 _report(
                     progress, stage="manager_cache",
                     message="Manager-Borg-Cache und Borg-Sicherheitsstatus werden gesichert …",
-                    percent=18.0, current=files, bytes_done=source_bytes,
+                    percent=68.0, current=files, bytes_done=source_bytes,
                 )
 
             cache_files, cache_bytes = _add_tree(
@@ -335,45 +347,44 @@ def _write_cache_backup(
 
         if include_client_borg_cache:
             from app.client_cache import client_cache_summary, collect_client_borg_caches
-            base = 30.0 if include_manager_borg_cache else 8.0
-            span = 45.0 if include_manager_borg_cache else 67.0
-            _report(progress, stage="client_cache", message="Client-Borg-Caches werden vorbereitet …", percent=base, current=0, total=0, bytes_done=0)
+            _report(progress, stage="client_cache", message="Client-Borg-Caches werden vorbereitet …", percent=8.0, current=0, total=0, bytes_done=0)
 
             def client_progress(item: dict) -> None:
                 total = max(1, int(item.get("total") or 1))
                 index = max(1, int(item.get("index") or 1))
                 event = str(item.get("event") or "")
                 completed = index if event == "target_done" else index - 1
-                percent = base + (span * max(0, min(total, completed)) / total)
+                percent = 8.0 + (67.0 * max(0, min(total, completed)) / total)
                 host_name = str(item.get("host_name") or "Gerät")
                 repository_name = str(item.get("repository_name") or "Repository")
                 status = str(item.get("status") or "")
                 component = str(item.get("component") or "cache")
                 security_status = str(item.get("security_status") or "")
                 if event == "target_done" and status == "missing":
-                    message = f"Client {index}/{total}: {host_name} · {repository_name} – Cache fehlt, Sicherheitsstatus {security_status or 'geprüft'}"
+                    message = f"{host_name} · {repository_name} – Cache fehlt, Sicherheitsstatus {security_status or 'geprüft'}"
                 elif event == "target_done" and status == "warning":
                     reason = str(item.get("reason") or "Client nicht erreichbar")
                     if len(reason) > 320:
                         reason = reason[:317] + "…"
-                    message = f"WARNUNG: Client {index}/{total}: {host_name} · {repository_name} konnte nicht gesichert werden – {reason}"
+                    message = f"WARNUNG: {host_name} · {repository_name} konnte nicht gesichert werden – {reason}"
                 elif event == "target_done" and status.startswith("skipped_"):
-                    message = f"Client {index}/{total}: {host_name} · {repository_name} – übersprungen"
+                    message = f"{host_name} · {repository_name} – übersprungen"
                 elif event == "target_done":
-                    message = f"Client {index}/{total}: {host_name} · {repository_name} – Cache und Sicherheitsstatus verarbeitet"
+                    message = f"{host_name} · {repository_name} – Cache und Sicherheitsstatus verarbeitet"
                 elif component == "security":
-                    message = f"Client {index}/{total}: {host_name} · {repository_name} – Borg-Sicherheitsstatus wird gesichert …"
+                    message = f"{host_name} · {repository_name} – Borg-Sicherheitsstatus wird gesichert …"
                 else:
-                    message = f"Client {index}/{total}: {host_name} · {repository_name} – Cache wird übertragen …"
+                    message = f"{host_name} · {repository_name} – Cache wird übertragen …"
                 _report(
                     progress, stage="client_cache", message=message, percent=percent,
                     current=index, total=total, bytes_done=int(item.get("bytes_done") or 0),
                     host_name=host_name, repository_name=repository_name,
                 )
 
-            client_entries = (
-                collect_client_borg_caches(archive, client_progress)
-                if progress is not None else collect_client_borg_caches(archive)
+            client_entries = collect_client_borg_caches(
+                archive,
+                client_progress if progress is not None else None,
+                host_ids=normalized_host_ids,
             )
             summary = client_cache_summary(client_entries)
             manifest["client_borg_caches"] = client_entries
@@ -388,8 +399,11 @@ def _write_cache_backup(
             manifest["client_borg_security_unresolved_count"] = summary["security_unresolved_count"]
             manifest["client_borg_security_source_bytes"] = summary["security_tar_bytes"]
             manifest["includes"].extend(["client_borg_cache", "client_borg_security"])
+            manifest["source_host_id"] = normalized_host_ids[0]
+            if client_entries:
+                manifest["source_host_name"] = str(client_entries[0].get("host_name") or f"Gerät-{normalized_host_ids[0]}")
 
-        _report(progress, stage="finalize_archive", message="Cache-Backup-Archiv wird abgeschlossen …", percent=78.0, current=None, total=None, bytes_done=0)
+        _report(progress, stage="finalize_archive", message="Cache-Archiv wird abgeschlossen …", percent=78.0, current=None, total=None, bytes_done=0)
         archive.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
         archive.writestr("permissions.json", json.dumps(permissions, indent=2, sort_keys=True) + "\n")
     return manifest
@@ -433,6 +447,9 @@ def _encrypt_backup(source_zip: Path, destination: Path, manifest: dict, passphr
         "client_borg_security_saved_count": int(manifest.get("client_borg_security_saved_count") or 0),
         "client_borg_security_missing_count": int(manifest.get("client_borg_security_missing_count") or 0),
         "client_borg_security_unresolved_count": int(manifest.get("client_borg_security_unresolved_count") or 0),
+        "cache_artifact_kind": manifest.get("cache_artifact_kind"),
+        "source_host_id": manifest.get("source_host_id"),
+        "source_host_name": manifest.get("source_host_name"),
         "compression": manifest.get("compression", "deflate-6"),
     }
     header_bytes = json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -500,34 +517,95 @@ def create_full_backup(
         plain_zip.unlink(missing_ok=True)
 
 
+def _client_host_record(host_id: int) -> tuple[int, str, bool] | None:
+    from app.database import SessionLocal
+    from app.models import Host
+
+    with SessionLocal() as db:
+        host = db.get(Host, int(host_id))
+        if not host:
+            return None
+        return int(host.id), str(host.name), bool(host.enabled)
+
+
+def _all_client_cache_host_ids() -> list[int]:
+    from app.database import SessionLocal
+    from app.models import Host, Job
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        return [
+            int(value)
+            for value in db.scalars(
+                select(Host.id).join(Job, Job.host_id == Host.id).where(Host.enabled.is_(True)).distinct().order_by(Host.name, Host.id)
+            ).all()
+        ]
+
+
+def _cache_artifact_destination(
+    app_version: str,
+    stamp: str,
+    label: str,
+    *,
+    encrypted: bool,
+    artifact_kind: str,
+    host_id: int | None = None,
+    host_name: str | None = None,
+) -> Path:
+    suffix = ".bbm" if encrypted else ".zip"
+    normalized_label = _label(label)
+    if artifact_kind == "manager":
+        prefix = "borgbackup-manager-cache-manager"
+    elif artifact_kind == "client" and host_id is not None:
+        prefix = f"borgbackup-manager-cache-client-{_label(host_name or 'device')}-h{int(host_id)}"
+    else:
+        raise ValueError("Ungültiger Cache-Artefakttyp")
+    return BACKUP_DIR / f"{prefix}-v{app_version}-{stamp}-{normalized_label}{suffix}"
+
+
 def create_cache_backup(
     app_version: str,
     label: str = "",
     passphrase: str | None = None,
     *,
     encrypted: bool = True,
-    include_manager_borg_cache: bool = True,
-    include_client_borg_cache: bool = True,
+    include_manager_borg_cache: bool = False,
+    include_client_borg_cache: bool = False,
+    client_host_ids: list[int] | set[int] | tuple[int, ...] | None = None,
     compression: str = "standard",
     progress: ProgressCallback | None = None,
+    stamp: str | None = None,
 ) -> Path:
-    """Create a cache-only backup, optionally encrypted.
-
-    Cache metadata is not required to be encrypted for Borg to function, but
-    encrypted output is the safer default because Borg caches contain metadata
-    about backed-up files and repositories.
-    """
+    """Create exactly one manager-cache or one device-cache artifact."""
     if encrypted and not passphrase:
         raise ValueError("Für ein verschlüsseltes Cache-Backup ist eine Passphrase erforderlich")
     if not encrypted and passphrase:
         raise ValueError("Eine Passphrase ist nur bei aktivierter Cache-Backup-Verschlüsselung zulässig")
-    _report(progress, stage="prepare", message="Cache-Backup wird vorbereitet …", percent=1.0)
+    if include_manager_borg_cache == include_client_borg_cache:
+        raise ValueError("Cache-Artefakte werden getrennt als Manager- oder Geräte-Backup erstellt")
+
+    normalized_host_ids = sorted({int(value) for value in (client_host_ids or [])})
+    host_record = None
+    if include_client_borg_cache:
+        if len(normalized_host_ids) != 1:
+            raise ValueError("Ein Geräte-Cache-Backup benötigt genau ein ausgewähltes Gerät")
+        host_record = _client_host_record(normalized_host_ids[0])
+        if not host_record:
+            raise ValueError(f"Ausgewähltes Gerät #{normalized_host_ids[0]} wurde nicht gefunden")
+
+    _report(progress, stage="prepare", message="Cache-Artefakt wird vorbereitet …", percent=1.0)
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     os.chmod(BACKUP_DIR, 0o700)
-    normalized_label = _label(label)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    suffix = ".bbm" if encrypted else ".zip"
-    destination = BACKUP_DIR / f"borgbackup-manager-cache-v{app_version}-{stamp}-{normalized_label}{suffix}"
+    created_stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    destination = _cache_artifact_destination(
+        app_version,
+        created_stamp,
+        label.strip() or "Manuell",
+        encrypted=encrypted,
+        artifact_kind="manager" if include_manager_borg_cache else "client",
+        host_id=host_record[0] if host_record else None,
+        host_name=host_record[1] if host_record else None,
+    )
     with NamedTemporaryFile(prefix="bbm-cache-backup-", suffix=".zip", dir=DATA_DIR, delete=False) as temporary:
         plain_zip = Path(temporary.name)
     try:
@@ -537,6 +615,7 @@ def create_cache_backup(
             label.strip() or "Manuell",
             include_manager_borg_cache=include_manager_borg_cache,
             include_client_borg_cache=include_client_borg_cache,
+            client_host_ids=normalized_host_ids,
             compression=compression,
             progress=progress,
         )
@@ -545,9 +624,13 @@ def create_cache_backup(
                 _encrypt_backup(plain_zip, destination, manifest, passphrase or "", progress=progress)
             else:
                 shutil.copy2(plain_zip, destination)
-            _validate_backup_file_size(destination, include_borg_cache=True, include_client_borg_cache=include_client_borg_cache)
+            _validate_backup_file_size(
+                destination,
+                include_borg_cache=include_manager_borg_cache,
+                include_client_borg_cache=include_client_borg_cache,
+            )
             os.chmod(destination, 0o600)
-            _report(progress, stage="complete", message="Cache-Backup wurde erfolgreich erstellt.", percent=100.0, bytes_done=destination.stat().st_size, bytes_total=destination.stat().st_size)
+            _report(progress, stage="complete", message="Cache-Artefakt wurde erfolgreich erstellt.", percent=100.0, bytes_done=destination.stat().st_size, bytes_total=destination.stat().st_size)
             return destination
         except Exception:
             destination.unlink(missing_ok=True)
@@ -555,6 +638,102 @@ def create_cache_backup(
     finally:
         plain_zip.unlink(missing_ok=True)
 
+
+def create_cache_backup_set(
+    app_version: str,
+    label: str = "",
+    passphrase: str | None = None,
+    *,
+    encrypted: bool = True,
+    include_manager_borg_cache: bool = True,
+    include_client_borg_cache: bool = True,
+    client_host_ids: list[int] | None = None,
+    compression: str = "standard",
+    progress: ProgressCallback | None = None,
+) -> dict:
+    """Create independent cache artifacts for the manager and selected devices."""
+    if not (include_manager_borg_cache or include_client_borg_cache):
+        raise ValueError("Cache-Backup benötigt Manager-Cache oder mindestens ein Gerät")
+    selected_host_ids = []
+    if include_client_borg_cache:
+        selected_host_ids = _all_client_cache_host_ids() if client_host_ids is None else sorted({int(value) for value in client_host_ids})
+        if not selected_host_ids:
+            if not include_manager_borg_cache:
+                raise ValueError("Für das Geräte-Cache-Backup wurde kein Gerät ausgewählt")
+    artifact_plan: list[tuple[str, int | None]] = []
+    if include_manager_borg_cache:
+        artifact_plan.append(("manager", None))
+    artifact_plan.extend(("client", host_id) for host_id in selected_host_ids)
+    total = max(1, len(artifact_plan))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    paths: list[Path] = []
+    warnings: list[str] = []
+
+    for position, (kind, host_id) in enumerate(artifact_plan, start=1):
+        host_record = _client_host_record(host_id) if host_id is not None else None
+        display = "BBM-Cache" if kind == "manager" else (host_record[1] if host_record else f"Gerät #{host_id}")
+        if kind == "client" and not host_record:
+            warnings.append(f"Gerät #{host_id} wurde nicht gefunden und nicht gesichert.")
+            continue
+        if kind == "client" and not host_record[2]:
+            warnings.append(f"Gerät „{display}“ ist deaktiviert und wurde nicht gesichert.")
+            continue
+
+        def artifact_progress(payload: dict, *, position=position, display=display) -> None:
+            internal = max(0.0, min(100.0, float(payload.get("percent") or 0.0)))
+            mapped = 2.0 + (96.0 * ((position - 1) + internal / 100.0) / total)
+            forwarded = dict(payload)
+            forwarded["percent"] = mapped
+            forwarded["artifact_current"] = position
+            forwarded["artifact_total"] = total
+            forwarded["artifact_name"] = display
+            forwarded["message"] = f"Archiv {position}/{total}: {display} – {payload.get('message') or 'wird erstellt …'}"
+            _report(progress, **forwarded)
+
+        try:
+            path = create_cache_backup(
+                app_version,
+                label,
+                passphrase,
+                encrypted=encrypted,
+                include_manager_borg_cache=kind == "manager",
+                include_client_borg_cache=kind == "client",
+                client_host_ids=[host_id] if host_id is not None else None,
+                compression=compression,
+                progress=artifact_progress if progress is not None else None,
+                stamp=stamp,
+            )
+        except (OSError, ValueError) as exc:
+            if kind == "manager":
+                raise
+            warnings.append(f"Gerät „{display}“ konnte nicht gesichert werden: {exc}")
+            continue
+
+        if kind == "client":
+            try:
+                if encrypted:
+                    metadata, _aad, _offset = _read_encrypted_header(path)
+                else:
+                    with zipfile.ZipFile(path) as archive:
+                        metadata = _read_cache_backup_manifest(archive)
+                saved = int(metadata.get("client_borg_cache_saved_count") or 0)
+                security_saved = int(metadata.get("client_borg_security_saved_count") or 0)
+                warning_count = int(metadata.get("client_borg_cache_warning_count") or 0)
+                if not (saved or security_saved):
+                    path.unlink(missing_ok=True)
+                    warnings.append(f"Gerät „{display}“ enthielt keine sicherbaren Cache- oder Security-Daten; es wurde kein Archiv erstellt.")
+                    continue
+                if warning_count:
+                    warnings.append(f"Gerät „{display}“ wurde mit {warning_count} Warnung(en) teilweise gesichert.")
+            except Exception:
+                path.unlink(missing_ok=True)
+                raise
+        paths.append(path)
+
+    if not paths:
+        raise ValueError("Es konnte kein Cache-Artefakt erstellt werden")
+    _report(progress, stage="complete", message=f"{len(paths)} getrennte Cache-Artefakte wurden erstellt.", percent=100.0)
+    return {"paths": paths, "warnings": warnings, "selected_host_ids": selected_host_ids}
 
 def _backup_file_limit(include_borg_cache: bool, include_client_borg_cache: bool = False) -> int:
     return BACKUP_CACHE_MAX_FILE_BYTES if (include_borg_cache or include_client_borg_cache) else BACKUP_MAX_FILE_BYTES
@@ -716,6 +895,17 @@ def _read_cache_backup_manifest(archive: zipfile.ZipFile) -> dict:
     manifest = _read_any_backup_manifest(archive)
     if manifest.get("format") != CACHE_BACKUP_FORMAT:
         raise ValueError("Backup ist kein eigenständiges Borg-Cache-Backup")
+    format_version = int(manifest.get("format_version") or 1)
+    if format_version not in {1, 2}:
+        raise ValueError("Cache-Backup verwendet eine nicht unterstützte Formatversion")
+    if format_version >= 2:
+        artifact_kind = str(manifest.get("cache_artifact_kind") or "")
+        if artifact_kind not in {"manager", "client"}:
+            raise ValueError("Cache-Backup enthält keinen gültigen Artefakttyp")
+        if artifact_kind == "manager" and manifest.get("client_borg_cache_included"):
+            raise ValueError("Manager-Cache-Artefakt enthält unerwartete Client-Caches")
+        if artifact_kind == "client" and manifest.get("borg_cache_included"):
+            raise ValueError("Client-Cache-Artefakt enthält unerwarteten Manager-Cache")
     return manifest
 
 
@@ -727,7 +917,7 @@ def _client_cache_entries_from_manifest(manifest: dict) -> list[dict]:
         raise ValueError("Client-Cache-Metadaten im Backup sind ungültig")
     entries: list[dict] = []
     seen: set[tuple[int, int]] = set()
-    allowed_status = {"saved", "missing", "skipped_disabled"}
+    allowed_status = {"saved", "missing", "skipped_disabled", "warning"}
     allowed_security_status = {"saved", "missing", "unresolved", "skipped_disabled", ""}
     for raw in raw_entries:
         if not isinstance(raw, dict):
@@ -772,18 +962,26 @@ def _client_cache_entries_from_manifest(manifest: dict) -> list[dict]:
             "security_tar_bytes": int(raw.get("security_tar_bytes") or 0),
         }
         if status == "saved":
-            expected = f"data/client-borg-cache/host-{host_id}/repository-{repository_id}.tar"
             archive_path = str(raw.get("archive_path") or "")
-            if archive_path != expected:
+            legacy_expected = f"data/client-borg-cache/host-{host_id}/repository-{repository_id}.tar"
+            named_pattern = re.compile(
+                rf"^data/client-borg-cache/[A-Za-z0-9_-]+-h{host_id}/[A-Za-z0-9_-]+-r{repository_id}\.tar$"
+            )
+            if archive_path != legacy_expected and not named_pattern.fullmatch(archive_path):
                 raise ValueError("Client-Cache-Metadaten enthalten einen ungültigen Archivpfad")
+            _safe_relative_path(archive_path)
             item["archive_path"] = archive_path
         if security_status == "saved":
             if borg_repository_id is None:
                 raise ValueError("Gesicherter Client-Sicherheitsstatus enthält keine Borg-Repository-ID")
-            expected_security = f"data/client-borg-security/host-{host_id}/repository-{repository_id}.tar"
             security_archive_path = str(raw.get("security_archive_path") or "")
-            if security_archive_path != expected_security:
+            legacy_expected_security = f"data/client-borg-security/host-{host_id}/repository-{repository_id}.tar"
+            named_security_pattern = re.compile(
+                rf"^data/client-borg-security/[A-Za-z0-9_-]+-h{host_id}/[A-Za-z0-9_-]+-r{repository_id}\.tar$"
+            )
+            if security_archive_path != legacy_expected_security and not named_security_pattern.fullmatch(security_archive_path):
                 raise ValueError("Client-Sicherheitsstatus-Metadaten enthalten einen ungültigen Archivpfad")
+            _safe_relative_path(security_archive_path)
             item["security_archive_path"] = security_archive_path
             item["security_path"] = str(
                 raw.get("security_path") or f"$HOME/.config/borg/security/{borg_repository_id}"
@@ -801,6 +999,9 @@ def client_borg_cache_inventory(path: Path, passphrase: str | None = None) -> di
     return {
         "backup_version": manifest.get("app_version"),
         "created_at": manifest.get("created_at"),
+        "cache_artifact_kind": manifest.get("cache_artifact_kind") or "legacy_combined",
+        "source_host_id": manifest.get("source_host_id"),
+        "source_host_name": manifest.get("source_host_name"),
         "included": bool(manifest.get("client_borg_cache_included")),
         "security_included": bool(manifest.get("client_borg_security_included")),
         "target_count": int(manifest.get("client_borg_cache_target_count") or len(entries)),
@@ -816,20 +1017,35 @@ def client_borg_cache_inventory(path: Path, passphrase: str | None = None) -> di
 
 
 def restore_client_borg_cache_from_backup(
-    path: Path, passphrase: str | None, host, repository_id: int
+    path: Path,
+    passphrase: str | None,
+    target_host,
+    target_repository_id: int,
+    *,
+    source_host_id: int,
+    source_repository_id: int,
 ) -> dict:
-    """Restore one saved client cache and add missing Borg security state when available."""
-    repository_id = int(repository_id)
+    """Restore one saved source cache to a selected target device.
+
+    The target uses the same manager repository assignment, but may be a
+    different connected device. This makes device replacement and cache
+    migration possible without importing a multi-device archive.
+    """
+    target_repository_id = int(target_repository_id)
+    source_host_id = int(source_host_id)
+    source_repository_id = int(source_repository_id)
+    if target_repository_id != source_repository_id:
+        raise ValueError("Client-Caches können nur für dasselbe Repository auf ein anderes Gerät übertragen werden")
     with plain_backup_file(path, passphrase) as plain:
         with zipfile.ZipFile(plain) as archive:
             manifest = _read_cache_backup_manifest(archive)
             entries = _client_cache_entries_from_manifest(manifest)
             entry = next(
-                (item for item in entries if item["host_id"] == int(host.id) and item["repository_id"] == repository_id),
+                (item for item in entries if item["host_id"] == source_host_id and item["repository_id"] == source_repository_id),
                 None,
             )
             if not entry:
-                raise ValueError("Backup enthält keinen Client-Cache für dieses Gerät und Repository")
+                raise ValueError("Backup enthält den ausgewählten Quell-Client-Cache nicht")
             if entry["status"] != "saved":
                 raise ValueError(entry.get("reason") or "Für diese Zuordnung wurde kein Client-Cache gesichert")
             try:
@@ -840,7 +1056,7 @@ def restore_client_borg_cache_from_backup(
                 raise ValueError("Gesicherter Client-Cache hat eine ungültige Größe")
             from app.client_cache import restore_client_borg_cache_stream, restore_client_borg_security_stream
             with archive.open(info, "r") as source:
-                result = restore_client_borg_cache_stream(host, repository_id, source)
+                result = restore_client_borg_cache_stream(target_host, target_repository_id, source)
 
             security_result = None
             if entry.get("security_status") == "saved":
@@ -852,10 +1068,14 @@ def restore_client_borg_cache_from_backup(
                     raise ValueError("Gesicherter Client-Borg-Sicherheitsstatus hat eine ungültige Größe")
                 with archive.open(security_info, "r") as security_source:
                     security_result = restore_client_borg_security_stream(
-                        host, str(entry["borg_repository_id"]), security_source
+                        target_host, str(entry["borg_repository_id"]), security_source
                     )
     result.update({
-        "host_name": entry["host_name"],
+        "source_host_id": source_host_id,
+        "source_host_name": entry["host_name"],
+        "target_host_id": int(target_host.id),
+        "target_host_name": str(target_host.name),
+        "repository_id": target_repository_id,
         "repository_name": entry["repository_name"],
         "backup_version": manifest.get("app_version"),
         "collected_at": entry.get("collected_at"),

@@ -1,5 +1,32 @@
 # Release Notes
 
+## v1.2.10 – 01.08.2026
+
+### Cache-Backups in unabhängige Artefakte aufgeteilt
+
+- Ein Cache-Backup-Lauf erzeugt keine gemeinsame Großdatei mehr. Der BBM-Manager-Cache wird als eigenes `borgbackup-manager-cache-manager-v...`-Artefakt gespeichert; für jedes ausgewählte Gerät entsteht ein separates `borgbackup-manager-cache-client-<Gerätename>-h<ID>-v...`-Artefakt.
+- Ein Gerätearchiv enthält alle aktuell über Backup-Jobs zugeordneten Repository-Caches des Geräts einschließlich des jeweils zuordenbaren Borg-Sicherheitsstatus. Dadurch muss beim Wiederherstellen nur die tatsächlich benötigte kleine Geräte-Datei geöffnet und authentifiziert werden.
+- Gerätename und stabile numerische Geräte-ID werden in Dateinamen, Manifest und internen Archivpfaden verwendet. Die frühere unübersichtliche Struktur `host-1`, `host-2` wird für neue Artefakte nicht mehr erzeugt. Bereits vorhandene kombinierte Cache-Backups bleiben lesbar und wiederherstellbar.
+- Leere Gerätearchive werden nicht behalten. Ist ein Gerät nicht erreichbar oder enthält es keine sicherbaren Cache-/Security-Daten, wird dies als Warnung beziehungsweise Hinweis dokumentiert, während alle übrigen Gerätearchive weiter erstellt werden.
+
+### Alle Geräte oder gezielte Mehrfachauswahl
+
+- Im Cache-Backup-Formular kann der BBM-Cache unabhängig ein- oder ausgeschlossen werden.
+- Für Client-Caches stehen die Modi **Alle Geräte** und **Ausgewählte Geräte** zur Verfügung. Die Auswahl unterstützt mehrere Geräte; nicht ausgewählte Geräte werden weder per SSH kontaktiert noch in Warnungszähler aufgenommen.
+- Der Fortschritt umfasst alle Einzelartefakte und zeigt `Archiv x/y`, Gerätename, Repository sowie übertragene Bytes. Nach Abschluss nennt der Backup-Task Anzahl und Gesamtgröße der erzeugten Dateien.
+
+### Geräte-Cache auf anderes Gerät wiederherstellen
+
+- Beim Öffnen eines Gerätearchivs werden die enthaltenen Repository-Caches einzeln angezeigt.
+- Für jeden Cache kann als Ziel das ursprüngliche Gerät oder ein anderes aktives Gerät gewählt werden, das demselben Repository über einen Backup-Job zugeordnet ist. Dadurch lassen sich Cache und fehlender Borg-Sicherheitsstatus bei einem Geräteaustausch gezielt übertragen.
+- Die Repository-Zuordnung bleibt zwingend identisch. Ein Cache kann nicht versehentlich einem fremden Repository zugewiesen werden. Vorhandene Ziel-Caches werden weiterhin als zeitgestempelte `pre-bbm-restore`-Sicherheitskopie erhalten; bestehender Borg-Sicherheitsstatus wird nicht überschrieben.
+
+### Format- und Sicherheitsprüfung
+
+- Neue getrennte Cache-Artefakte verwenden Manifest-Formatversion 2 mit `cache_artifact_kind` (`manager` oder `client`) sowie Quellgeräte-ID und -name.
+- Upload, Backup-Liste, verschlüsselter Header und Dateinamenprüfung erkennen Manager-Cache-, Geräte-Cache- und ältere kombinierte Cache-Artefakte getrennt.
+- Neue interne Gerätepfade enthalten bereinigte Geräte- und Repository-Namen plus stabile IDs. Pfadtraversal, abweichende IDs und manipulierte Archivzuordnungen werden abgelehnt.
+
 ## v1.2.9 – 01.08.2026
 
 ### Keine verspätete Mount-Fehlermeldung nach erfolgreichem Aushängen
