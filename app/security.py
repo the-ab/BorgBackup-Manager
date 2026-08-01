@@ -1,37 +1,11 @@
 from __future__ import annotations
 
-import hmac
 from urllib.parse import unquote
 
 from fastapi import Cookie, Header, HTTPException, Request
 
-from app.config import (
-    ALLOW_LEGACY_TOKEN_AUTH,
-    LEGACY_ADMIN_TOKEN,
-    SESSION_COOKIE_NAME,
-)
+from app.config import SESSION_COOKIE_NAME
 from app.security_store import AuthUser, get_session_user, get_session_user_by_reload_token
-
-
-from app.secret_crypto import decrypt_value, encrypt_value
-
-
-def encrypt_secret(value: str) -> str:
-    return encrypt_value(value)
-
-
-def decrypt_secret(value: str) -> str:
-    return decrypt_value(value)
-
-
-def legacy_admin_token_matches(value: str | None) -> bool:
-    return bool(
-        ALLOW_LEGACY_TOKEN_AUTH
-        and value
-        and LEGACY_ADMIN_TOKEN
-        and LEGACY_ADMIN_TOKEN != "change-me"
-        and hmac.compare_digest(value, LEGACY_ADMIN_TOKEN)
-    )
 
 
 def session_cookie_values(request: Request, fallback: str | None = None) -> list[str]:
@@ -60,8 +34,6 @@ def _session_from_request(
     session_cookie: str | None,
     *, allow_forced_password_change: bool,
 ) -> AuthUser:
-    if authorization and authorization.startswith("Bearer ") and legacy_admin_token_matches(authorization[7:]):
-        return AuthUser(id=0, username="legacy-admin", role="admin", enabled=True, must_change_password=False)
     if authorization and authorization.startswith("BBM-Reload "):
         user = get_session_user_by_reload_token(authorization[len("BBM-Reload "):], request.headers.get("user-agent"))
         if user is not None:

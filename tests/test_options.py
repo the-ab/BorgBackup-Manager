@@ -41,13 +41,6 @@ def test_central_schedule_schema_rejects_invalid_cron_immediately():
         )
 
 
-def test_legacy_job_schedule_field_is_ignored_for_update_compatibility():
-    job = JobIn(
-        name="legacy-client", host_id=1, repository_id=1, source_paths=["/srv"], schedule="0 2 * * *"
-    )
-    assert not hasattr(job, "schedule")
-
-
 def test_archive_template_must_avoid_collisions():
     with pytest.raises(ValidationError):
         JobIn(
@@ -127,8 +120,9 @@ def test_ui_contains_scoped_archives_and_advanced_borg_options():
     assert "markArchivesStale" in javascript
     assert "if (current === 'archives'" not in javascript
     assert "kein FUSE erforderlich" in javascript
-    assert "Alte FUSE-Mounts" in html
-    assert "renderLegacyMounts" in javascript
+    assert 'id="archive-mount-panel"' in html
+    assert "renderManagerArchiveMounts" in javascript
+    assert "renderLegacyMounts" not in javascript
     assert "location.hash" in javascript
     assert "verify" in javascript
     assert "function editHost" in javascript

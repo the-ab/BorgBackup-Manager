@@ -75,24 +75,27 @@ def update_task(task_id: str, **changes: Any) -> dict[str, Any] | None:
         return deepcopy(task)
 
 
-def finish_task(task_id: str, *, backup: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def finish_task(task_id: str, *, backup: dict[str, Any] | None = None, warning: str | None = None) -> dict[str, Any] | None:
     global _current_task_id
     with _lock:
         task = _tasks.get(task_id)
         if task is None:
             return None
         noun = "Cache-Backup" if task.get("backup_type") == "cache" else "Manager-Backup"
-        success_message = f"{noun} wurde erfolgreich erstellt."
+        success_message = f"{noun} wurde mit Warnungen erstellt." if warning else f"{noun} wurde erfolgreich erstellt."
         task.setdefault("events", []).append({"at": _now(), "message": success_message})
+        if warning:
+            task.setdefault("events", []).append({"at": _now(), "message": f"Warnung: {warning}"})
         del task["events"][:-12]
         task.update({
-            "status": "finished",
+            "status": "warning" if warning else "finished",
             "stage": "finished",
             "message": success_message,
             "percent": 100.0,
             "finished_at": _now(),
             "backup": backup,
             "error": None,
+            "warning": warning,
             "updated_at": _now(),
         })
         if _current_task_id == task_id:

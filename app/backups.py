@@ -17,7 +17,6 @@ from tempfile import NamedTemporaryFile, mkdtemp
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 from app.config import (
@@ -44,6 +43,7 @@ BACKUP_FORMAT = "borgbackup-manager-full-backup"
 CACHE_BACKUP_FORMAT = "borgbackup-manager-cache-backup"
 BACKUP_ENVELOPE_FORMAT = "borgbackup-manager-encrypted-backup"
 BACKUP_MAGIC = b"BBM-BACKUP-1\n"
+MIN_SUPPORTED_BACKUP_VERSION = "1.1.0"
 MANAGER_BACKUP_NAME = re.compile(
     r"^borgbackup-manager-backup-v[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}-[a-zA-Z0-9_-]+\.(?:zip|bbm)$"
 )
@@ -56,6 +56,21 @@ BACKUP_NAME = re.compile(
 RESTORE_COMPONENTS = ("manager.db", "settings.json", "notifications.json", "ssh", "repository-ssh", "repository-keys", "tls", "security", "borg-cache", "borg-security")
 
 ProgressCallback = Callable[[dict], None]
+
+
+def _version_tuple(value: object) -> tuple[int, int, int]:
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?", str(value or "").strip())
+    if not match:
+        raise ValueError("Backup enthält keine gültige BorgBackup-Manager-Version")
+    return tuple(int(part) for part in match.groups())
+
+
+def _require_supported_backup_version(metadata: dict) -> None:
+    version = metadata.get("app_version")
+    if _version_tuple(version) < _version_tuple(MIN_SUPPORTED_BACKUP_VERSION):
+        raise ValueError(
+            f"Backups vor BorgBackup Manager v{MIN_SUPPORTED_BACKUP_VERSION} werden nicht mehr unterstützt"
+        )
 
 
 def backup_type_from_manifest(manifest: dict) -> str:
@@ -157,8 +172,8 @@ def _migration_env() -> str:
         "BBM_REPOSITORY_SIZE_AFTER_RUN", "BBM_REPOSITORY_PUBLIC_HOST",
         "BBM_REPOSITORY_SSH_PORT", "BBM_BORG_UID", "BBM_BORG_GID",
         "BBM_STORAGE_GUARD_ENABLED", "BBM_STORAGE_GUARD_THRESHOLD_PERCENT",
-        "BBM_HEALTH_REQUIRE_SSHD", "BBM_LOG_MAX_BYTES", "BBM_LOG_ROTATIONS", "BBM_DEBUG_LOG_LEVEL",
-        "BBM_DATA_PATH", "BBM_REPOSITORY_PATH",
+        "BBM_HEALTH_REQUIRE_SSHD", "BBM_LOG_MAX_BYTES", "BBM_LOG_ROTATIONS",
+        "BBM_DATA_PATH", "BBM_REPOSITORY_PATH", "BBM_ARCHIVE_MOUNT_PATH",
     )
     lines = []
     for key in keys:
@@ -337,6 +352,11 @@ def _write_cache_backup(
                 security_status = str(item.get("security_status") or "")
                 if event == "target_done" and status == "missing":
                     message = f"Client {index}/{total}: {host_name} · {repository_name} – Cache fehlt, Sicherheitsstatus {security_status or 'geprüft'}"
+                elif event == "target_done" and status == "warning":
+                    reason = str(item.get("reason") or "Client nicht erreichbar")
+                    if len(reason) > 320:
+                        reason = reason[:317] + "…"
+                    message = f"WARNUNG: Client {index}/{total}: {host_name} · {repository_name} konnte nicht gesichert werden – {reason}"
                 elif event == "target_done" and status.startswith("skipped_"):
                     message = f"Client {index}/{total}: {host_name} · {repository_name} – übersprungen"
                 elif event == "target_done":
@@ -361,6 +381,7 @@ def _write_cache_backup(
             manifest["client_borg_cache_saved_count"] = summary["saved_count"]
             manifest["client_borg_cache_missing_count"] = summary["missing_count"]
             manifest["client_borg_cache_skipped_count"] = summary["skipped_count"]
+            manifest["client_borg_cache_warning_count"] = summary["warning_count"]
             manifest["client_borg_cache_source_bytes"] = summary["tar_bytes"]
             manifest["client_borg_security_saved_count"] = summary["security_saved_count"]
             manifest["client_borg_security_missing_count"] = summary["security_missing_count"]
@@ -407,6 +428,7 @@ def _encrypt_backup(source_zip: Path, destination: Path, manifest: dict, passphr
         "client_borg_cache_saved_count": int(manifest.get("client_borg_cache_saved_count") or 0),
         "client_borg_cache_missing_count": int(manifest.get("client_borg_cache_missing_count") or 0),
         "client_borg_cache_skipped_count": int(manifest.get("client_borg_cache_skipped_count") or 0),
+        "client_borg_cache_warning_count": int(manifest.get("client_borg_cache_warning_count") or 0),
         "client_borg_security_included": bool(manifest.get("client_borg_security_included")),
         "client_borg_security_saved_count": int(manifest.get("client_borg_security_saved_count") or 0),
         "client_borg_security_missing_count": int(manifest.get("client_borg_security_missing_count") or 0),
@@ -597,6 +619,9 @@ def _read_encrypted_header(path: Path, *, validate_size: bool = True) -> tuple[d
         raise ValueError("Backup-Header ist ungültig") from exc
     if header.get("format") != BACKUP_ENVELOPE_FORMAT:
         raise ValueError("Datei ist kein verschlüsseltes BorgBackup-Manager-Backup")
+    _require_supported_backup_version(header)
+    if header.get("format_version") != 2 or header.get("cipher") != "AES-256-GCM-stream":
+        raise ValueError("Backup verwendet ein nicht mehr unterstütztes Verschlüsselungsformat")
     if validate_size:
         _validate_backup_file_size(
             path,
@@ -616,45 +641,36 @@ def _decrypt_backup(path: Path, destination: Path, passphrase: str | None) -> No
     except (KeyError, ValueError) as exc:
         raise ValueError("Backup-Header enthält ungültige Verschlüsselungsparameter") from exc
     key = _derive_backup_key(passphrase, salt)
-    if header.get("format_version") == 2 and header.get("cipher") == "AES-256-GCM-stream":
-        tag_bytes = int(header.get("tag_bytes", 16))
-        if tag_bytes != 16:
-            raise ValueError("Backup-Header enthält eine ungültige GCM-Tag-Größe")
-        file_size = path.stat().st_size
-        ciphertext_size = file_size - payload_offset - tag_bytes
-        if ciphertext_size <= 0:
-            raise ValueError("Verschlüsseltes Backup ist unvollständig")
-        with path.open("rb") as source:
-            source.seek(file_size - tag_bytes)
-            tag = source.read(tag_bytes)
-            source.seek(payload_offset)
-            decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag)).decryptor()
-            decryptor.authenticate_additional_data(aad)
-            remaining = ciphertext_size
-            try:
-                with destination.open("wb") as handle:
-                    while remaining > 0:
-                        chunk = source.read(min(1024 * 1024, remaining))
-                        if not chunk:
-                            raise ValueError("Verschlüsseltes Backup ist unvollständig")
-                        remaining -= len(chunk)
-                        plaintext = decryptor.update(chunk)
-                        if plaintext:
-                            handle.write(plaintext)
-                    final = decryptor.finalize()
-                    if final:
-                        handle.write(final)
-            except InvalidTag as exc:
-                destination.unlink(missing_ok=True)
-                raise ValueError("Backup-Passphrase ist falsch oder das Backup wurde verändert") from exc
-    else:
-        # Backward compatibility with format_version 1 backups.
-        ciphertext = path.read_bytes()[payload_offset:]
+    tag_bytes = int(header.get("tag_bytes", 16))
+    if tag_bytes != 16:
+        raise ValueError("Backup-Header enthält eine ungültige GCM-Tag-Größe")
+    file_size = path.stat().st_size
+    ciphertext_size = file_size - payload_offset - tag_bytes
+    if ciphertext_size <= 0:
+        raise ValueError("Verschlüsseltes Backup ist unvollständig")
+    with path.open("rb") as source:
+        source.seek(file_size - tag_bytes)
+        tag = source.read(tag_bytes)
+        source.seek(payload_offset)
+        decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag)).decryptor()
+        decryptor.authenticate_additional_data(aad)
+        remaining = ciphertext_size
         try:
-            plaintext = AESGCM(key).decrypt(nonce, ciphertext, aad)
+            with destination.open("wb") as handle:
+                while remaining > 0:
+                    chunk = source.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError("Verschlüsseltes Backup ist unvollständig")
+                    remaining -= len(chunk)
+                    plaintext = decryptor.update(chunk)
+                    if plaintext:
+                        handle.write(plaintext)
+                final = decryptor.finalize()
+                if final:
+                    handle.write(final)
         except InvalidTag as exc:
+            destination.unlink(missing_ok=True)
             raise ValueError("Backup-Passphrase ist falsch oder das Backup wurde verändert") from exc
-        destination.write_bytes(plaintext)
     os.chmod(destination, 0o600)
 
 
@@ -692,18 +708,15 @@ def _read_any_backup_manifest(archive: zipfile.ZipFile) -> dict:
         raise ValueError("Manifest fehlt oder ist ungültig") from exc
     if not isinstance(manifest, dict) or manifest.get("format") not in {BACKUP_FORMAT, CACHE_BACKUP_FORMAT}:
         raise ValueError("Datei ist kein unterstütztes BorgBackup-Manager-Backup")
+    _require_supported_backup_version(manifest)
     return manifest
 
 
-def _read_cache_backup_manifest(archive: zipfile.ZipFile, *, allow_legacy_combined: bool = True) -> dict:
+def _read_cache_backup_manifest(archive: zipfile.ZipFile) -> dict:
     manifest = _read_any_backup_manifest(archive)
-    if manifest.get("format") == CACHE_BACKUP_FORMAT:
-        return manifest
-    if allow_legacy_combined and (
-        manifest.get("borg_cache_included") or manifest.get("client_borg_cache_included")
-    ):
-        return manifest
-    raise ValueError("Backup enthält keine Borg-Cache-Daten")
+    if manifest.get("format") != CACHE_BACKUP_FORMAT:
+        raise ValueError("Backup ist kein eigenständiges Borg-Cache-Backup")
+    return manifest
 
 
 def _client_cache_entries_from_manifest(manifest: dict) -> list[dict]:
@@ -780,7 +793,7 @@ def _client_cache_entries_from_manifest(manifest: dict) -> list[dict]:
 
 
 def client_borg_cache_inventory(path: Path, passphrase: str | None = None) -> dict:
-    """Authenticate a cache/legacy backup and return its per-device inventory."""
+    """Authenticate a current cache backup and return its per-device inventory."""
     with plain_backup_file(path, passphrase) as plain:
         with zipfile.ZipFile(plain) as archive:
             manifest = _read_cache_backup_manifest(archive)
@@ -794,6 +807,7 @@ def client_borg_cache_inventory(path: Path, passphrase: str | None = None) -> di
         "saved_count": sum(1 for item in entries if item["status"] == "saved"),
         "missing_count": sum(1 for item in entries if item["status"] == "missing"),
         "skipped_count": sum(1 for item in entries if item["status"].startswith("skipped_")),
+        "warning_count": sum(1 for item in entries if item["status"] == "warning"),
         "security_saved_count": sum(1 for item in entries if item.get("security_status") == "saved"),
         "security_missing_count": sum(1 for item in entries if item.get("security_status") == "missing"),
         "security_unresolved_count": sum(1 for item in entries if item.get("security_status") == "unresolved"),

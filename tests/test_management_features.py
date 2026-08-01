@@ -97,11 +97,8 @@ def test_full_backup_contains_snapshot_manifest_and_keys(monkeypatch, tmp_path: 
     (security_dir / "master.key").write_text("test-master-key", encoding="utf-8")
     monkeypatch.setattr(backups, "DATABASE_URL", f"sqlite:///{database}")
     monkeypatch.setattr(backups, "SECURITY_DATABASE_PATH", security_database)
-    monkeypatch.setenv("BBM_ADMIN_TOKEN", "admin-secret")
-    monkeypatch.setenv("BBM_SECRET_KEY", "crypto-secret")
-
     passphrase = "Serverwechsel-Backup-2026!"
-    result = backups.create_full_backup("0.5.0", "serverwechsel", passphrase)
+    result = backups.create_full_backup("1.1.0", "serverwechsel", passphrase)
     assert result.suffix == ".bbm"
 
     with backups.plain_backup_file(result, passphrase) as plain_backup:
@@ -272,15 +269,12 @@ def test_encrypted_manager_backup_roundtrip_and_wrong_passphrase(monkeypatch, tm
     monkeypatch.setattr(backups, "BACKUP_DIR", data / "backups")
     monkeypatch.setattr(backups, "SETTINGS_PATH", data / "settings.json")
     monkeypatch.setattr(backups, "DATABASE_URL", f"sqlite:///{database}")
-    monkeypatch.setenv("BBM_ADMIN_TOKEN", "admin-secret")
-    monkeypatch.setenv("BBM_SECRET_KEY", "crypto-secret")
-
-    result = backups.create_full_backup("0.8.8", "verschluesselt", "correct horse")
+    result = backups.create_full_backup("1.1.0", "verschluesselt", "correct horse")
 
     assert result.suffix == ".bbm"
     listed = backups.list_full_backups()
     assert listed[0]["encrypted"] is True
-    assert listed[0]["manifest"]["app_version"] == "0.8.8"
+    assert listed[0]["manifest"]["app_version"] == "1.1.0"
     try:
         backups.prepare_full_backup_restore(result, "wrong passphrase")
     except ValueError as exc:
@@ -355,16 +349,17 @@ def test_uploaded_encrypted_backup_is_validated_and_stored_without_overwrite(mon
     monkeypatch.setattr(backups, "BACKUP_DIR", backup_dir)
     monkeypatch.setattr(backups, "DATA_DIR", data_dir)
 
-    name = "borgbackup-manager-backup-v1.0.42-20260719-120000-upload.bbm"
+    name = "borgbackup-manager-backup-v1.1.0-20260719-120000-upload.bbm"
     source = tmp_path / "incoming"
     header = {
         "format": backups.BACKUP_ENVELOPE_FORMAT,
-        "format_version": 1,
-        "app_version": "1.0.42",
+        "format_version": 2,
+        "app_version": "1.1.0",
         "created_at": "2026-07-19T12:00:00+00:00",
         "label": "upload",
         "encrypted": True,
-        "cipher": "AES-256-GCM",
+        "cipher": "AES-256-GCM-stream",
+        "tag_bytes": 16,
         "kdf": "scrypt-n32768-r8-p1",
         "salt": base64.b64encode(b"s" * 16).decode("ascii"),
         "nonce": base64.b64encode(b"n" * 12).decode("ascii"),

@@ -33,37 +33,6 @@ def test_read_view_can_limit_large_log(monkeypatch, tmp_path):
     assert content.endswith("END\n")
 
 
-def test_legacy_database_payload_is_migrated_to_file_and_truncated(monkeypatch, tmp_path):
-    from app import main as main_module
-    from app.database import Base, SessionLocal, engine
-    from app.models import Run
-
-    Base.metadata.create_all(engine)
-    monkeypatch.setattr(run_logs, "RUN_LOG_DIR", tmp_path)
-    monkeypatch.setattr(main_module, "RUN_LOG_DIR", tmp_path)
-    monkeypatch.setattr(main_module, "run_log_path", lambda run_id: tmp_path / f"run-{run_id}.log")
-    monkeypatch.setattr(main_module, "append_run_log", lambda run_id, text, _max: (tmp_path / f"run-{run_id}.log").write_text(text, encoding="utf-8"))
-    payload = "START\nA srv/data/normal.txt\nC var/lib/app/live.db\n" + ("x" * 100_000) + "\nEND\n"
-    with SessionLocal() as db:
-        row = Run(action="backup", status="warning", output=payload, error=payload, log_output=payload)
-        db.add(row)
-        db.commit()
-        run_id = row.id
-
-    assert main_module.migrate_run_payloads_to_files() >= 1
-    assert (tmp_path / f"run-{run_id}.log").read_text(encoding="utf-8") == payload
-    with SessionLocal() as db:
-        row = db.get(Run, run_id)
-        assert len(row.output.encode()) <= 4 * 1024
-        assert len(row.error.encode()) <= 8 * 1024
-        assert len(row.log_output.encode()) <= 16 * 1024
-        assert "srv/data/normal.txt" not in row.output
-        assert "srv/data/normal.txt" not in row.log_output
-        assert "var/lib/app/live.db" not in row.error
-        assert "var/lib/app/live.db" not in row.log_output
-        assert "var/lib/app/live.db" in row.warning_summary_json
-
-
 def test_high_volume_writer_batches_filesystem_writes(monkeypatch, tmp_path):
     monkeypatch.setattr(run_logs, "RUN_LOG_DIR", tmp_path)
     now = [0.0]

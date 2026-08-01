@@ -154,7 +154,7 @@ def test_restore_rejects_permission_path_traversal_before_prompt(tmp_path: Path)
 
     backup = tmp_path / "unsafe.zip"
     with zipfile.ZipFile(backup, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"format": "borgbackup-manager-full-backup"}))
+        archive.writestr("manifest.json", json.dumps({"format": "borgbackup-manager-full-backup", "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"db")
         archive.writestr("permissions.json", json.dumps({"../outside": 0o600}))
@@ -187,17 +187,17 @@ def test_posix_wrappers_fail_cleanly_without_runtime_environment(tmp_path: Path)
     assert "cannot create" not in borg_serve.stdout.lower()
     assert "unbound variable" not in borg_serve.stdout.lower()
 
-def test_release_build_context_remains_compatible_with_v1_0_25_updater(tmp_path: Path):
-    """An old updater copy set must still leave a buildable default-English project."""
-    target = tmp_path / "old-updater-target"
+def test_release_build_context_contains_current_v110_plus_update_files(tmp_path: Path):
+    """The supported v1.1.0+ updater file set must leave a buildable project."""
+    target = tmp_path / "supported-updater-target"
     target.mkdir()
-    old_allowed = (
+    supported_allowed = (
         ".dockerignore", ".env.example", ".gitattributes", ".gitignore",
         "compose.yaml", "Dockerfile", "install.sh", "update.sh", "recovery.sh",
         "restore-backup.sh", "INSTALLATION.md", "README.md", "RELEASE_NOTES.md",
         "VERSION", "requirements.txt", "requirements-dev.txt", "app", "docker", "tests",
     )
-    for name in old_allowed:
+    for name in supported_allowed:
         source = PROJECT_ROOT / name
         destination = target / name
         if source.is_dir():
@@ -223,7 +223,7 @@ def test_restore_rejects_archive_entry_limit_before_prompt(tmp_path: Path):
 
     backup = tmp_path / "too-many.zip"
     with zipfile.ZipFile(backup, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"format": "borgbackup-manager-full-backup"}))
+        archive.writestr("manifest.json", json.dumps({"format": "borgbackup-manager-full-backup", "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"db")
 

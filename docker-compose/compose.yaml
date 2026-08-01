@@ -1,11 +1,7 @@
-# Standalone installation using the published GitHub Container Registry image.
-# See README.de.md or README.md for the complete .env reference.
-# Copy .env.example to .env, adjust the required values, then run:
-#   docker compose pull
-#   docker compose up -d
-
 name: borgbackup-manager
-
+# BorgBackup Manager standalone GHCR deployment.
+# Read-only Borg archive mounts are enabled by default and require /dev/fuse.
+# See README.de.md or README.md for the complete .env reference.
 services:
   borg-manager:
     image: ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG:-latest}
@@ -14,8 +10,8 @@ services:
     hostname: bbm
     restart: unless-stopped
     ports:
-      - "${BBM_HTTPS_PORT:-8443}:8443"
-      - "${BBM_REPOSITORY_SSH_PORT:-2222}:2222"
+    - ${BBM_HTTPS_PORT:-8443}:8443
+    - ${BBM_REPOSITORY_SSH_PORT:-2222}:2222
     environment:
       BBM_HTTPS_PORT: ${BBM_HTTPS_PORT:-8443}
       BBM_DATA_PATH: ${BBM_DATA_PATH:-/docker_data/borgbackup-manager/data}
@@ -33,8 +29,6 @@ services:
       BBM_HEALTH_REQUIRE_SSHD: ${BBM_HEALTH_REQUIRE_SSHD:-1}
       BBM_LOG_MAX_BYTES: ${BBM_LOG_MAX_BYTES:-10485760}
       BBM_LOG_ROTATIONS: ${BBM_LOG_ROTATIONS:-5}
-      BBM_TLS_CERT_FILE: ${BBM_TLS_CERT_FILE:-/data/tls/fullchain.pem}
-      BBM_TLS_KEY_FILE: ${BBM_TLS_KEY_FILE:-/data/tls/privkey.pem}
       BBM_COMMAND_TIMEOUT: ${BBM_COMMAND_TIMEOUT:-86400}
       BBM_REPOSITORY_SIZE_AFTER_RUN: ${BBM_REPOSITORY_SIZE_AFTER_RUN:-1}
       BBM_MAX_PARALLEL_RUNS: ${BBM_MAX_PARALLEL_RUNS:-0}
@@ -58,17 +52,35 @@ services:
       BBM_BACKUP_CACHE_MAX_ENTRIES: ${BBM_BACKUP_CACHE_MAX_ENTRIES:-250000}
       BBM_BACKUP_CACHE_MAX_COMPRESSION_RATIO: ${BBM_BACKUP_CACHE_MAX_COMPRESSION_RATIO:-5000}
       TZ: ${TZ:-Europe/Berlin}
+      BBM_ARCHIVE_MOUNTS_ENABLED: '1'
+      BBM_ARCHIVE_MOUNT_ROOT: /archive-mounts
+      BBM_ARCHIVE_MOUNT_HOST_PATH: ${BBM_ARCHIVE_MOUNT_PATH:-/docker_data/borgbackup-manager/archive-mounts}
     security_opt:
-      - no-new-privileges:true
+    - no-new-privileges:true
+    - apparmor:unconfined
     volumes:
-      - ${BBM_DATA_PATH:-/docker_data/borgbackup-manager/data}:/data
-      - ${BBM_REPOSITORY_PATH:-/docker_data/borgbackup-manager/repositories}:/repositories:rslave
-      - /sys:/host/sys:ro
-      - /proc/net:/host/proc/net:ro
-      - ./.env:/run/bbm-host.env
+    - ${BBM_DATA_PATH:-/docker_data/borgbackup-manager/data}:/data
+    - ${BBM_REPOSITORY_PATH:-/docker_data/borgbackup-manager/repositories}:/repositories:rslave
+    - /sys:/host/sys:ro
+    - /proc/net:/host/proc/net:ro
+    - type: bind
+      source: ${BBM_ARCHIVE_MOUNT_PATH:-/docker_data/borgbackup-manager/archive-mounts}
+      target: /archive-mounts
+      bind:
+        create_host_path: true
+        propagation: rshared
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('https://127.0.0.1:8443/api/ready', context=__import__('ssl')._create_unverified_context(), timeout=5)"]
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('https://127.0.0.1:8443/api/ready', context=__import__('ssl')._create_unverified_context(),
+        timeout=5)
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
+    cap_add:
+    - SYS_ADMIN
+    devices:
+    - /dev/fuse:/dev/fuse

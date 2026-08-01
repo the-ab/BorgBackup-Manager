@@ -171,6 +171,7 @@ def test_collect_client_caches_records_disabled_devices_without_contact(monkeypa
         "saved_count": 1,
         "missing_count": 0,
         "skipped_count": 1,
+        "warning_count": 0,
         "tar_bytes": len(b"client-cache-tar"),
         "security_saved_count": 0,
         "security_missing_count": 1,
@@ -179,18 +180,31 @@ def test_collect_client_caches_records_disabled_devices_without_contact(monkeypa
     }
 
 
-def test_collect_client_caches_aborts_when_enabled_device_fails(monkeypatch, tmp_path: Path):
-    host = _host()
-    repository = _repository()
-    monkeypatch.setattr(client_cache, "_target_rows", lambda: [(host, repository)])
-    monkeypatch.setattr(
-        client_cache,
-        "_stream_one_cache",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("ssh unavailable")),
-    )
-    with zipfile.ZipFile(tmp_path / "failed.zip", "w") as archive:
-        with pytest.raises(ValueError, match="ssh unavailable"):
-            client_cache.collect_client_borg_caches(archive)
+def test_collect_client_caches_warns_and_continues_when_enabled_device_fails(monkeypatch, tmp_path: Path):
+    unavailable = _host(11)
+    available = _host(12)
+    repo_a = _repository(21)
+    repo_b = _repository(22)
+    monkeypatch.setattr(client_cache, "_target_rows", lambda: [(unavailable, repo_a), (available, repo_b)])
+
+    def fake_stream(archive, host, repository, arcname, progress=None):
+        if host.id == 11:
+            raise ValueError("ssh unavailable")
+        archive.writestr(arcname, b"saved")
+        return "present", 5
+
+    monkeypatch.setattr(client_cache, "_stream_one_cache", fake_stream)
+    monkeypatch.setattr(client_cache, "_stream_one_security", lambda *_args, **_kwargs: ("missing", None, 0))
+    events = []
+    with zipfile.ZipFile(tmp_path / "warning.zip", "w") as archive:
+        entries = client_cache.collect_client_borg_caches(archive, events.append)
+
+    assert entries[0]["status"] == "warning"
+    assert entries[0]["security_status"] == "warning"
+    assert "ssh unavailable" in entries[0]["reason"]
+    assert entries[1]["status"] == "saved"
+    assert client_cache.client_cache_summary(entries)["warning_count"] == 1
+    assert any(event.get("status") == "warning" for event in events)
 
 
 def test_cache_backup_contains_inventory_and_selectively_restores_client_cache(monkeypatch, tmp_path: Path):
@@ -224,7 +238,7 @@ def test_cache_backup_contains_inventory_and_selectively_restores_client_cache(m
 
     monkeypatch.setattr(client_cache, "collect_client_borg_caches", fake_collect)
     backup = backups.create_cache_backup(
-        "1.0.77",
+        "1.1.0",
         "client-cache",
         "correct horse battery staple",
         include_manager_borg_cache=False,
@@ -237,6 +251,7 @@ def test_cache_backup_contains_inventory_and_selectively_restores_client_cache(m
     assert header["client_borg_cache_included"] is True
     assert header["client_borg_cache_target_count"] == 1
     assert header["client_borg_cache_saved_count"] == 1
+    assert header["client_borg_cache_warning_count"] == 0
     assert header["client_borg_security_included"] is True
     assert header["client_borg_security_saved_count"] == 1
 

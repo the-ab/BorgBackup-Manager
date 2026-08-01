@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.2.3
+# Installation and Operations — BorgBackup Manager 1.2.9
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.2.3.zip
+BorgBackup-Manager-1.2.9.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.2.3.zip
+unzip /path/BorgBackup-Manager-1.2.9.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.2.3.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.2.9.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -119,9 +119,27 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.2.3` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
+`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.2.9` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
 
 During first start the entrypoint checks `/repositories` using `BBM_BORG_UID` and `BBM_BORG_GID`. If the mount is empty and is owned by `root` only because Docker created the host directory, only the mount root is assigned to the configured UID/GID and receives owner read/write/execute access. The entrypoint never runs recursive `chown` on repositories. Existing non-empty data therefore requires correct host ownership, group permissions or ACLs. NFS deployments with `root_squash` must configure matching numeric UID/GID or server-side permissions.
+
+#### Read-only archive mounts enabled by default
+
+The normal `compose.yaml` enables Borg FUSE support without an additional Compose file. The Docker host must provide `/dev/fuse`. Prepare the host path configured by `BBM_ARCHIVE_MOUNT_PATH` for the selected Borg UID/GID before first start:
+
+```bash
+sudo modprobe fuse
+sudo mkdir -p /docker_data/borgbackup-manager/archive-mounts
+sudo chown 1000:1000 /docker_data/borgbackup-manager/archive-mounts
+sudo chmod 700 /docker_data/borgbackup-manager/archive-mounts
+
+docker compose config
+docker compose pull
+docker compose up -d
+```
+
+The standard configuration passes through `/dev/fuse`, adds `CAP_SYS_ADMIN`, permits FUSE through AppArmor, and uses `rshared` mount propagation. These permissions expand container privileges and require a trusted Docker host. Archive mounts support locally managed repositories only; external SSH repositories are rejected. Mounts use FUSE `allow_other`; the image enables `user_allow_other` in `/etc/fuse.conf`. The propagated mount can therefore be entered from the Docker host while archived file permissions remain visible.
+
 
 On a genuinely new installation, the container writes the one-time administrator credentials exactly once to its local startup log. The image-only example enables this with `BBM_SHOW_INITIAL_ADMIN_ON_START=1`:
 
@@ -142,7 +160,7 @@ Set `BBM_SHOW_INITIAL_ADMIN_ON_START=0` to disable automatic log output. When en
 
 A focused reference grouped by required values, networking, paths, sessions, security limits, backup limits, and performance settings is included at [`docker-compose/README.md`](docker-compose/README.md). The German version is available at [`docker-compose/README.de.md`](docker-compose/README.de.md).
 
-The guided installer writes a complete `.env`. Supported host variables include:
+The guided installer writes a complete `.env`. During updates from v1.1.0 or newer, `update.sh` rebuilds the file from the current template, preserves supported custom values, adds missing current values, and removes obsolete legacy or Compose-override keys. Supported host variables include:
 
 ```dotenv
 TZ=Europe/Berlin
@@ -477,7 +495,7 @@ Since v1.0.77 manager state and Borg caches are separate backup types. Newly cre
 
 Manager backups contain the application database, security database, master key, settings, controller/repository SSH keys, Borg keyfiles and TLS files. Repository data, full run logs, `/data/borg-cache`, `/data/borg-security` and client Borg caches are excluded from newly created manager backups.
 
-New manager backups are mandatory streaming AES-256-GCM encrypted `.bbm` files protected by a non-stored passphrase of at least twelve characters. Compression is selectable: none, Deflate 1, Deflate 6 (default), or Deflate 9. Historical manager `.zip` files and combined v1.0.75/v1.0.76 artifacts remain readable. The Web UI shows live phase/progress/event output and resumes an active status after reload.
+New manager backups are mandatory streaming AES-256-GCM encrypted `.bbm` files protected by a non-stored passphrase of at least twelve characters. Compression is selectable: none, Deflate 1, Deflate 6 (default), or Deflate 9. Import and restore require metadata version v1.1.0 or newer. The Web UI shows live phase/progress/event output and resumes an active status after reload.
 
 ### Create separate cache backup
 
@@ -486,7 +504,7 @@ A cache backup is a separate `borgbackup-manager-cache-v...` artifact and may in
 - manager Borg cache and security state: `/data/borg-cache` and `/data/borg-security`
 - managed client caches: `$HOME/.cache/borgbackup-manager/repository-<ID>` for current device/repository assignments
 
-At least one cache group must be selected. `lock.exclusive` and `lock.roster` are excluded. Client caches are streamed directly over verified controller SSH. Disabled devices are recorded as skipped, a missing cache is allowed, and failure to reach an enabled device aborts cache creation. Symbolic links are rejected. No run may be queued or active while a cache backup is created.
+At least one cache group must be selected. `lock.exclusive` and `lock.roster` are excluded. Client caches are streamed directly over verified controller SSH. Disabled devices are recorded as skipped, a missing cache is allowed, and a connection or transfer failure on one enabled device is recorded as a warning in the manifest and live progress, while the cache backup continues with the remaining reachable clients. Symbolic links are rejected. No run may be queued or active while a cache backup is created.
 
 Cache encryption is enabled and recommended by default but may be disabled deliberately. Encrypted cache artifacts use streaming AES-256-GCM/scrypt and `.bbm`; unencrypted cache artifacts use `.zip`. Compression and passphrase are independent from the manager backup. Live progress reports the current device/repository, `Client x/y`, transferred bytes, manager-cache file/byte progress, and the encryption phase when enabled.
 
@@ -498,11 +516,11 @@ Upload supported manager or cache `.bbm`/`.zip` artifacts under **System -> Mana
 
 ### Restore manager backup
 
-Select a manager backup, provide its passphrase when needed, provide a separate passphrase for the automatic encrypted safety backup, confirm replacement, and start restore. The manager verifies the artifact type before replacing manager/security databases, master key, settings and SSH/TLS/repository keys. A standalone cache artifact is rejected as full manager state. Historical combined v1.0.75/v1.0.76 manager backups remain compatible.
+Select a manager backup, provide its passphrase, provide a separate passphrase for the automatic encrypted safety backup, confirm replacement, and start restore. The manager verifies the artifact type and minimum metadata version v1.1.0 before replacing manager/security databases, master key, settings and SSH/TLS/repository keys. A standalone cache artifact is rejected as full manager state.
 
 ### Restore cache backup
 
-Open **Cache backup restore**. Select the cache artifact and enter its passphrase only when encrypted. The manager Borg cache/security state can be restored as one explicit action. Saved client caches can be listed and restored one current device/repository assignment at a time. Existing manager or client caches are preserved under timestamped `pre-bbm-restore` names before replacement. No run may be queued or active during cache restore. Legacy combined v1.0.75/v1.0.76 artifacts remain usable here for their embedded caches.
+Open **Cache backup restore**. Select the cache artifact and enter its passphrase only when encrypted. The manager Borg cache/security state can be restored as one explicit action. Saved client caches can be listed and restored one current device/repository assignment at a time. Existing manager or client caches are preserved under timestamped `pre-bbm-restore` names before replacement. No run may be queued or active during cache restore. Cache backup metadata must identify BorgBackup Manager v1.1.0 or newer.
 
 ### Server migration
 
@@ -532,6 +550,20 @@ System diagnostics include repository filesystem usage, Web-user permissions, SS
 
 ### Normal update
 
+### One-time transition from v1.2.4 to v1.2.5
+
+The v1.2.4 updater still requires the now-removed `compose.archive-mounts.yaml` inside a release ZIP. For this transition only, first extract the new updater from the already checksum-verified v1.2.5 ZIP:
+
+```bash
+cd /opt/BorgBackup-Manager
+unzip -p updates/BorgBackup-Manager-1.2.5.zip BorgBackup-Manager/update.sh > update.sh.new
+bash -n update.sh.new
+chmod 755 update.sh.new
+mv update.sh.new update.sh
+```
+
+Then run the normal v1.2.5 update command. The new updater removes the old override file, and cleans `COMPOSE_FILE` plus other obsolete values from `.env`.
+
 ```bash
 cd /opt/BorgBackup-Manager
 cp /path/BorgBackup-Manager-NEW-VERSION.zip updates/
@@ -555,43 +587,9 @@ The updater:
 
 Reload the browser with `Ctrl+F5` after a frontend update.
 
-### Historical transition from v1.0.4 or older to v1.0.5
+### Minimum supported source version
 
-The old updater did not know `recovery.sh`. Copy it once before the normal update:
-
-```bash
-cd /opt/BorgBackup-Manager
-cp /path/BorgBackup-Manager-1.0.5.zip updates/
-unzip -p updates/BorgBackup-Manager-1.0.5.zip BorgBackup-Manager/recovery.sh > recovery.sh
-chmod 755 recovery.sh
-bash update.sh --file updates/BorgBackup-Manager-1.0.5.zip
-```
-
-### Historical transition from v1.0.9 to v1.0.10
-
-If the old updater appears stuck after stopping the container, interrupt it and restart the current stack:
-
-```bash
-cd /opt/BorgBackup-Manager
-docker compose up -d
-```
-
-Then replace the updater once:
-
-```bash
-cd /opt/BorgBackup-Manager
-cp /path/BorgBackup-Manager-1.0.10.zip updates/
-unzip -p updates/BorgBackup-Manager-1.0.10.zip BorgBackup-Manager/update.sh > update.sh.new
-chmod 755 update.sh.new
-mv update.sh.new update.sh
-bash update.sh --file updates/BorgBackup-Manager-1.0.10.zip
-```
-
-Do not trust an incomplete `*.partial` or interrupted persistent backup.
-
-### Historical v1.0.25 to v1.0.26 build failure
-
-The old updater did not copy a newly introduced release-note file. v1.0.28 restored compatibility. A rolled-back v1.0.25 installation can update directly to v1.0.28 without manually extracting the old English release notes.
+Direct updates from releases older than v1.1.0 are rejected. Those installations require a clean deployment. Legacy token, secret, client-mount, database, and updater compatibility paths from pre-v1.1.0 releases are no longer included.
 
 ## 23. Health checks
 

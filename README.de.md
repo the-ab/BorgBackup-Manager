@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.2.3
+# BorgBackup Manager 1.2.9
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -17,7 +17,7 @@ Die englische Standarddokumentation befindet sich in `README.md`. Die deutschen 
 - Repository-Dienst: integrierter OpenSSH-Dienst mit eingeschränktem `borg serve`
 - Persistente Daten: standardmäßig `/docker_data/borgbackup-manager/data`
 - Persistente Repositories: standardmäßig `/docker_data/borgbackup-manager/repositories`
-- Veröffentlichtes GHCR-Image: `ghcr.io/the-ab/borgbackup-manager:latest` oder versionsfest `ghcr.io/the-ab/borgbackup-manager:v1.2.3`
+- Veröffentlichtes GHCR-Image: `ghcr.io/the-ab/borgbackup-manager:latest` oder versionsfest `ghcr.io/the-ab/borgbackup-manager:v1.2.9`
 - Lokaler Quellcode-Build: `borgbackup-manager:latest`
 - Zeitzone für WebUI, Cron-Zeitpläne und Borg-Läufe: `Europe/Berlin`
 - Containername: `borgbackup-manager`
@@ -30,9 +30,9 @@ Das Release-ZIP besitzt unabhängig von der Versionsnummer immer denselben Haupt
 
 ```text
 BorgBackup-Manager/
-├── compose.yaml                  # lokaler Build mit install.sh
+├── compose.yaml                  # lokaler Build mit install.sh, einschließlich Archiv-Mounts
 └── docker-compose/
-    ├── compose.yaml              # eigenständige GHCR-Installation
+    ├── compose.yaml              # eigenständige GHCR-Installation, einschließlich Archiv-Mounts
     ├── .env.example              # Vorlage für die Hostkonfiguration
     ├── README.de.md              # vollständige deutsche .env-Referenz
     └── README.md                 # vollständige englische .env-Referenz
@@ -41,7 +41,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.2.3.zip
+BorgBackup-Manager-1.2.9.zip
 ```
 
 ## Sicherheit und Härtung
@@ -80,14 +80,14 @@ Verwaltung eines externen Repositorys
 WebUI → Borg 1.4 im Manager → SSH → externes Repository
 ```
 
-Backup und Restore laufen auf dem Client, weil sich dort Quell- und Zieldateien befinden. Archivliste, Archivinfo, Check, Prune, Compact, Diff, Rename, Delete, Browser und Export werden bei einem verwalteten Repository direkt im Manager-Container ausgeführt. Dafür ist kein SSH-Umweg über den Repository-Port notwendig.
+Backup und Restore laufen auf dem Client, weil sich dort Quell- und Zieldateien befinden. Archivliste, Archivinfo, Check, Archivbereinigung (Borg Prune), Compact, Diff, Rename, Delete, Browser und Export werden bei einem verwalteten Repository direkt im Manager-Container ausgeführt. Dafür ist kein SSH-Umweg über den Repository-Port notwendig.
 
 ## Borg-Kompatibilität
 
 | Clientversion | Verhalten |
 |---|---|
 | 1.2.0–1.2.4 | nutzbar, kritische Sicherheitswarnung |
-| 1.2.5–1.2.7 | nutzbar, Aktualisierungswarnung |
+| 1.2.6–1.2.8 | nutzbar, Aktualisierungswarnung |
 | 1.2.8–1.4.x | freigegeben |
 | älter als 1.2.0 | nicht unterstützt |
 | 2.x | nicht kompatibel |
@@ -130,7 +130,7 @@ Nach der ersten Anmeldung muss das Passwort geändert werden. Danach wird das ve
 
 Administratoren können Benutzer anlegen, bearbeiten, deaktivieren, löschen und Passwörter zurücksetzen. Das eigene Konto und der letzte Administrator können nicht gelöscht werden; der letzte aktive Administrator kann außerdem weder deaktiviert noch herabgestuft werden. Normale Benutzer besitzen eine reine Beobachterrolle: Sie dürfen Dashboard, Listen und zusammengefasste Laufstatus lesen sowie ihre persönliche Sprache und Darstellung ändern. Manuelle Ausführungen, vollständige Logs, Archive, Restore/Export/Mount, Geräte-, Repository-, Job-, Zeitplan-, Manager-Backup-, Einstellungs- und Benutzeränderungen bleiben Administratoren vorbehalten.
 
-Beim Update von 0.8.x werden ein vorhandener `BBM_ADMIN_TOKEN` einmalig als temporäres Passwort des Benutzers `admin` und ein vorhandener `BBM_SECRET_KEY` ausschließlich zur Entschlüsselung und Neuverschlüsselung bestehender Repository-Geheimnisse verwendet. Nach erfolgreicher Migration entfernt der Container diese Altwerte aus der Host-`.env`.
+Direkte Updates und Wiederherstellungen werden ausschließlich ab BorgBackup Manager v1.1.0 unterstützt. Ältere Installationen müssen neu eingerichtet werden; vor-v1.1.0-Token-, Geheimnis- und Datenbankformate werden nicht mehr migriert.
 
 ## Navigation und Funktionsbereiche
 
@@ -292,7 +292,7 @@ Bei externen Zielen ist dieser Borg-Wert nicht identisch mit einer serverseitige
 
 Bei Backup und Restore läuft Borg weiterhin auf dem jeweiligen Quell- beziehungsweise Ziel-Client, weil dort die Nutzdaten liegen. Dafür überträgt der Manager den repositorybezogenen SSH-Schlüssel, `known_hosts`, Passphrase und gegebenenfalls das Borg-Keyfile nur temporär über die bereits bestehende Controller-SSH-Verbindung. Die Dateien werden auf dem Client in einem geschützten temporären Verzeichnis angelegt und nach dem Borg-Aufruf entfernt. Eine dauerhafte Storage-Box-Konfiguration auf jedem Client ist nicht erforderlich.
 
-Externe Repositories aus Version 0.9.3 verlieren beim Upgrade ihre frühere Client-Zwischenstation. Sie bleiben erhalten, werden aber als ungeprüft markiert und müssen einmal mit einem zentralen Manager-Schlüssel sowie `known_hosts` ergänzt und erneut geprüft werden.
+Bei einem unterstützten Update ab v1.1.0 bleiben externe Repository-Konfigurationen erhalten. Vor-v1.1.0-spezifische Zwischenstationen und Migrationspfade werden nicht mehr unterstützt.
 
 #### Vorhandenes Repository einbinden
 
@@ -446,7 +446,7 @@ Unterstützt werden die gemeinsamen Borg-1.2-bis-1.4-Spezifikationen:
 - Monatlich: `--keep-monthly`
 - Jährlich: `--keep-yearly`
 
-Der Wert 0 deaktiviert die jeweilige Regel. Prune wird auf das feste Jobpräfix begrenzt. Die Systemeinstellung für Compact gilt ausschließlich für Zeitpläne: Nach der vollständigen erfolgreichen Prune-Phase wird je betroffenem Repository höchstens einmal Compact ausgeführt. Manuell gestartete Prunes lösen darüber kein Compact aus. Compact wird mit ausführlicher Borg-Ausgabe gestartet, sodass im Laufprotokoll auch die von Borg geschätzte freigegebene Größe erscheint, sofern tatsächlich unreferenzierte Segmente vorhanden sind.
+Der Wert 0 deaktiviert die jeweilige Regel. Die Archivbereinigung (Borg Prune) wird auf das feste Jobpräfix begrenzt. Die Systemeinstellung für Compact gilt ausschließlich für Zeitpläne: Nach der vollständigen erfolgreichen Archivbereinigungsphase wird je betroffenem Repository höchstens einmal Compact ausgeführt. Manuell gestartete Archivbereinigungen lösen darüber kein Compact aus. Compact wird mit ausführlicher Borg-Ausgabe gestartet, sodass im Laufprotokoll auch die von Borg geschätzte freigegebene Größe erscheint, sofern tatsächlich unreferenzierte Segmente vorhanden sind.
 
 #### Jobaktionen
 
@@ -489,13 +489,13 @@ Jeder Zeitplan kann eine eigene Obergrenze für gleichzeitig laufende Ausführun
 
 Ein aktiver Backup-Job darf nur einem aktiven zentralen Zeitplan zugeordnet sein. Überlappende Zuordnungen werden beim Speichern abgewiesen, damit ein Job nicht doppelt gestartet wird. Beim Upgrade werden vorhandene Job-Cronwerte automatisch als eigene zentrale Zeitpläne übernommen; anschließend wird das alte Jobfeld geleert.
 
-Ein Zeitplan arbeitet phasenweise: Zuerst werden alle zugeordneten Backups unter Beachtung der Parallelitätsgrenzen abgearbeitet. Erst wenn alle Backup-Läufe beendet sind, folgen die konfigurierten Prune-Läufe. Danach wird pro betroffenem Repository höchstens **ein** Compact ausgeführt – unabhängig davon, wie viele Jobs dieses Repository im Zeitplan verwendet haben. Damit entstehen bei mehreren Jobs auf demselben Repository keine redundanten Compact-Läufe.
+Ein Zeitplan arbeitet phasenweise: Zuerst werden alle zugeordneten Backups unter Beachtung der Parallelitätsgrenzen abgearbeitet. Erst wenn alle Backup-Läufe beendet sind, folgen die konfigurierten Archivbereinigungen. Danach wird pro betroffenem Repository höchstens **ein** Compact ausgeführt – unabhängig davon, wie viele Jobs dieses Repository im Zeitplan verwendet haben. Damit entstehen bei mehreren Jobs auf demselben Repository keine redundanten Compact-Läufe.
 
-Für manuell gestartete Backups können im Job unter **Aufbewahrung** optional **Nach manuellem Backup Prune ausführen** und anschließend **Compact ausführen** aktiviert werden. Diese Kette reserviert das Repository vom Start des Backups bis zum Abschluss der Nachbereitung; später gestartete Jobs desselben Repositorys warten, bis Backup, Prune und optional Compact abgeschlossen sind.
+Für manuell gestartete Backups können im Job unter **Aufbewahrung** optional **Nach manuellem Backup Archivbereinigung ausführen** und anschließend **Compact ausführen** aktiviert werden. Diese Kette reserviert das Repository vom Start des Backups bis zum Abschluss der Nachbereitung; später gestartete Jobs desselben Repositorys warten, bis Backup, Archivbereinigung und optional Compact abgeschlossen sind.
 
 ### Warteschlange und Parallelitätsgrenzen
 
-Pro physischem Borg-Repository wird immer genau eine Ausführung zugelassen. Diese Grenze ist nicht konfigurierbar, weil Borg ein Repository für schreibende Vorgänge selbst exklusiv sperrt. Backup, Check, Prune, Compact, Archivlöschung und Reset desselben Repositorys laufen daher zuverlässig nacheinander.
+Pro physischem Borg-Repository wird immer genau eine Ausführung zugelassen. Diese Grenze ist nicht konfigurierbar, weil Borg ein Repository für schreibende Vorgänge selbst exklusiv sperrt. Backup, Check, Archivbereinigung, Compact, Archivlöschung und Reset desselben Repositorys laufen daher zuverlässig nacheinander.
 
 Unter **System → Einstellungen → Parallelitätsgrenzen** kann für jedes erkannte Repository-Dateisystem eine gemeinsame Obergrenze gesetzt werden. Das gilt sowohl für verwaltete Mounts unter `/repositories` als auch für externe SSH-Ziele, sobald BBM über die Dateisystemprüfung deren tatsächlichen Remote-Mount erkannt hat. Mehrere externe Repositorys derselben SSH-Identität auf demselben von `df` gemeldeten Dateisystem teilen dann eine gemeinsame Grenze. Bei einem Wert von `2` dürfen dort beispielsweise zwei verschiedene Repositorys gleichzeitig arbeiten; weitere Repositorys desselben Dateisystems warten. Mehrere Jobs desselben Repositorys bleiben unabhängig davon serialisiert. `0` bedeutet für das jeweilige Dateisystem unbegrenzt. Manuelle Quellenstatistiken zählen ebenfalls gegen die globale Ausführungsgrenze und besitzen zusätzlich eine eigene Obergrenze mit Standard `1`; sie belegen bewusst weder Repository- noch Dateisystemkapazität, weil ausschließlich das Quellgerät gelesen wird. Zusätzlich gilt weiterhin eine gegebenenfalls niedrigere Grenze des auslösenden Zeitplans.
 Änderungen an einer Dateisystemgrenze wirken auch auf bereits wartende Läufe, ohne dass die Warteschlange zunächst vollständig leer werden muss. Persistierte Läufe verwenden dafür nur noch den datenbankgestützten FIFO-Ausführungsplan; eine zusätzliche prozesslokale Reservierung findet nicht statt. Externe Gruppen erscheinen nach einer erfolgreichen Repository-Speicherprüfung beziehungsweise nach dem Laden der Systemdiagnose. Solange kein Remote-Dateisystem ermittelt werden konnte, bleibt nur die sichere repositoryweise Serialisierung aktiv. Unter **System → Systemdiagnose → Repository-Dateisysteme** werden für lokale und erkannte externe Dateisysteme die tatsächlich wirksame Parallelitätsgrenze sowie die aktuelle Belegung als **aktiv / wartend** angezeigt; darüber stehen außerdem die globale Grenze und die separate Quellenstatistik-Grenze.
@@ -569,11 +569,13 @@ Verfügbare Funktionen:
 
 Die Gerätezuordnung verwendet zuerst aktuelle und historische Jobpräfixe. Für Legacy- oder fremde Archive werden anschließend der von Borg gespeicherte Hostname und ein aus dem Archivnamen erkennbares Gerät mit den konfigurierten Geräten abgeglichen. Aktuelle Namen wie `bbm-12-server01-2026-07-17T22:00:00`, historische Manager-Präfixe und übliche Muster wie `server01-2026-07-17_22-00-00` oder `docker-2026-07-17_03-20` werden erkannt. Sekunden im Zeitstempel sind optional. Der Filter arbeitet ausschließlich im Browser auf dem persistenten Cache und löst keinen zusätzlichen Borg-Aufruf aus. Eine Löschanforderung wird anhand der streng validierten ausgewählten Archivnamen sofort als normale Ausführung eingereiht und öffnet deren Protokoll. Das Repository wird nicht noch einmal innerhalb der HTTP-Anfrage vollständig eingelesen; ein inzwischen extern entferntes Archiv erscheint stattdessen als Borg-Fehler im sichtbaren Löschlauf.
 
-Nach erfolgreichen Backups, Prune-Läufen oder Archivumbenennungen wird ausschließlich der Cache des betroffenen Repositorys invalidiert. Nach einer begonnenen Archivlöschung wird der Cache auch bei Abbruch oder Fehler verworfen, weil eine Mehrfachaktion bereits teilweise wirksam gewesen sein kann. Die nächste Anzeige baut ihn einmalig neu auf. Repositorys, die sich nicht geändert haben, werden weiterhin direkt aus dem Cache angezeigt. Bei verwalteten Repositories verwendet der Manager den direkten lokalen Pfad. Externe Repositories öffnet er selbst per Borg und SSH mit den zentral verschlüsselt gespeicherten Repository-Zugangsdaten. Ein Backup-Job ist für Lesen, Archivinformationen und Browsen nicht erforderlich. Restore und andere datenpfadabhängige Aktionen benötigen weiterhin einen passenden Ziel- beziehungsweise Quell-Client.
+Nach erfolgreichen Backups oder Archivbereinigungen oder Archivumbenennungen wird ausschließlich der Cache des betroffenen Repositorys invalidiert. Nach einer begonnenen Archivlöschung wird der Cache auch bei Abbruch oder Fehler verworfen, weil eine Mehrfachaktion bereits teilweise wirksam gewesen sein kann. Die nächste Anzeige baut ihn einmalig neu auf. Repositorys, die sich nicht geändert haben, werden weiterhin direkt aus dem Cache angezeigt. Bei verwalteten Repositories verwendet der Manager den direkten lokalen Pfad. Externe Repositories öffnet er selbst per Borg und SSH mit den zentral verschlüsselt gespeicherten Repository-Zugangsdaten. Ein Backup-Job ist für Lesen, Archivinformationen und Browsen nicht erforderlich. Restore und andere datenpfadabhängige Aktionen benötigen weiterhin einen passenden Ziel- beziehungsweise Quell-Client.
 
 ### Archivbrowser
 
 Der Archivbrowser benötigt kein FUSE. Er verwendet Borg List und lädt jeweils die aktuelle Verzeichnisebene.
+
+Zusätzlich kann ein Administrator standardmäßig ein Archiv eines lokal verwalteten Repositorys schreibgeschützt in den konfigurierten Hostpfad einhängen. Die Mounts verwenden FUSE `allow_other`, sodass der propagierte Mount auch vom Docker-Host aus betreten werden kann; das Image aktiviert dafür `user_allow_other` in `/etc/fuse.conf`. Die normale Compose-Konfiguration stellt dafür `/dev/fuse`, `SYS_ADMIN`, AppArmor-Freigabe und `rshared`-Mount-Propagation bereit. Externe SSH-Repositories bleiben vorerst ausgeschlossen. Pro Repository ist höchstens ein aktiver Mount möglich. Währenddessen warten Repository-Läufe; Archivbereinigung, Compact, Löschen und Umbenennen sind bis zum Aushängen gesperrt. Aktive und verwaiste Mount-Einträge werden in der Archivansicht angezeigt und können dort ausgehängt beziehungsweise entfernt werden.
 
 Funktionen:
 
@@ -628,7 +630,7 @@ Der BorgBackup Manager behandelt ab v1.0.77 zwei getrennte Sicherungstypen. Dadu
 - TLS-Zertifikate
 - relevante nicht geheime Migrationswerte
 
-Repository-Nutzdaten, vollständige Laufprotokolle und Borg-Caches sind nicht Bestandteil neuer Manager-Backups. Neue Manager-Backups werden immer als AES-256-GCM-verschlüsselte `.bbm`-Dateien mit einer mindestens zwölf Zeichen langen, nicht gespeicherten Passphrase erzeugt. Historische kombinierte Backups aus v1.0.75/v1.0.76 sowie ältere `.zip`-Manager-Backups bleiben lesbar.
+Repository-Nutzdaten, vollständige Laufprotokolle und Borg-Caches sind nicht Bestandteil neuer Manager-Backups. Neue Manager-Backups werden immer als AES-256-GCM-verschlüsselte `.bbm`-Dateien mit einer mindestens zwölf Zeichen langen, nicht gespeicherten Passphrase erzeugt. Import und Wiederherstellung setzen ein Backup mit Metadatenversion v1.1.0 oder neuer voraus; ältere Formate werden abgelehnt.
 
 **Cache-Backup** (`borgbackup-manager-cache-v...bbm` beziehungsweise unverschlüsselt `.zip`) ist davon vollständig getrennt. Es kann wahlweise enthalten:
 
@@ -636,7 +638,7 @@ Repository-Nutzdaten, vollständige Laufprotokolle und Borg-Caches sind nicht Be
 - Borgs Repository-Sicherheitsstatus `/data/borg-security`
 - die BBM-eigenen Client-Caches `$HOME/.cache/borgbackup-manager/repository-<ID>` einschließlich des zugehörigen Borg-Sicherheitsstatus `$HOME/.config/borg/security/<Borg-Repository-ID>`
 
-Manager-Cache und Client-Caches können unabhängig voneinander ausgewählt werden. Client-Caches werden über den bestätigten Controller-SSH-Zugang direkt als TAR-Datenstrom in die Cache-Datei geschrieben; es wird kein zusätzlicher vollständiger Client-Cache-Baum unter `/data` angelegt. Deaktivierte Geräte werden dokumentiert übersprungen, ein fehlender Cache wird als nicht vorhanden vermerkt und ein nicht erreichbares aktives Gerät bricht das Cache-Backup ab. Flüchtige `lock.exclusive`-/`lock.roster`-Artefakte und symbolische Links werden nicht gesichert. Cache-Backups sind nur zulässig, wenn keine Ausführung läuft oder wartet.
+Manager-Cache und Client-Caches können unabhängig voneinander ausgewählt werden. Client-Caches werden über den bestätigten Controller-SSH-Zugang direkt als TAR-Datenstrom in die Cache-Datei geschrieben; es wird kein zusätzlicher vollständiger Client-Cache-Baum unter `/data` angelegt. Deaktivierte Geräte werden dokumentiert übersprungen, ein fehlender Cache wird als nicht vorhanden vermerkt und ein nicht erreichbares aktives Gerät erzeugt eine Warnung, ohne das übrige Cache-Backup abzubrechen. Das Manifest nennt die Zahl der nicht gesicherten Client-Zuordnungen und die Fortschrittsanzeige nennt Gerät und Repository. Flüchtige `lock.exclusive`-/`lock.roster`-Artefakte und symbolische Links werden nicht gesichert. Cache-Backups sind nur zulässig, wenn keine Ausführung läuft oder wartet.
 
 Die Verschlüsselung des Cache-Backups ist **standardmäßig aktiviert und empfohlen**, kann aber bewusst deaktiviert werden. Verschlüsselte Cache-Backups werden als `.bbm`, unverschlüsselte Cache-Backups als `.zip` gespeichert. Die Einstellung ist unabhängig vom Manager-Backup; dessen Verschlüsselung bleibt verpflichtend.
 
@@ -648,7 +650,7 @@ Unter **System → Manager-Backup → Borg-Cache verwalten** werden Manager-Cach
 
 Unter **Backup hochladen** können Manager- und Cache-Backups im vom BBM erzeugten `.bbm`-/`.zip`-Format übernommen werden. Typ, Dateiname, Größenlimit und Struktur werden geprüft; vorhandene Dateien werden nicht überschrieben und erhalten Modus `0600`.
 
-Ein **Manager-Backup** wird über **Manager-Backup wiederherstellen** vollständig eingespielt. Vorher erzeugt BBM ein separates verschlüsseltes Sicherheitsbackup. Neue Cache-Backups können dort nicht ausgewählt bzw. nicht als Managerzustand eingespielt werden. Historische kombinierte v1.0.75/v1.0.76-Backups bleiben für den vollständigen Manager-Restore kompatibel.
+Ein **Manager-Backup** wird über **Manager-Backup wiederherstellen** vollständig eingespielt. Vorher erzeugt BBM ein separates verschlüsseltes Sicherheitsbackup. Cache-Backups können dort nicht ausgewählt beziehungsweise nicht als Managerzustand eingespielt werden. Unterstützt werden ausschließlich Manager-Backups mit Metadatenversion v1.1.0 oder neuer.
 
 Unter **Cache-Backup wiederherstellen** kann der managerseitige Borg-Cache gezielt zurückgespielt werden; ein bestehender Manager-Cache wird zuvor als `pre-bbm-restore`-Sicherheitskopie erhalten. Gesicherte Client-Caches werden pro aktuellem Gerät/Repository einzeln angeboten. Ein vorhandener Zielcache auf dem Client wird vor dem Austausch als `repository-<ID>.pre-bbm-restore-<Zeit>` erhalten. Der mitgesicherte Borg-Sicherheitsstatus wird nur ergänzt, wenn für die echte Borg-Repository-ID noch kein Security-Ordner vorhanden ist; ein bestehender Sicherheitsstatus wird nicht durch einen möglicherweise älteren Backup-Stand überschrieben. Die aktuelle Geräte-/Repository-Zuordnung und ein aktiviertes Zielgerät sind Pflicht.
 
@@ -703,7 +705,7 @@ Administratoren können systemweit konfigurieren:
 - maximale Protokollmenge in der WebUI
 - manuelle Bereinigung und Speicherübersicht
 - automatische Größenberechnung nach manuellen Schreibvorgängen und genau einmal nach Abschluss eines vollständigen Zeitplans
-- Compact nach geplantem Prune
+- Compact nach geplanter Archivbereinigung
 - zentrale Ausschlussvorlagen
 
 ### Release Notes
@@ -718,7 +720,7 @@ Es stehen zwei getrennte Installationswege zur Verfügung.
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.2.3.zip
+unzip /pfad/BorgBackup-Manager-1.2.9.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -733,7 +735,9 @@ Für eine Installation ohne Projektquellcode sind ausschließlich die beiden Dat
 ```text
 docker-compose/
 ├── compose.yaml
-└── .env.example
+├── .env.example
+├── README.de.md
+└── README.md
 ```
 
 ```bash
@@ -758,7 +762,21 @@ Die automatische Ausgabe kann mit `BBM_SHOW_INITIAL_ADMIN_ON_START=0` deaktivier
 
 Die vollständige Beschreibung aller Variablen befindet sich in [`docker-compose/README.de.md`](docker-compose/README.de.md); die englische Fassung liegt unter [`docker-compose/README.md`](docker-compose/README.md).
 
-Das Compose-Profil verwendet `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` folgt dem jeweils veröffentlichten aktuellen Image; für reproduzierbare Installationen sollte stattdessen ein fester Tag wie `v1.2.3` gesetzt werden. Ein frisches, leeres und durch Docker als `root` angelegtes Repository-Verzeichnis wird beim ersten Containerstart sicher für `BBM_BORG_UID:BBM_BORG_GID` initialisiert. Nicht leere Repository-Verzeichnisse werden niemals automatisch rekursiv umgebogen; dort müssen Eigentümer, Gruppenrechte oder ACLs auf dem Host passend gesetzt sein.
+Archiv-Mounts sind Bestandteil der normalen Compose-Konfiguration und ohne zusätzliche Override-Datei aktiv. Der Docker-Host muss `/dev/fuse` bereitstellen. `compose.yaml` reicht das Gerät durch, ergänzt `SYS_ADMIN`, verwendet `rshared`-Mount-Propagation und erlaubt FUSE über AppArmor. Der Hostpfad aus `BBM_ARCHIVE_MOUNT_PATH` muss für `BBM_BORG_UID:BBM_BORG_GID` zugänglich sein.
+
+```bash
+sudo modprobe fuse
+sudo mkdir -p /docker_data/borgbackup-manager/archive-mounts
+sudo chown 1000:1000 /docker_data/borgbackup-manager/archive-mounts
+sudo chmod 700 /docker_data/borgbackup-manager/archive-mounts
+
+docker compose pull
+docker compose up -d
+```
+
+`/data/exports` bleibt ausschließlich der temporäre TAR.GZ-Exportbereich; echte Mounts werden getrennt unter `/archive-mounts` geführt und über den Hostpfad sichtbar gemacht.
+
+Das Compose-Profil verwendet `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` folgt dem jeweils veröffentlichten aktuellen Image; für reproduzierbare Installationen sollte stattdessen ein fester Tag wie `v1.2.8` gesetzt werden. Ein frisches, leeres und durch Docker als `root` angelegtes Repository-Verzeichnis wird beim ersten Containerstart sicher für `BBM_BORG_UID:BBM_BORG_GID` initialisiert. Nicht leere Repository-Verzeichnisse werden niemals automatisch rekursiv umgebogen; dort müssen Eigentümer, Gruppenrechte oder ACLs auf dem Host passend gesetzt sein.
 
 ### `.env` und Skriptverhalten
 
@@ -774,64 +792,39 @@ Repository-SSH: SERVER:2222
 Daten:          /docker_data/borgbackup-manager/data
 Repositories:   /docker_data/borgbackup-manager/repositories
 Lokaler Build:  borgbackup-manager:latest
-GHCR:           ghcr.io/the-ab/borgbackup-manager:latest oder :v1.2.3
+GHCR:           ghcr.io/the-ab/borgbackup-manager:latest oder :v1.2.9
 Container:      borgbackup-manager
 ```
 
 ## Update
 
-### WebUI friert nach Version 1.0.26/1.0.27 ein
+Direkte Updates werden ausschließlich ab BorgBackup Manager v1.1.0 unterstützt. Ältere Installationen müssen neu eingerichtet werden.
 
-Die erste zweisprachige Oberfläche konnte durch identische Schreibzugriffe des Übersetzungs-Observers eine Endlosschleife auslösen. In diesem Zustand reagieren Anmeldemaske und Navigation nicht, obwohl Container und Auth-API gesund sind. Version 1.0.28 behebt die Ursache. Das Update kann vollständig über die Shell ausgeführt werden; anschließend die Seite einmal mit `Strg+F5` neu laden.
+### Einmaliger Übergang von v1.2.4 auf v1.2.5
 
-### Fehlgeschlagener Übergang von 1.0.25 auf 1.0.26
-
-Wenn der Build mit `RELEASE_NOTES.en.md: not found` abgebrochen und der Projektstand automatisch zurückgesetzt wurde, kann direkt Version 1.0.28 installiert werden. Der Fehler betraf ausschließlich den Projekt-Build-Kontext: Der Updater 1.0.25 übernahm die neu hinzugekommene Top-Level-Datei noch nicht. Version 1.0.28 macht den Docker-Build wieder mit dieser alten Datei-Whitelist kompatibel; ein manuelles Kopieren der Datei ist nicht erforderlich.
-
-
-### Einmaliger Übergang von 1.0.4 oder älter auf 1.0.5
-
-Beim Update auf 1.0.5 muss `recovery.sh` einmalig vor dem normalen Update aus dem ZIP übernommen werden, weil der alte Updater diese Datei noch nicht kennt:
+Der Updater aus v1.2.4 verlangt noch die inzwischen entfernte Datei `compose.archive-mounts.yaml` im Release-ZIP. Deshalb muss für genau diesen Übergang zuerst der neue Updater sicher aus dem bereits verifizierten v1.2.5-ZIP übernommen werden:
 
 ```bash
 cd /opt/BorgBackup-Manager
-cp /pfad/BorgBackup-Manager-1.0.5.zip updates/
-unzip -p updates/BorgBackup-Manager-1.0.5.zip BorgBackup-Manager/recovery.sh > recovery.sh
-chmod 755 recovery.sh
-bash update.sh --file updates/BorgBackup-Manager-1.0.5.zip
-```
-
-### Einmaliger Übergang von 1.0.9 auf 1.0.10
-
-Version 1.0.9 konnte beim Datenbackup ein unterhalb von `BBM_DATA_PATH` liegendes Repository-Verzeichnis und den Borg-Cache mitkomprimieren. Das sah nach `Container borgbackup-manager Stopped` wie ein Stillstand aus. Wenn dieser Zustand bereits eingetreten ist, den laufenden Updater mit `Strg+C` abbrechen und den aktuellen Container wieder starten:
-
-```bash
-cd /opt/BorgBackup-Manager
-docker compose up -d
-```
-
-Da das bereits gestartete 1.0.9-Skript seine alten Funktionen im Speicher behält, muss für diesen Übergang das neue `update.sh` vor dem Start übernommen werden:
-
-```bash
-cd /opt/BorgBackup-Manager
-cp /pfad/BorgBackup-Manager-1.0.10.zip updates/
-unzip -p updates/BorgBackup-Manager-1.0.10.zip BorgBackup-Manager/update.sh > update.sh.new
+unzip -p updates/BorgBackup-Manager-1.2.5.zip BorgBackup-Manager/update.sh > update.sh.new
+bash -n update.sh.new
 chmod 755 update.sh.new
 mv update.sh.new update.sh
-bash update.sh --file updates/BorgBackup-Manager-1.0.10.zip
 ```
 
-Ein beim abgebrochenen Vorgang neu angelegtes `*-persistent-v<Ausgangsversion>.tar.gz` kann unvollständig sein und darf nicht als gültige Sicherung verwendet werden. Ab Version 1.0.10 schließt das Update-Backup ein innerhalb des Manager-Datenpfads liegendes `BBM_REPOSITORY_PATH` sowie `/data/borg-cache` und `/data/archive-cache` ausdrücklich aus. Repository-Inhalte werden nicht gelesen oder komprimiert. Das Archiv wird zunächst als unvollständige Datei geschrieben und erst nach erfolgreichem Abschluss in `.tar.gz` umbenannt.
-
-### Normale Updates ab Version 1.0.10
+Danach den normalen v1.2.5-Updatebefehl ausführen. Der neue Updater entfernt die alte Override-Datei und bereinigt `COMPOSE_FILE` sowie weitere obsolete Werte aus `.env`.
 
 ```bash
 cd /opt/BorgBackup-Manager
 cp /pfad/BorgBackup-Manager-NEUE-VERSION.zip updates/
-bash update.sh --file updates/BorgBackup-Manager-NEUE-VERSION.zip --sha256 VERÖFFENTLICHTE_SHA256
+cp /pfad/BorgBackup-Manager-NEUE-VERSION.zip.sha256 updates/
+sha256sum -c updates/BorgBackup-Manager-NEUE-VERSION.zip.sha256
+bash update.sh \
+  --file updates/BorgBackup-Manager-NEUE-VERSION.zip \
+  --sha256 VERÖFFENTLICHTE_SHA256
 ```
 
-Die persistente `.env`, Manager- und Sicherheitsdatenbank, Schlüssel und TLS-Dateien bleiben erhalten. Repositories und regenerierbare Borg-Caches sind bewusst nicht Bestandteil des Update-Backups. Beim ersten Update von 0.8.x werden alte Token-/Schlüsselwerte automatisch migriert und anschließend aus `.env` entfernt.
+`update.sh` sichert den aktuellen Projekt- und Managerzustand, prüft das Release, bereinigt die vorhandene `.env` anhand der aktuellen Vorlage, baut das Image neu und führt bei einem fehlgeschlagenen Start soweit möglich ein Rollback aus. Unterstützte eigene ENV-Werte bleiben erhalten; obsolete vor-v1.1.0- und Override-Einträge werden entfernt.
 
 ## Sicherheitshinweise
 
@@ -841,7 +834,7 @@ Die persistente `.env`, Manager- und Sicherheitsdatenbank, Schlüssel und TLS-Da
 - Mehrere Clients in einem Repository müssen gegenseitig vertrauenswürdig sein.
 - Borg Repair und automatisches Break-lock werden absichtlich nicht angeboten.
 - Datenbanken und aktive Anwendungen benötigen anwendungskonsistente Dumps oder Snapshots.
-- Vor Restore, Prune, Compact und Archivlöschung aktuelle Sicherungen prüfen.
+- Vor Restore, Archivbereinigung, Compact und Archivlöschung aktuelle Sicherungen prüfen.
 
 ## Vorhandenes verwaltetes Repository gezielt auswählen
 

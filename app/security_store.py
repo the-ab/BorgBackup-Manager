@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -31,6 +32,47 @@ PASSWORD_R = 8
 PASSWORD_P = 1
 PASSWORD_DKLEN = 64
 USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$")
+
+_SESSION_TOUCH_LOCK = threading.Lock()
+
+
+def _is_sqlite_locked(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).casefold()
+    return "database is locked" in message or "database table is locked" in message
+
+
+def _touch_session_last_seen_best_effort(session_id: int, previous_last_seen: str, now: datetime) -> None:
+    """Refresh a session timestamp without making authentication depend on a write lock.
+
+    A browser refresh authenticates many API requests concurrently. Performing the
+    SELECT and UPDATE in the same deferred SQLite transaction lets every request
+    read the old timestamp and then fail immediately while upgrading its snapshot
+    to a writer. Use a fresh short-lived write transaction and a conditional UPDATE
+    so only one request wins; a busy security database merely skips this optional
+    touch and never rejects an otherwise valid session.
+    """
+    with _SESSION_TOUCH_LOCK:
+        try:
+            with _connect(timeout_seconds=0.5) as connection:
+                connection.execute(
+                    "UPDATE sessions SET last_seen_at=? WHERE id=? AND last_seen_at=?",
+                    (_iso(now), int(session_id), str(previous_last_seen)),
+                )
+                connection.commit()
+        except sqlite3.OperationalError as exc:
+            if not _is_sqlite_locked(exc):
+                raise
+
+
+def _delete_session_best_effort(session_id: int) -> None:
+    """Remove an expired session without turning a cleanup lock into an API error."""
+    try:
+        with _connect(timeout_seconds=0.5) as connection:
+            connection.execute("DELETE FROM sessions WHERE id=?", (int(session_id),))
+            connection.commit()
+    except sqlite3.OperationalError as exc:
+        if not _is_sqlite_locked(exc):
+            raise
 
 
 def _generate_temporary_password() -> str:
@@ -57,25 +99,26 @@ def _iso(value: datetime | None = None) -> str:
     return (value or _utcnow()).isoformat()
 
 
-def _connect() -> sqlite3.Connection:
+def _connect(timeout_seconds: float = 30.0) -> sqlite3.Connection:
     SECURITY_DIR.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(SECURITY_DIR, 0o700)
     except OSError:
         pass
-    connection = sqlite3.connect(SECURITY_DATABASE_PATH, timeout=30)
+    connection = sqlite3.connect(SECURITY_DATABASE_PATH, timeout=max(0.05, float(timeout_seconds)))
     try:
         os.chmod(SECURITY_DATABASE_PATH, 0o600)
     except OSError:
         pass
     connection.row_factory = sqlite3.Row
+    connection.execute(f"PRAGMA busy_timeout={max(50, int(float(timeout_seconds) * 1000))}")
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA synchronous=FULL")
     return connection
 
 
-def initialize_security_store(legacy_admin_token: str | None = None) -> dict[str, Any]:
+def initialize_security_store() -> dict[str, Any]:
     with _connect() as connection:
         connection.executescript(
             """
@@ -148,24 +191,16 @@ def initialize_security_store(legacy_admin_token: str | None = None) -> dict[str
             connection.execute("ALTER TABLE users ADD COLUMN appearance TEXT NOT NULL DEFAULT 'auto'")
         connection.execute("UPDATE users SET language='de' WHERE language NOT IN ('de','en') OR language IS NULL")
         connection.execute("UPDATE users SET appearance='auto' WHERE appearance NOT IN ('auto','light','dark') OR appearance IS NULL")
-        # Historical account-wide locks could be abused to deny access to a known
-        # username. v1.0.38 replaces them with source-scoped rate limits.
-        connection.execute("UPDATE users SET failed_attempts=0,locked_until=NULL WHERE failed_attempts<>0 OR locked_until IS NOT NULL")
         count = int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
         created = False
         source = None
         if count == 0:
-            legacy = (legacy_admin_token or "").strip()
-            if legacy and legacy != "change-me":
-                temporary_password = legacy
-                source = "legacy-token"
-            else:
-                temporary_password = _generate_temporary_password()
-                source = "generated"
+            temporary_password = _generate_temporary_password()
+            source = "generated"
             now = _iso()
             connection.execute(
                 "INSERT INTO users(username,password_hash,role,enabled,must_change_password,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-                ("admin", hash_password(temporary_password, enforce_policy=(source != "legacy-token")), "admin", 1, 1, now, now),
+                ("admin", hash_password(temporary_password), "admin", 1, 1, now, now),
             )
             connection.commit()
             created = True
@@ -422,25 +457,24 @@ def get_session_user(token: str | None, touch: bool = True) -> AuthUser | None:
             "SELECT u.*,s.id AS session_id,s.expires_at,s.last_seen_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?",
             (token_hash,),
         ).fetchone()
-        if row is None or not bool(row["enabled"]):
-            return None
-        try:
-            expires = datetime.fromisoformat(str(row["expires_at"]))
-        except ValueError:
-            expires = datetime.min.replace(tzinfo=timezone.utc)
-        try:
-            last_seen = datetime.fromisoformat(str(row["last_seen_at"]))
-        except ValueError:
-            last_seen = datetime.min.replace(tzinfo=timezone.utc)
-        now = _utcnow()
-        if expires < now or now - last_seen > timedelta(seconds=_effective_session_idle_timeout_seconds()):
-            connection.execute("DELETE FROM sessions WHERE id=?", (int(row["session_id"]),))
-            connection.commit()
-            return None
-        if touch and now - last_seen > timedelta(minutes=1):
-            connection.execute("UPDATE sessions SET last_seen_at=? WHERE id=?", (_iso(now), int(row["session_id"])))
-            connection.commit()
-        return _row_user(row)
+    if row is None or not bool(row["enabled"]):
+        return None
+    try:
+        expires = datetime.fromisoformat(str(row["expires_at"]))
+    except ValueError:
+        expires = datetime.min.replace(tzinfo=timezone.utc)
+    try:
+        last_seen = datetime.fromisoformat(str(row["last_seen_at"]))
+    except ValueError:
+        last_seen = datetime.min.replace(tzinfo=timezone.utc)
+    now = _utcnow()
+    if expires < now or now - last_seen > timedelta(seconds=_effective_session_idle_timeout_seconds()):
+        _delete_session_best_effort(int(row["session_id"]))
+        return None
+    user = _row_user(row)
+    if touch and now - last_seen > timedelta(minutes=1):
+        _touch_session_last_seen_best_effort(int(row["session_id"]), str(row["last_seen_at"]), now)
+    return user
 
 
 
@@ -490,13 +524,16 @@ def get_session_user_by_reload_token(token: str | None, user_agent: str | None =
             last_seen = datetime.fromisoformat(str(row["last_seen_at"]))
         except ValueError:
             last_seen = datetime.min.replace(tzinfo=timezone.utc)
-        if min(session_expires, reload_expires) < now or now - last_seen > timedelta(seconds=_effective_session_idle_timeout_seconds()):
-            connection.execute("DELETE FROM sessions WHERE id=?", (int(row["session_id"]),))
-            connection.commit()
-            return None
-        if not hmac.compare_digest(str(row["user_agent_hash"]), _user_agent_hash(user_agent)):
-            return None
-        return _row_user(row)
+        expired = min(session_expires, reload_expires) < now or now - last_seen > timedelta(seconds=_effective_session_idle_timeout_seconds())
+        session_id = int(row["session_id"])
+        user_agent_matches = hmac.compare_digest(str(row["user_agent_hash"]), _user_agent_hash(user_agent))
+        user = _row_user(row)
+    if expired:
+        _delete_session_best_effort(session_id)
+        return None
+    if not user_agent_matches:
+        return None
+    return user
 
 
 def revoke_session_by_reload_token(token: str | None) -> None:

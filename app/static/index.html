@@ -6,26 +6,26 @@
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
-<link href="/static/favicon.svg?v=1.2.3" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.2.3"></script>
-<link href="/static/style.css?v=1.2.3" rel="stylesheet"/>
+<link href="/static/favicon.svg?v=1.2.9" rel="icon" type="image/svg+xml"/>
+<script src="/static/theme-init.js?v=1.2.9"></script>
+<link href="/static/style.css?v=1.2.9" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
 <form class="login-card" id="login-form">
-<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.2.3"/>
+<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.2.9"/>
 <p class="eyebrow">BorgBackup Manager</p>
 <h1>Zentrale für deine Backups.</h1>
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.2.3</b></p>
+<p class="login-version">Version <b id="login-version">v1.2.9</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
 <div class="app-shell hidden" id="app">
 <aside>
-<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.2.3"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
+<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.2.9"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
 <nav id="main-navigation">
 <span class="nav-label">Betrieb</span>
 <button class="active" data-view="dashboard">Übersicht</button>
@@ -205,8 +205,8 @@
 <label>Letzte<input min="0" name="last" type="number" value="0"/></label><label>Stündlich<input min="0" name="hourly" type="number" value="0"/></label><label>Täglich<input min="0" name="daily" type="number" value="7"/></label><label>Wöchentlich<input min="0" name="weekly" type="number" value="4"/></label><label>Monatlich<input min="0" name="monthly" type="number" value="6"/></label><label>Jährlich<input min="0" name="yearly" type="number" value="0"/></label>
 </div>
 <div class="manual-maintenance-options">
-<label class="check"><input name="manual_prune_after_backup" type="checkbox"/> Nach manuellem Backup Prune ausführen</label>
-<label class="check"><input name="manual_compact_after_prune" type="checkbox"/> Nach erfolgreichem manuellen Prune Compact ausführen</label>
+<label class="check"><input name="manual_prune_after_backup" type="checkbox"/> Nach manuellem Backup Archivbereinigung ausführen</label>
+<label class="check"><input name="manual_compact_after_prune" type="checkbox"/> Nach erfolgreicher manueller Archivbereinigung Compact ausführen</label>
 </div>
 <p class="hint">0 deaktiviert die jeweilige Borg-Aufbewahrungsregel. Die beiden Nachbereitungsoptionen gelten nur für manuell gestartete Backups; Zeitpläne führen ihre gemeinsame Repository-Nachbereitung automatisch aus.</p>
 </details>
@@ -252,11 +252,11 @@
 </section>
 <section class="view" id="view-runs"><div class="panel"><div class="panel-head responsive-head"><div><h2>Ausführungsprotokolle</h2><span><span id="runs-filter-label">Alle Ausführungen</span> · <span id="runs-count">0 angezeigt</span> · Zeitzone Europe/Berlin</span></div><div class="list-controls"><label>Status<select id="runs-filter"><option value="all">Alle</option><option value="active">Laufend/wartend</option><option value="running">Laufend</option><option value="queued">Wartend</option><option value="failed">Fehlgeschlagen</option><option value="warning">Warnungen</option><option value="success">Erfolgreich</option><option value="cancelled">Abgebrochen</option></select></label><label>Suche<input id="runs-search" placeholder="Lauf, Job, Aktion oder Diagnose" type="search"/></label><label>Anzahl<select id="runs-limit"><option>10</option><option>25</option><option>50</option><option selected="">100</option><option>250</option><option>500</option></select></label></div></div><div id="run-list"></div></div></section>
 <section class="view" id="view-archives">
-<div class="panel archive-toolbar"><div class="row"><label>Repository<select id="archive-repository"></select></label><label>Archive anzeigen<select disabled="" id="archive-device-filter"><option value="">Alle Geräte / alle Archive</option></select></label></div><div class="form-actions"><button id="load-archives" type="button">Archive anzeigen</button><button class="secondary" id="refresh-archives" type="button">Neu aus Repository einlesen</button><span class="hint" id="archive-summary">Die zuletzt geladene Archivliste wird persistent zwischengespeichert.</span></div><div class="archive-selection-toolbar hidden" data-admin-only-block="" id="archive-selection-toolbar"><label class="check"><input disabled="" id="archive-select-visible" type="checkbox"/> Sichtbare Archive auswählen</label><button class="danger" disabled="" id="delete-selected-archives" type="button">Ausgewählte Archive löschen</button><span class="hint" id="archive-selection-summary">0 ausgewählt</span></div><p class="hint">Nach erfolgreichen Backups, Prune-Läufen, Umbenennungen oder Löschungen wird der Zwischenspeicher automatisch verworfen. „Neu aus Repository einlesen“ ist nur für Änderungen erforderlich, die außerhalb des Managers vorgenommen wurden.</p><div class="persistent-error hidden" id="archive-error"></div></div>
+<div class="panel archive-toolbar"><div class="row"><label>Repository<select id="archive-repository"></select></label><label>Archive anzeigen<select disabled="" id="archive-device-filter"><option value="">Alle Geräte / alle Archive</option></select></label></div><div class="form-actions"><button id="load-archives" type="button">Archive anzeigen</button><button class="secondary" id="refresh-archives" type="button">Neu aus Repository einlesen</button><span class="hint" id="archive-summary">Die zuletzt geladene Archivliste wird persistent zwischengespeichert.</span></div><div class="archive-selection-toolbar hidden" data-admin-only-block="" id="archive-selection-toolbar"><label class="check"><input disabled="" id="archive-select-visible" type="checkbox"/> Sichtbare Archive auswählen</label><button class="danger" disabled="" id="delete-selected-archives" type="button">Ausgewählte Archive löschen</button><span class="hint" id="archive-selection-summary">0 ausgewählt</span></div><p class="hint">Nach erfolgreichen Backups, Archivbereinigungen, Umbenennungen oder Löschungen wird der Zwischenspeicher automatisch verworfen. „Neu aus Repository einlesen“ ist nur für Änderungen erforderlich, die außerhalb des Managers vorgenommen wurden.</p><div class="persistent-error hidden" id="archive-error"></div></div>
 <div class="panel archive-compare archive-compare-compact"><div class="panel-head"><div><h2>Archive vergleichen</h2><span>Änderungen zwischen zwei Sicherungsständen mit Borg Diff anzeigen.</span><span class="archive-diff-context" id="archive-diff-context">Backup-Job wird aus den ausgewählten Archiven ermittelt.</span></div></div><div class="archive-compare-grid"><div class="archive-compare-selects"><label>Älteres Archiv<select id="archive-diff-first"><option value="">Archive anzeigen</option></select></label><label>Neueres Archiv<select id="archive-diff-second"><option value="">Archive anzeigen</option></select></label><label class="check archive-check"><input id="archive-diff-content-only" type="checkbox"/> Nur Inhaltsänderungen</label></div><div class="archive-compare-paths"><label>Optionale Pfade <span>(einer je Zeile)</span><textarea id="archive-diff-paths" placeholder="home/user/Documents" rows="2"></textarea></label><div class="form-actions"><button id="compare-archives" type="button">Archive vergleichen</button></div></div></div></div>
 <div class="panel"><div class="panel-head"><div><h2>Archivübersicht</h2><span>Verwaltete Repositories werden direkt im Manager-Container geöffnet. SSH zum Backup-Client ist dafür nicht erforderlich.</span></div></div><div class="bounded-list" id="archive-list"><div class="empty">Zuerst ein Repository auswählen und die Archivliste anzeigen.</div></div></div>
+<div class="panel hidden" data-admin-only-block="" id="archive-mount-panel"><div class="panel-head"><div><h2>Aktive Archiv-Mounts</h2><span id="archive-mount-capability">Archiv-Mount-Status wird geladen …</span></div></div><div class="persistent-error hidden" id="archive-mount-error"></div><div class="bounded-list" id="archive-mount-list"><div class="empty">Keine Archive eingehängt.</div></div><p class="hint">Archiv-Mounts sind schreibgeschützt. Während eines aktiven Mounts warten Repository-Läufe, Archivbereinigung und Compact bis zum Aushängen.</p></div>
 <div class="panel hidden" id="archive-browser-panel"><div class="panel-head"><div><h2>Archivinhalt durchsuchen</h2><span id="archive-browser-meta"></span></div><button class="secondary" id="close-archive-browser" type="button">Browser schließen</button></div><div class="persistent-error hidden" id="archive-browser-error"></div><div class="browser-toolbar"><button class="secondary" id="browser-up" type="button">Eine Ebene höher</button><div class="browser-breadcrumbs" id="browser-path"><button type="button" data-browse-path="">/</button></div><button class="secondary" id="export-browser-selection" type="button">Auswahl exportieren (.tar.gz)</button><button id="use-browser-selection" type="button">Auswahl wiederherstellen</button></div><div class="persistent-info hidden" id="archive-export-status"></div><div class="archive-browser-list" id="archive-browser-list"></div><div class="selection-box"><b>Ausgewählte Pfade</b><div class="hint" id="browser-selection">Noch nichts ausgewählt.</div></div></div>
-<div class="panel hidden" id="legacy-mount-panel"><div class="panel-head"><div><h2>Alte FUSE-Mounts</h2><span>Nur für Mount-Sitzungen aus Version 0.7/0.8. Neue Archivbrowser-Sitzungen benötigen kein FUSE.</span></div></div><div class="persistent-error hidden" id="legacy-mount-error"></div><div class="bounded-list" id="legacy-mount-list"></div></div>
 </section>
 <section class="view" id="view-restore"><div class="restore-grid">
 <form class="panel form-panel" id="restore-form"><p class="eyebrow">Kontrollierter Restore</p><h2>Dateien wiederherstellen</h2>
@@ -310,7 +310,7 @@
 <div class="backup-create-progress-detail" id="cache-backup-create-status-detail">Status wird geladen …</div>
 <div class="backup-create-progress-log" id="cache-backup-create-status-log"></div>
 </div>
-<p class="hint">Client-Caches und der zugehörige Borg-Sicherheitsstatus werden je Gerät/Repository direkt per SSH in die separate Cache-Datei gestreamt. Deaktivierte Geräte werden übersprungen; ein nicht erreichbares aktives Gerät bricht das Cache-Backup ab. Cache-Backups sind nur ohne laufende oder wartende Ausführungen möglich.</p>
+<p class="hint">Client-Caches und der zugehörige Borg-Sicherheitsstatus werden je Gerät/Repository direkt per SSH in die separate Cache-Datei gestreamt. Deaktivierte Geräte werden übersprungen; ein nicht erreichbares aktives Gerät wird als Warnung dokumentiert, während die übrigen Client-Caches weiter gesichert werden. Cache-Backups sind nur ohne laufende oder wartende Ausführungen möglich.</p>
 </form>
 <form class="panel" id="backup-upload-form"><div class="panel-head"><div><h2>Backup hochladen</h2><span>Vorhandenes Manager- oder Cache-Backup sicher übernehmen.</span></div></div>
 <label>Backup-Datei<input accept=".bbm,.zip,application/zip,application/octet-stream" name="backup_file" required="" type="file"/></label>
@@ -336,7 +336,7 @@
 <div class="form-actions"><button class="secondary" disabled="" id="manager-cache-restore-submit" type="button">Manager-Cache wiederherstellen</button><button type="submit">Client-Caches anzeigen</button></div>
 <div class="persistent-info hidden" id="client-cache-restore-status"></div>
 <div id="client-cache-restore-list"></div>
-<p class="hint">Ein vorhandener Manager-Cache beziehungsweise Client-Cache wird vor dem Einspielen als lokale Sicherheitskopie erhalten. Ein bereits vorhandener Borg-Sicherheitsstatus des Clients wird aus Sicherheitsgründen nicht durch einen älteren Backup-Stand überschrieben. Auch ältere kombinierte Backups aus v1.0.75/v1.0.76 können hier weiterhin für Cache-Restores verwendet werden. Die Wiederherstellung ist nur ohne laufende oder wartende Ausführungen möglich.</p>
+<p class="hint">Ein vorhandener Manager-Cache beziehungsweise Client-Cache wird vor dem Einspielen als lokale Sicherheitskopie erhalten. Ein bereits vorhandener Borg-Sicherheitsstatus des Clients wird aus Sicherheitsgründen nicht durch einen älteren Backup-Stand überschrieben. Backup-Metadaten müssen BorgBackup Manager v1.1.0 oder neuer ausweisen. Die Wiederherstellung ist nur ohne laufende oder wartende Ausführungen möglich.</p>
 </form>
 </div>
 <div class="panel"><div class="panel-head"><div><h2>Manager-Backups</h2><span id="backup-path"></span></div></div><div class="bounded-list" id="backup-list"></div></div>
@@ -447,7 +447,7 @@
 <section class="panel settings-section">
 <div class="panel-head"><div><h2>Repository-Nachbereitung</h2><span>Automatische Aktualisierung und Compact-Verhalten nach schreibenden Vorgängen.</span></div></div>
 <label class="check"><input name="repository_size_after_run" type="checkbox"/> Repository-Größe nach manuellen Schreibvorgängen und nach Abschluss eines Zeitplans automatisch aktualisieren</label>
-<label class="check"><input name="compact_after_prune" type="checkbox"/> Nach erfolgreicher Prune-Phase eines Zeitplans einmal je Repository Compact ausführen</label>
+<label class="check"><input name="compact_after_prune" type="checkbox"/> Nach erfolgreicher Archivbereinigung eines Zeitplans einmal je Repository Compact ausführen</label>
 </section>
 <section class="panel settings-section">
 <div class="panel-head"><div><h2>Ausschlussvorlagen</h2><span>Zentrale, wiederverwendbare Ausschlusslisten einzeln auswählen und bearbeiten.</span></div><button class="secondary" id="add-exclude-template" type="button">Neue Vorlage</button></div>
@@ -531,6 +531,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.2.3"></script><script src="/static/app.js?v=1.2.3"></script>
+<script src="/static/i18n.js?v=1.2.9"></script><script src="/static/app.js?v=1.2.9"></script>
 </body>
 </html>

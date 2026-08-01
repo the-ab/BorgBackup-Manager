@@ -41,7 +41,7 @@ def test_generated_initial_admin_password_always_meets_policy(monkeypatch, tmp_p
     monkeypatch.setattr(secret_crypto, "MASTER_KEY_PATH", security_dir / "master.key")
     monkeypatch.setattr(security_store.secrets, "token_urlsafe", lambda _length: "onlylowercaseletters")
 
-    result = security_store.initialize_security_store(None)
+    result = security_store.initialize_security_store()
     password = security_store.get_secret("bootstrap", "initial_admin_password")
 
     assert result["created"] is True
@@ -60,7 +60,7 @@ def test_security_database_permissions_are_restricted(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(security_store, "SECURITY_DATABASE_PATH", database)
     monkeypatch.setattr(security_store, "INITIAL_ADMIN_PATH", initial)
 
-    result = security_store.initialize_security_store(None)
+    result = security_store.initialize_security_store()
     assert result["created"] is True
     assert database.stat().st_mode & 0o777 == 0o600
     assert security_dir.stat().st_mode & 0o777 == 0o700
@@ -77,7 +77,7 @@ def test_last_administrator_cannot_be_deleted(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(security_store, "SECURITY_DATABASE_PATH", database)
     monkeypatch.setattr(security_store, "INITIAL_ADMIN_PATH", initial)
 
-    security_store.initialize_security_store(None)
+    security_store.initialize_security_store()
     with sqlite3.connect(database) as connection:
         administrator_id = int(connection.execute("SELECT id FROM users WHERE role='admin'").fetchone()[0])
     with pytest.raises(ValueError, match="letzte Administrator"):
@@ -92,7 +92,7 @@ def test_disabled_administrator_can_only_be_deleted_when_another_admin_exists(mo
     monkeypatch.setattr(security_store, "SECURITY_DATABASE_PATH", database)
     monkeypatch.setattr(security_store, "INITIAL_ADMIN_PATH", initial)
 
-    security_store.initialize_security_store(None)
+    security_store.initialize_security_store()
     second = security_store.create_user("second-admin", "Second-Admin-Password-2026!", "admin", False)
     security_store.update_user(second["id"], "second-admin", "admin", False)
     security_store.delete_user(second["id"], current_user_id=9999)
@@ -113,7 +113,7 @@ def test_initial_admin_password_is_encrypted_in_security_database(monkeypatch, t
     monkeypatch.setattr(security_store, "INITIAL_ADMIN_PATH", old_file)
     monkeypatch.setattr(secret_crypto, "MASTER_KEY_PATH", master_key)
 
-    result = security_store.initialize_security_store(None)
+    result = security_store.initialize_security_store()
 
     assert result["created"] is True
     assert not old_file.exists()
@@ -124,37 +124,6 @@ def test_initial_admin_password_is_encrypted_in_security_database(monkeypatch, t
     assert encrypted.startswith("v2:")
     assert "initial_admin_password" not in encrypted
     assert master_key.stat().st_mode & 0o777 == 0o600
-
-
-def test_legacy_job_cron_is_migrated_to_central_schedule(monkeypatch):
-    import json
-    from uuid import uuid4
-
-    from app.database import Base, SessionLocal, engine
-    from app.models import BackupSchedule, Host, Job, Repository
-    from app.schedules import migrate_legacy_job_schedules, schedule_target_job_ids
-
-    Base.metadata.create_all(engine)
-    marker = uuid4().hex
-    with SessionLocal() as db:
-        host = Host(name=f"legacy-host-{marker}", address="127.0.0.1", username="root")
-        repository = Repository(name=f"legacy-repo-{marker}", location=f"/tmp/{marker}", initialized=True)
-        db.add_all([host, repository]); db.flush()
-        job = Job(
-            name=f"legacy-job-{marker}", host_id=host.id, repository_id=repository.id,
-            source_paths_json='["/srv"]', exclude_patterns_json="[]", create_options_json="{}",
-            schedule="0 2 * * *;30 14 * * mon-fri", enabled=True,
-        )
-        db.add(job); db.commit(); job_id = job.id
-
-    with SessionLocal() as db:
-        assert migrate_legacy_job_schedules(db) == 1
-    with SessionLocal() as db:
-        job = db.get(Job, job_id)
-        schedule = db.query(BackupSchedule).filter(BackupSchedule.target_job_ids_json == json.dumps([job_id])).one()
-        assert job.schedule is None
-        assert schedule.expressions == "0 2 * * *;30 14 * * mon-fri"
-        assert schedule_target_job_ids(db, schedule) == [job_id]
 
 
 def test_local_account_recovery_unlocks_and_resets_admin(monkeypatch, tmp_path: Path):
@@ -169,7 +138,7 @@ def test_local_account_recovery_unlocks_and_resets_admin(monkeypatch, tmp_path: 
     monkeypatch.setattr(security_store, "INITIAL_ADMIN_PATH", initial)
     monkeypatch.setattr(secret_crypto, "MASTER_KEY_PATH", master_key)
 
-    security_store.initialize_security_store("Old-Admin-Token-2026!")
+    security_store.initialize_security_store()
     for _ in range(5):
         security_store.authenticate_user("admin", "wrong-password")
     before = security_store.authentication_readiness()
@@ -193,7 +162,7 @@ def test_authentication_readiness_rejects_invalid_password_hash(monkeypatch, tmp
     monkeypatch.setattr(security_store, "SECURITY_DATABASE_PATH", database)
     monkeypatch.setattr(security_store, "INITIAL_ADMIN_PATH", security_dir / "initial-admin.txt")
     monkeypatch.setattr(secret_crypto, "MASTER_KEY_PATH", security_dir / "master.key")
-    security_store.initialize_security_store("Old-Admin-Token-2026!")
+    security_store.initialize_security_store()
     with sqlite3.connect(database) as connection:
         connection.execute("UPDATE users SET password_hash='broken' WHERE username='admin'")
         connection.commit()

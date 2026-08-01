@@ -24,6 +24,7 @@ docker-compose.override.yml
 compose.override.yaml
 data
 repositories
+archive-mounts
 backup
 backups
 secrets

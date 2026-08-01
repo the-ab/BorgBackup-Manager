@@ -254,6 +254,8 @@ header h1 { margin: 0; font-size: 1.65rem; letter-spacing: -.025em; }
 .sync-state.success .sync-indicator { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 15%, transparent); }
 .sync-state.error { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); color: var(--danger); }
 .sync-state.error .sync-indicator { background: var(--danger); }
+.sync-state.warning { border-color: color-mix(in srgb, var(--warning) 55%, var(--line)); color: var(--warning); }
+.sync-state.warning .sync-indicator { background: var(--warning); }
 .task-status { position: relative; min-width: 0; }
 .sync-state { font-family: inherit; cursor: default; text-align: left; }
 .sync-state:disabled { opacity: 1; }
@@ -2092,6 +2094,7 @@ body.run-dialog-open { overflow: hidden; }
 .backup-create-progress progress { width: 100%; height: 11px; accent-color: var(--accent); }
 .backup-create-progress-detail { color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
 .backup-create-progress.error-state progress { accent-color: var(--danger); }
+.backup-create-progress.warning-state progress { accent-color: var(--warning); }
 @media (max-width: 620px) {
   .backup-create-progress-head { align-items: flex-start; flex-direction: column; gap: 3px; }
 }
@@ -2401,3 +2404,9 @@ body.entity-edit-dialog-open { overflow: hidden; }
   .entity-edit-dialog-head button { width: 100%; }
   .entity-edit-dialog-body { max-height: calc(100dvh - 102px); padding: 10px; }
 }
+
+/* 1.2.7: host-accessible manager-side archive mounts */
+.archive-mount-row { align-items: flex-start; }
+.archive-mount-row > div:first-child { min-width: 0; }
+.archive-mount-row code { overflow-wrap: anywhere; word-break: break-word; }
+.archive-mount-row small { display: block; margin-top: 5px; color: var(--muted); overflow-wrap: anywhere; }

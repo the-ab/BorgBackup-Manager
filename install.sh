@@ -8,6 +8,7 @@ PROJECT_VERSION="$(cat VERSION 2>/dev/null || echo unbekannt)"
 DEFAULT_BASE_PATH="/docker_data/borgbackup-manager"
 DEFAULT_DATA_PATH="$DEFAULT_BASE_PATH/data"
 DEFAULT_REPOSITORY_PATH="$DEFAULT_BASE_PATH/repositories"
+DEFAULT_ARCHIVE_MOUNT_PATH="$DEFAULT_BASE_PATH/archive-mounts"
 DEFAULT_TIMEZONE="Europe/Berlin"
 ROOT_PREFIX=()
 DOCKER_PREFIX=()
@@ -88,9 +89,9 @@ echo "Das Skript erzeugt die Konfiguration, richtet persistente Pfade ein und st
 
 existing_data="$(read_existing BBM_DATA_PATH)"
 existing_repositories="$(read_existing BBM_REPOSITORY_PATH)"
+existing_archive_mount="$(read_existing BBM_ARCHIVE_MOUNT_PATH)"
 existing_host="$(read_existing BBM_REPOSITORY_PUBLIC_HOST)"
 existing_https_port="$(read_existing BBM_HTTPS_PORT)"
-if [[ -z "$existing_https_port" ]]; then existing_https_port="$(read_existing BBM_HTTP_PORT)"; fi
 existing_repo_port="$(read_existing BBM_REPOSITORY_SSH_PORT)"
 existing_guard_enabled="$(read_existing BBM_STORAGE_GUARD_ENABLED)"
 existing_guard_threshold="$(read_existing BBM_STORAGE_GUARD_THRESHOLD_PERCENT)"
@@ -129,6 +130,9 @@ prompt BBM_DATA_PATH \
 prompt BBM_REPOSITORY_PATH \
   "Host-Verzeichnis für Borg-Repositories (darf ein vorhandener NFS-Mount sein)" \
   "${existing_repositories:-$DEFAULT_REPOSITORY_PATH}"
+prompt BBM_ARCHIVE_MOUNT_PATH \
+  "Host-Verzeichnis für schreibgeschützte Archiv-Mounts" \
+  "${existing_archive_mount:-$DEFAULT_ARCHIVE_MOUNT_PATH}"
 prompt BBM_REPOSITORY_PUBLIC_HOST \
   "DNS-Name oder IP des Docker-Hosts, erreichbar von den Backup-Geräten" \
   "${existing_host:-$(hostname -f 2>/dev/null || hostname)}"
@@ -209,10 +213,15 @@ validate_timezone "$timezone"
 
 BBM_DATA_PATH="$(absolute_directory "$BBM_DATA_PATH" "Datenverzeichnis")"
 BBM_REPOSITORY_PATH="$(absolute_directory "$BBM_REPOSITORY_PATH" "Repository-Verzeichnis")"
+BBM_ARCHIVE_MOUNT_PATH="$(absolute_directory "$BBM_ARCHIVE_MOUNT_PATH" "Archiv-Mount-Verzeichnis")"
 [[ "$BBM_DATA_PATH" != "$BBM_REPOSITORY_PATH" ]] \
   || fail "Daten- und Repository-Verzeichnis dürfen nicht identisch sein"
 [[ "$BBM_DATA_PATH/" != "$BBM_REPOSITORY_PATH/"* ]] \
   || fail "Das Manager-Datenverzeichnis darf nicht innerhalb des Repository-Verzeichnisses liegen"
+[[ "$BBM_ARCHIVE_MOUNT_PATH" != "$BBM_DATA_PATH" && "$BBM_ARCHIVE_MOUNT_PATH" != "$BBM_REPOSITORY_PATH" ]] \
+  || fail "Das Archiv-Mount-Verzeichnis muss von Daten- und Repository-Verzeichnis getrennt sein"
+[[ "$BBM_ARCHIVE_MOUNT_PATH/" != "$BBM_REPOSITORY_PATH/"* ]] \
+  || fail "Das Archiv-Mount-Verzeichnis darf nicht innerhalb des Repository-Verzeichnisses liegen"
 mkdir -p -- "$BBM_DATA_PATH/repository-ssh" "$BBM_DATA_PATH/exports" "$BBM_DATA_PATH/security"
 mkdir -p -- "$PROJECT_DIR/updates"
 
@@ -239,8 +248,21 @@ if [[ "$repo_owner_uid:$repo_owner_gid" != "$BBM_BORG_UID:$BBM_BORG_GID" ]]; the
   fi
 fi
 
-legacy_admin_token="$(read_existing BBM_ADMIN_TOKEN)"
-legacy_secret_key="$(read_existing BBM_SECRET_KEY)"
+archive_owner_uid="$(stat -c '%u' "$BBM_ARCHIVE_MOUNT_PATH")"
+archive_owner_gid="$(stat -c '%g' "$BBM_ARCHIVE_MOUNT_PATH")"
+if [[ "$archive_owner_uid:$archive_owner_gid" != "$BBM_BORG_UID:$BBM_BORG_GID" ]]; then
+  echo "Archiv-Mount-Verzeichnis wird auf UID:GID $BBM_BORG_UID:$BBM_BORG_GID gesetzt."
+  if [[ "$(id -u)" == "0" ]]; then
+    chown "$BBM_BORG_UID:$BBM_BORG_GID" "$BBM_ARCHIVE_MOUNT_PATH" \
+      || fail "Eigentümer des Archiv-Mount-Verzeichnisses konnte nicht gesetzt werden"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo chown "$BBM_BORG_UID:$BBM_BORG_GID" "$BBM_ARCHIVE_MOUNT_PATH" \
+      || fail "Eigentümer des Archiv-Mount-Verzeichnisses konnte nicht gesetzt werden"
+  else
+    fail "Eigentümer des Archiv-Mount-Verzeichnisses kann ohne sudo nicht gesetzt werden"
+  fi
+fi
+chmod 700 "$BBM_ARCHIVE_MOUNT_PATH" 2>/dev/null || true
 
 env_tmp="$(mktemp "$PROJECT_DIR/.env.XXXXXX")"
 trap 'rm -f -- "$env_tmp"' EXIT
@@ -252,6 +274,7 @@ BBM_REPOSITORY_PUBLIC_HOST=$BBM_REPOSITORY_PUBLIC_HOST
 BBM_TLS_HOSTS=$BBM_TLS_HOSTS
 BBM_DATA_PATH=$BBM_DATA_PATH
 BBM_REPOSITORY_PATH=$BBM_REPOSITORY_PATH
+BBM_ARCHIVE_MOUNT_PATH=$BBM_ARCHIVE_MOUNT_PATH
 BBM_BORG_UID=$BBM_BORG_UID
 BBM_BORG_GID=$BBM_BORG_GID
 BBM_SESSION_TTL_SECONDS=$BBM_SESSION_TTL_SECONDS
@@ -282,13 +305,6 @@ BBM_HEALTH_REQUIRE_SSHD=$BBM_HEALTH_REQUIRE_SSHD
 BBM_LOG_MAX_BYTES=$BBM_LOG_MAX_BYTES
 BBM_LOG_ROTATIONS=$BBM_LOG_ROTATIONS
 EOF
-# Bei einer Migration aus 0.8.x werden die bisherigen Werte genau für den
-# einmaligen Start übernommen. Die Anwendung legt danach Benutzer, Sitzungen
-# und den Master-Key unter /data/security an; neue Installationen benötigen
-# diese Variablen nicht mehr.
-if [[ -n "$legacy_admin_token" ]]; then printf 'BBM_ADMIN_TOKEN=%s\n' "$legacy_admin_token" >> "$env_tmp"; fi
-if [[ -n "$legacy_secret_key" ]]; then printf 'BBM_SECRET_KEY=%s\n' "$legacy_secret_key" >> "$env_tmp"; fi
-
 # Unbekannte/erweiterte Schlüssel einer vorhandenen .env bleiben erhalten.
 # Veraltete Migrationsschalter werden bewusst nicht erneut übernommen.
 if [[ -f .env ]]; then
@@ -296,7 +312,9 @@ if [[ -f .env ]]; then
     [[ "$line" == *=* ]] || continue
     key="${line%%=*}"
     [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-    [[ "$key" != "BBM_HTTP_PORT" && "$key" != "BBM_ALLOW_LEGACY_TOKEN_AUTH" ]] || continue
+    case "$key" in
+      COMPOSE_FILE|BBM_ARCHIVE_MOUNTS_ENABLED|BBM_ARCHIVE_MOUNT_ROOT|BBM_ARCHIVE_MOUNT_HOST_PATH|BBM_ADMIN_TOKEN|BBM_SECRET_KEY|BBM_ALLOW_LEGACY_TOKEN_AUTH|BBM_DEBUG_LOG_LEVEL|BBM_HTTP_PORT|BBM_TLS_CERT_FILE|BBM_TLS_KEY_FILE) continue ;;
+    esac
     grep -qE "^${key}=" "$env_tmp" || printf '%s\n' "$line" >> "$env_tmp"
   done < .env
 fi
@@ -305,13 +323,21 @@ trap - EXIT
 chmod 600 .env
 
 say "Konfiguration erstellt"
-printf 'Daten:        %s\nRepositories: %s\nWebUI:        https://%s:%s\n' \
-  "$BBM_DATA_PATH" "$BBM_REPOSITORY_PATH" "$BBM_REPOSITORY_PUBLIC_HOST" "$BBM_HTTPS_PORT"
+printf 'Daten:        %s\nRepositories: %s\nArchiv-Mounts: %s\nWebUI:        https://%s:%s\n' \
+  "$BBM_DATA_PATH" "$BBM_REPOSITORY_PATH" "$BBM_ARCHIVE_MOUNT_PATH" "$BBM_REPOSITORY_PUBLIC_HOST" "$BBM_HTTPS_PORT"
 
 if ((CONFIG_ONLY)); then
   echo "--config-only: Docker-Build wurde übersprungen."
   exit 0
 fi
+
+if [[ ! -c /dev/fuse ]]; then
+  if command -v modprobe >/dev/null 2>&1; then
+    if [[ "$(id -u)" == "0" ]]; then modprobe fuse 2>/dev/null || true;
+    elif command -v sudo >/dev/null 2>&1; then sudo modprobe fuse 2>/dev/null || true; fi
+  fi
+fi
+[[ -c /dev/fuse ]] || fail "/dev/fuse fehlt. Das FUSE-Kernelmodul muss für die standardmäßige Archiv-Mount-Funktion verfügbar sein."
 
 if ! command -v docker >/dev/null 2>&1; then
   if [[ "${BBM_INSTALL_NONINTERACTIVE:-0}" == "1" ]]; then

@@ -41,7 +41,7 @@ def _create_archive_refresh_run(*, suffix: str):
     from app.models import Repository, Run
     from app.security_store import initialize_security_store
 
-    initialize_security_store("Archive-Test-Admin-2026!")
+    initialize_security_store()
     Base.metadata.create_all(engine)
     with SessionLocal() as db:
         repository = Repository(

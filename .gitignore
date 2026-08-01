@@ -27,6 +27,7 @@ compose.override.yaml
 # Runtime and generated data
 data/
 repositories/
+archive-mounts/
 backup/
 backups/
 secrets/

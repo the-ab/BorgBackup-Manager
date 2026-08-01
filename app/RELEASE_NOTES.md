@@ -1,5 +1,98 @@
 # Release Notes
 
+## v1.2.9 – 2026-08-01
+
+### No delayed mount error after a successful unmount
+
+- An in-flight mount request now detects when the same mount was intentionally unmounted or its database row was removed in the meantime. The request finishes as a controlled cancellation and no longer reports “Borg completed the mount command, but the FUSE mount did not become active within 15 seconds” afterwards.
+- The cancellation state is checked once more at the exact end of the 15-second window, closing the narrow race between the final status read and timeout evaluation.
+- The WebUI treats the older mount response as an already completed unmount. The successful unmount result remains authoritative and is not overwritten by a delayed error.
+
+### Concurrent session refreshes no longer lock SQLite
+
+- The supplied debug log showed that a page refresh authenticates many API endpoints concurrently. Every request read the same old `last_seen_at` value and then tried to perform an `UPDATE` while upgrading its existing read transaction, causing `sqlite3.OperationalError: database is locked` across nearly all endpoints.
+- Session reads and the optional `last_seen_at` refresh are now separated. The timestamp is written through a new short conditional transaction, so only the first competing request replaces the old value.
+- Updating the activity timestamp is explicitly best effort. If the security database is briefly busy, the session remains valid, the API request continues normally, and a later request refreshes the timestamp. A non-critical session touch can therefore no longer make user, repository, mount, job and status endpoints fail together with HTTP 500/503 responses.
+- Expired-session cleanup also uses a separate best-effort write so a temporary SQLite lock cannot create an additional error cascade.
+
+## v1.2.8 – 01.08.2026
+
+### Reliable FUSE mount activation detection
+
+- After a successful `borg mount`, the manager now waits up to 15 seconds for the new FUSE entry to become visible in the kernel mount table. The former immediate single check could incorrectly report that Borg did not expose an active FUSE mount even though it became available moments later.
+- A successful unmount command is also followed by a short mount-state wait instead of a single immediate kernel-table check, preventing delayed mount lifecycle transitions from being reported as errors.
+- Cleanup after a failed mount now uses the direct local lifecycle path as well and does not enter the normal repository execution lock.
+- Mount records in the transitional `mounting` or `unmounting` states are not prematurely marked stale by concurrent status requests for 30 seconds.
+
+### Immediate WebUI feedback
+
+- Immediately after selecting “Mount archive”, the button changes to “Mounting …”, the global status reports the operation, and a provisional row appears under “Active archive mounts”.
+- Once the backend confirms the active FUSE mount, the provisional row is replaced directly with the persisted mount. Manual page reloads or repeated refresh clicks are no longer required.
+- Unmount operations now also update the button, archive list and mount list immediately to “Unmounting …” and remove the row as soon as the operation succeeds.
+
+## v1.2.7 – 2026-08-01
+
+### Archive unmount no longer waits for the repository execution lock
+
+- Fixed an unmount deadlock introduced in v1.2.6: the API previously sent the local FUSE unmount command through the normal repository execution path. If another repository operation already held that lock, unmount waited for 24 seconds and ended with HTTP 504 before any FUSE command was attempted.
+- Archive unmount now executes only the bounded local lifecycle command and never waits for repository, storage-mount, schedule or manager-cache capacity. A normal unmount can therefore complete immediately.
+- The database row is marked `unmounting` before the command starts. Duplicate unmount requests are rejected cleanly and the Web UI shows a disabled “Unmounting …” action while the operation is in progress.
+- A physically active FUSE mount remains a repository blocker even when a previous unmount attempt has status `error`. Backup, archive cleanup, compact and other repository operations cannot start against a mount that still exists.
+- Mount-state reconciliation now preserves `unmounting` and `error` states while the FUSE mount is active and marks them stale only after the mount has actually disappeared.
+
+## v1.2.6 – 2026-08-01
+
+### Archive mounts accessible from the Docker host
+
+- Manager-side Borg mounts now explicitly use the FUSE `allow_other` option. The image enables `user_allow_other` in `/etc/fuse.conf`, allowing an archive mount propagated through `rshared` to be entered from the Docker host instead of returning `Permission denied` to host root or other host processes.
+- Archive-mount capability checks now validate `/etc/fuse.conf` and refuse mounting with a clear diagnostic when `user_allow_other` is unavailable.
+
+### Bounded unmounting without proxy hangs
+
+- Unmounting now tries `fusermount3 -u`, then `borg umount`, followed by `fusermount3 -uz`, and finally `umount -l`. Each attempt and the complete API path have short fixed timeouts.
+- A stuck unmount therefore no longer runs uncontrolled until a reverse proxy returns 504. The manager stops the attempt first and responds with a unique error ID.
+- Timeouts, failed unmount commands, and mounts that remain active after a reported success are recorded as critical mount incidents in `/data/logs/debug.log`. The mount record remains visible with its error reference.
+- Entrypoint cleanup during container shutdown also uses bounded unmount attempts and lazy fallbacks.
+
+### Cache backups with partial warnings
+
+- An enabled device that is unreachable or fails during transfer no longer aborts the complete cache backup. Only the affected device/repository assignment is recorded as `warning`; all remaining reachable clients continue to be backed up.
+- The manifest and encrypted backup header expose `client_borg_cache_warning_count`. The backup list shows the warning count, live progress identifies the affected device and repository, and the backup task visibly completes with warnings.
+- Disabled devices and genuinely missing caches keep their existing separate statuses.
+
+### Verification
+
+- Regression coverage now includes `allow_other`, `user_allow_other`, bounded unmount fallbacks, debug logging for unmount timeouts, and continued cache backups after a client failure.
+
+## v1.2.5 – 31.07.2026
+
+### Archive mounts by default and v1.1.0 minimum baseline
+
+- Read-only Borg archive mounts are now part of the normal `compose.yaml` for both local source builds and standalone GHCR deployments. The additional `compose.archive-mounts.yaml` is no longer required and has been removed from both project layouts.
+- The standard configuration passes through `/dev/fuse`, adds `SYS_ADMIN`, permits FUSE through AppArmor, and uses `rshared` mount propagation for `BBM_ARCHIVE_MOUNT_PATH`. The Docker host must provide FUSE and the mount path must be accessible to `BBM_BORG_UID:BBM_BORG_GID`.
+- `install.sh` checks `/dev/fuse`, attempts to load the FUSE module, and creates the archive-mount path with safe non-recursive ownership. `update.sh` verifies the same prerequisites before rebuilding and restarting.
+- Direct updates are supported only from BorgBackup Manager v1.1.0 or newer. `update.sh` rejects older source versions with a clear clean-installation requirement. For the one-time v1.2.4 transition, the new updater is extracted from the verified ZIP first because the old v1.2.4 updater still requires the removed override file.
+- Manager and cache backup metadata must identify v1.1.0 or newer. `restore-backup.sh`, upload validation, inspection, and WebUI restore reject older artifacts.
+- Pre-v1.1.0 compatibility code has been removed: static administrator tokens, old secret encryption, former repository columns, old client-mount sessions, legacy schedule fields, historical combined cache/manager backups, and older database-schema fallbacks are no longer migrated.
+- `update.sh` rebuilds an existing `.env` from the current `.env.example`. Supported custom values are preserved, missing current values are added, and obsolete entries such as `COMPOSE_FILE`, old token/secret variables, internal mount switches, `BBM_DEBUG_LOG_LEVEL`, `BBM_HTTP_PORT`, and old TLS file paths are removed. File mode remains `0600`.
+- Installation, README, Compose, and integrated help documentation now describe archive mounts as a default feature and consistently identify v1.1.0 as the minimum update and restore baseline.
+- Encrypted-backup detection in `restore-backup.sh` no longer reads binary data into a shell variable, avoiding null-byte warnings.
+- 640 automated tests, project audit, and Python, JavaScript, shell, and Compose structure checks cover the cleaned release.
+
+## v1.2.4 – 31.07.2026
+
+### Optional read-only archive mounts
+
+- Administrators can now mount and unmount archives from local managed repositories directly in the archive overview. At most one manager-side mount is allowed per repository.
+- Mounts are confined below `/archive-mounts` inside the container; `BBM_ARCHIVE_MOUNT_PATH` selects the host-visible base directory. `/data/exports` remains reserved exclusively for temporary TAR.GZ exports.
+- The feature is fully disabled by default. The new optional `compose.archive-mounts.yaml` passes through `/dev/fuse`, adds `SYS_ADMIN` only for this operating mode, enables `rshared` mount propagation, and relaxes AppArmor for FUSE operation. The image explicitly installs both `fuse3` and Borg's required `python3-pyfuse3` bindings because Debian lists the latter only as a recommendation and `--no-install-recommends` would otherwise omit it.
+- Borg continues to run with the configured unprivileged `BBM_BORG_UID:BBM_BORG_GID`; the entrypoint forwards only the capability required for FUSE. Active manager mounts are unmounted before a controlled container shutdown.
+- Target paths are derived deterministically from repository ID and archive name, confined to the configured mount root, and protected against symbolic links and non-empty target directories.
+- Active archive mounts block or defer backup, archive cleanup, compact, repository checks, archive changes, repository reset, and repository deletion for the same repository. Startup reconciliation safely handles stale database records.
+- This release supports local managed repositories only. External SSH repositories remain excluded so a long-running FUSE process never depends on short-lived temporary SSH key files.
+- The WebUI shows capability status, container and host paths, repository, archive, mount time, and error state. Missing FUSE prerequisites are reported with an actionable diagnosis.
+- In the German UI, the `borg prune` action is now consistently named **Archivbereinigung** / **Archive bereinigen**; **Aufbewahrung** remains reserved for retention rules.
+
 ## v1.2.3 – 31.07.2026
 
 ### Bilingual `.env` reference for the GHCR Compose stack

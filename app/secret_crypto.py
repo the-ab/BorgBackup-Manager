@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import os
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from app.config import LEGACY_SECRET_KEY, MASTER_KEY_PATH
+from app.config import MASTER_KEY_PATH
 
 _MASTER_PREFIX = "v2:"
 
@@ -38,33 +36,17 @@ def _fernet() -> Fernet:
     return Fernet(load_master_key())
 
 
-def _legacy_fernet() -> Fernet | None:
-    if not LEGACY_SECRET_KEY or LEGACY_SECRET_KEY == "change-me":
-        return None
-    key = base64.urlsafe_b64encode(hashlib.sha256(LEGACY_SECRET_KEY.encode("utf-8")).digest())
-    return Fernet(key)
-
-
 def encrypt_value(value: str) -> str:
     return _MASTER_PREFIX + _fernet().encrypt(value.encode("utf-8")).decode("ascii")
 
 
 def decrypt_value(value: str) -> str:
-    candidates: list[Fernet] = []
-    token = value
-    if value.startswith(_MASTER_PREFIX):
-        token = value[len(_MASTER_PREFIX):]
-        candidates.append(_fernet())
-    else:
-        legacy = _legacy_fernet()
-        if legacy is not None:
-            candidates.append(legacy)
-        candidates.append(_fernet())
-    for candidate in candidates:
-        try:
-            return candidate.decrypt(token.encode("ascii")).decode("utf-8")
-        except (InvalidToken, UnicodeDecodeError, ValueError):
-            continue
-    raise ValueError("Geheimnis kann weder mit dem Master-Key noch mit dem alten BBM_SECRET_KEY entschlüsselt werden")
+    if not value.startswith(_MASTER_PREFIX):
+        raise ValueError("Geheimnis verwendet ein nicht mehr unterstütztes Format vor v1.1.0")
+    token = value[len(_MASTER_PREFIX):]
+    try:
+        return _fernet().decrypt(token.encode("ascii")).decode("utf-8")
+    except (InvalidToken, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("Geheimnis kann mit dem aktuellen Master-Key nicht entschlüsselt werden") from exc
 
 

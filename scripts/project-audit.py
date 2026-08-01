@@ -578,7 +578,7 @@ def audit_markdown_links() -> None:
 
 
 def audit_release_layout() -> None:
-    for runtime_directory in ("data", "repositories"):
+    for runtime_directory in ("data", "repositories", "archive-mounts"):
         if (ROOT / runtime_directory).exists():
             error(f"Runtime directory must not be included: {runtime_directory}/")
     if (ROOT / ".github").exists():
@@ -603,13 +603,17 @@ def audit_release_layout() -> None:
 
 def audit_standalone_image_deployment(version: str) -> None:
     compose_path = ROOT / "docker-compose" / "compose.yaml"
+    local_compose_path = ROOT / "compose.yaml"
     env_path = ROOT / "docker-compose" / ".env.example"
     readme_de_path = ROOT / "docker-compose" / "README.de.md"
     readme_en_path = ROOT / "docker-compose" / "README.md"
-    if not all(path.is_file() for path in (compose_path, env_path, readme_de_path, readme_en_path)):
+    if not all(path.is_file() for path in (compose_path, local_compose_path, env_path, readme_de_path, readme_en_path)):
         error("Standalone docker-compose bundle is incomplete")
         return
+    if (ROOT / "compose.archive-mounts.yaml").exists() or (ROOT / "docker-compose" / "compose.archive-mounts.yaml").exists():
+        error("Obsolete archive-mount override compose file remains")
     compose = _read(compose_path)
+    local_compose = _read(local_compose_path)
     sample = _read(env_path)
     readme_de = _read(readme_de_path)
     readme_en = _read(readme_en_path)
@@ -617,32 +621,78 @@ def audit_standalone_image_deployment(version: str) -> None:
     required = (
         "image: ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG:-latest}",
         "${BBM_REPOSITORY_PATH:-/docker_data/borgbackup-manager/repositories}:/repositories:rslave",
-        "./.env:/run/bbm-host.env",
     )
     for marker in required:
         if marker not in compose:
             error(f"Standalone compose marker missing: {marker}")
+    if "./.env:/run/bbm-host.env" in compose:
+        error("Standalone compose must not bind the host .env into the container")
     if "build:" in compose:
         error("Standalone GHCR compose must not contain a local build")
     if "BBM_IMAGE_TAG=latest" not in sample or f"v{version}" not in sample:
         error("Standalone .env example does not document latest and the current fixed tag")
     if "BBM_DEBUG_LOG_LEVEL" in sample or "BBM_DEBUG_LOG_LEVEL" in _read(ROOT / ".env.example"):
         error("Obsolete BBM_DEBUG_LOG_LEVEL remains in an example configuration")
-    for variable in ("BBM_REPOSITORY_PUBLIC_HOST", "BBM_DATA_PATH", "BBM_REPOSITORY_PATH", "BBM_BORG_UID", "BBM_BORG_GID"):
+    for variable in ("BBM_REPOSITORY_PUBLIC_HOST", "BBM_DATA_PATH", "BBM_REPOSITORY_PATH", "BBM_ARCHIVE_MOUNT_PATH", "BBM_BORG_UID", "BBM_BORG_GID"):
         if variable not in readme_de or variable not in readme_en:
             error(f"Standalone .env reference does not document {variable}")
     if f"v{version}" not in readme_de or f"v{version}" not in readme_en:
         error("Standalone .env references do not document the current fixed image tag")
+    for label, text in (("GHCR", compose), ("local", local_compose)):
+        for marker in ("BBM_ARCHIVE_MOUNTS_ENABLED", "/dev/fuse:/dev/fuse", "SYS_ADMIN", "apparmor:unconfined", "propagation: rshared", "target: /archive-mounts"):
+            if marker not in text:
+                error(f"{label} default archive-mount marker missing: {marker}")
+    for text, language in ((readme_de, "German"), (readme_en, "English")):
+        if "/data/exports" not in text or "/archive-mounts" not in text:
+            error(f"{language} standalone documentation does not separate archive mounts from exports")
+        if "compose.archive-mounts.yaml" in text:
+            error(f"{language} standalone documentation still references the obsolete override")
     if 'chown "${borg_uid}:${borg_gid}" /repositories' not in entrypoint:
         error("Entrypoint does not initialize an empty repository mount root")
     if "chown -R borg:borg /repositories" in entrypoint:
         error("Entrypoint must never recursively re-own repository contents")
+
+def audit_manager_archive_mounts() -> None:
+    main = _read(APP / "main.py")
+    service = _read(APP / "service.py")
+    runner = _read(APP / "runner.py")
+    frontend = _read(APP / "static" / "app.js")
+    html = _read(APP / "static" / "index.html")
+    entrypoint = _read(ROOT / "docker" / "entrypoint.sh")
+    required_main = (
+        '@app.get("/api/archive-mounts/capability"',
+        '@app.get("/api/archive-mounts"',
+        '@app.post("/api/repositories/{repository_id}/archive-mounts"',
+        '@app.delete("/api/archive-mounts/{mount_id}"',
+        "nur für lokal verwaltete Repositories",
+        'ManagerArchiveMount.status.in_(["mounting", "mounted"])',
+    )
+    for item in required_main:
+        if item not in main:
+            error(f"Manager archive-mount backend marker missing: {item}")
+    for item in ("ActiveArchiveMountError", 'reason.get("kind") == "archive-mount"', "archive_mount_is_active"):
+        if item not in service:
+            error(f"Manager archive-mount queue protection missing: {item}")
+    for item in ("manager_archive_mount_command", "manager_archive_unmount_command", "allow_active_archive_mount=True"):
+        if item not in runner:
+            error(f"Manager archive-mount command marker missing: {item}")
+    for item in ("data-archive-mount", "data-manager-unmount", "function renderManagerArchiveMounts"):
+        if item not in frontend:
+            error(f"Manager archive-mount frontend marker missing: {item}")
+    if 'id="archive-mount-panel"' not in html:
+        error("Manager archive-mount panel is missing")
+    for item in ("cleanup_archive_mounts", "BBM_ARCHIVE_MOUNTS_ENABLED", "setpriv", "ambient-caps=+sys_admin"):
+        if item not in entrypoint:
+            error(f"Archive-mount lifecycle marker missing from entrypoint: {item}")
+    if "chown -R" in "\n".join(line for line in entrypoint.splitlines() if "archive_mount_root" in line):
+        error("Archive mount root must never be recursively re-owned")
 
 
 def main() -> int:
     version = _read(ROOT / "VERSION").strip()
     audit_version_consistency(version)
     audit_standalone_image_deployment(version)
+    audit_manager_archive_mounts()
     audit_document_feature_alignment()
     audit_current_source_stats_and_parallelism()
     audit_eta_fallback_search_and_modal_editing()

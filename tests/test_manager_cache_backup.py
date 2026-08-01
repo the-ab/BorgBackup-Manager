@@ -52,7 +52,7 @@ def test_cache_backup_can_include_compressed_manager_cache_and_security(monkeypa
     (security_dir / "location").write_text("ssh://borg@example.invalid/./repo", encoding="utf-8")
 
     backup = backups.create_cache_backup(
-        "1.0.77",
+        "1.1.0",
         "cache",
         "correct horse battery staple",
         include_manager_borg_cache=True,
@@ -100,7 +100,7 @@ def test_manager_backup_without_cache_keeps_cache_out(monkeypatch, tmp_path: Pat
     (borg_security / ("b" * 64) / "location").write_text("repo", encoding="utf-8")
 
     backup = backups.create_full_backup(
-        "1.0.77", "normal", "correct horse battery staple"
+        "1.1.0", "normal", "correct horse battery staple"
     )
     with backups.plain_backup_file(backup, "correct horse battery staple") as plain:
         with zipfile.ZipFile(plain) as archive:
@@ -165,18 +165,18 @@ def test_manager_and_cache_backups_are_separate_artifacts(monkeypatch, tmp_path:
     (borg_cache / "repository-7").mkdir(parents=True)
     (borg_cache / "repository-7" / "files").write_bytes(b"cache-metadata" * 100)
 
-    manager = backups.create_full_backup("1.0.77", "manager", "correct horse battery staple")
+    manager = backups.create_full_backup("1.1.0", "manager", "correct horse battery staple")
     cache = backups.create_cache_backup(
-        "1.0.77",
+        "1.1.0",
         "cache",
         encrypted=False,
         include_manager_borg_cache=True,
         include_client_borg_cache=False,
     )
 
-    assert manager.name.startswith("borgbackup-manager-backup-v1.0.77-")
+    assert manager.name.startswith("borgbackup-manager-backup-v1.1.0-")
     assert manager.suffix == ".bbm"
-    assert cache.name.startswith("borgbackup-manager-cache-v1.0.77-")
+    assert cache.name.startswith("borgbackup-manager-cache-v1.1.0-")
     assert cache.suffix == ".zip"
     listed = {item["name"]: item for item in backups.list_full_backups()}
     assert listed[manager.name]["backup_type"] == "manager"
@@ -189,14 +189,14 @@ def test_cache_backup_encryption_is_optional_but_requires_passphrase_when_enable
     _prepare_backup_state(monkeypatch, tmp_path)
     with pytest.raises(ValueError, match="Passphrase"):
         backups.create_cache_backup(
-            "1.0.77",
+            "1.1.0",
             "encrypted",
             encrypted=True,
             include_manager_borg_cache=True,
             include_client_borg_cache=False,
         )
     plain = backups.create_cache_backup(
-        "1.0.77",
+        "1.1.0",
         "plain",
         encrypted=False,
         include_manager_borg_cache=True,

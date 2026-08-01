@@ -3,15 +3,15 @@
 ## Supported versions
 
 Security fixes are released only for the current BorgBackup Manager release.
-Versions before 1.0.38 are explicitly unsupported and should not be deployed or
-published as supported releases because they predate substantial security
-hardening.
+Direct updates, manager backups, and cache backups are supported only from
+BorgBackup Manager v1.1.0 or newer. Earlier releases are explicitly unsupported
+and require a clean installation.
 
 | Version | Security support |
 |---|---|
 | Current release | Yes |
-| 1.0.38 through the previous release | Upgrade assistance only |
-| Earlier than 1.0.38 | No |
+| v1.1.0 through the previous release | Upgrade assistance only |
+| Earlier than v1.1.0 | No |
 
 ## Reporting a vulnerability
 

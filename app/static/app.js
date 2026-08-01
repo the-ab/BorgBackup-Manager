@@ -1,6 +1,6 @@
 const state = {
   currentUser: null, users: [], securityStatus: null,
-  hosts: [], hostSshActions: [], repos: [], jobs: [], schedules: [], runs: [], mounts: [], system: {}, settings: null, backups: [], borgCacheStatus: null, clientBorgCacheStatus: null, runStorage: null, notifications: null, notificationDeliveries: [],
+  hosts: [], hostSshActions: [], repos: [], jobs: [], schedules: [], runs: [], managerMounts: [], archiveMountCapability: null, system: {}, settings: null, backups: [], borgCacheStatus: null, clientBorgCacheStatus: null, runStorage: null, notifications: null, notificationDeliveries: [],
   liveRunId: null, liveLogOffset: 0, liveLogSession: 0, liveLogRequestPending: false, liveTimer: null, refreshTimer: null,
   archiveData: null, archiveRequestId: 0, archiveSelection: new Set(), activeBrowser: null, browserPath: '', browserSelection: new Set(),
   openJobActions: new Set(), backgroundRefresh: false,
@@ -167,13 +167,13 @@ function formatDate(value) {
 function runActionLabel(action) {
   const labels = currentLanguage() === 'en' ? {
     backup: 'Backup', 'diff-archives': 'Compare archives', restore: 'Restore',
-    prune: 'Retention', compact: 'Compact', check: 'Repository check',
+    prune: 'Archive cleanup', compact: 'Compact', check: 'Repository check',
     verify: 'Full verification', info: 'Job info', probe: 'Connection test',
     'source-stats': 'Source statistics', 'delete-archive': 'Delete archive', 'archive-refresh': 'Read archive list',
     'rename-archive': 'Rename archive', version: 'Borg version', 'ssh-command': 'SSH action',
   } : {
     backup: 'Backup', 'diff-archives': 'Archive vergleichen', restore: 'Wiederherstellung',
-    prune: 'Aufbewahrung', compact: 'Compact', check: 'Repository-Prüfung',
+    prune: 'Archivbereinigung', compact: 'Compact', check: 'Repository-Prüfung',
     verify: 'Vollprüfung', info: 'Job-Info', probe: 'Verbindungstest',
     'source-stats': 'Quellenstatistik', 'delete-archive': 'Archiv löschen', 'archive-refresh': 'Archivliste einlesen',
     'rename-archive': 'Archiv umbenennen', version: 'Borg-Version', 'ssh-command': 'SSH-Aktion',
@@ -774,7 +774,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.2.3`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.2.9`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -849,14 +849,15 @@ async function loadAll(background = false) {
     const securityRequest = admin ? api('/users/security-status') : Promise.resolve(null);
     const backupsRequest = admin ? api('/backups') : Promise.resolve([]);
     const managerBackupTaskRequest = admin ? api('/backups/tasks/current') : Promise.resolve({status: 'idle'});
-    const mountsRequest = admin ? api('/mounts') : Promise.resolve([]);
+    const managerMountsRequest = admin ? api('/archive-mounts') : Promise.resolve([]);
+    const archiveMountCapabilityRequest = admin ? api('/archive-mounts/capability') : Promise.resolve(null);
     const hostSshActionsRequest = admin ? api('/host-ssh-actions') : Promise.resolve([]);
     const notificationSettingsRequest = admin ? api('/notifications/settings') : Promise.resolve(null);
     const notificationDeliveriesRequest = admin ? api('/notifications/deliveries?limit=100') : Promise.resolve([]);
     const protectedStorageRequest = admin ? storageRequest : Promise.resolve(null);
-    const [dashboard, hosts, repos, jobs, schedules, runs, activeRuns, system, settings, backups, managerBackupTask, mounts, hostSshActions, runStorage, users, securityStatus, notifications, notificationDeliveries] = await Promise.all([
+    const [dashboard, hosts, repos, jobs, schedules, runs, activeRuns, system, settings, backups, managerBackupTask, managerMounts, archiveMountCapability, hostSshActions, runStorage, users, securityStatus, notifications, notificationDeliveries] = await Promise.all([
       api('/dashboard'), api('/hosts'), api('/repositories'), api('/jobs'), api('/schedules'), api(`/runs?status=${encodeURIComponent(state.runFilter)}`), api('/runs?status=active&limit=100'),
-      api('/system'), api('/settings'), backupsRequest, managerBackupTaskRequest, mountsRequest, hostSshActionsRequest, protectedStorageRequest, usersRequest, securityRequest, notificationSettingsRequest, notificationDeliveriesRequest,
+      api('/system'), api('/settings'), backupsRequest, managerBackupTaskRequest, managerMountsRequest, archiveMountCapabilityRequest, hostSshActionsRequest, protectedStorageRequest, usersRequest, securityRequest, notificationSettingsRequest, notificationDeliveriesRequest,
     ]);
     state.dashboard = dashboard;
     state.hosts = hosts;
@@ -869,7 +870,8 @@ async function loadAll(background = false) {
     state.settings = settings;
     state.backups = backups;
     state.managerBackupTask = managerBackupTask?.status === 'idle' ? null : managerBackupTask;
-    state.mounts = mounts;
+    state.managerMounts = managerMounts;
+    state.archiveMountCapability = archiveMountCapability;
     state.hostSshActions = hostSshActions;
     state.runStorage = runStorage;
     state.users = users;
@@ -892,7 +894,7 @@ async function loadAll(background = false) {
     if (state.managerBackupTask && ['queued', 'running'].includes(state.managerBackupTask.status)) scheduleManagerBackupTaskPoll();
     if (!background || active !== 'users') renderUsers();
     fillSelects(background ? active : null);
-    if (!background || active !== 'archives') renderLegacyMounts();
+    if (!background || active !== 'archives') renderManagerArchiveMounts();
     scheduleRefresh();
     if (!background) setSyncState('Alle Bereiche aktualisiert', 'success');
   } catch (error) {
@@ -934,7 +936,7 @@ async function performAreaRefresh(areas, message = 'Änderungen werden übernomm
   if (requested.has('users') && state.currentUser?.role === 'admin') add('users', api('/users'));
   if (requested.has('security') && state.currentUser?.role === 'admin') add('security', api('/users/security-status'));
   if (requested.has('runStorage') && state.currentUser?.role === 'admin') add('runStorage', api('/runs/storage'));
-  if (requested.has('mounts') && state.currentUser?.role === 'admin') add('mounts', api('/mounts'));
+  if (requested.has('archiveMounts') && state.currentUser?.role === 'admin') { add('managerMounts', api('/archive-mounts')); add('archiveMountCapability', api('/archive-mounts/capability')); }
   if (requested.has('sshActions') && state.currentUser?.role === 'admin') add('sshActions', api('/host-ssh-actions'));
   if (requested.has('notifications') && state.currentUser?.role === 'admin') { add('notifications', api('/notifications/settings')); add('notificationDeliveries', api('/notifications/deliveries?limit=100')); }
 
@@ -950,7 +952,8 @@ async function performAreaRefresh(areas, message = 'Änderungen werden übernomm
   if ('users' in values) state.users = values.users;
   if ('security' in values) state.securityStatus = values.security;
   if ('runStorage' in values) state.runStorage = values.runStorage;
-  if ('mounts' in values) state.mounts = values.mounts;
+  if ('managerMounts' in values) state.managerMounts = values.managerMounts;
+  if ('archiveMountCapability' in values) state.archiveMountCapability = values.archiveMountCapability;
   if ('sshActions' in values) state.hostSshActions = values.sshActions;
   if ('notifications' in values) state.notifications = values.notifications;
   if ('notificationDeliveries' in values) state.notificationDeliveries = values.notificationDeliveries;
@@ -964,7 +967,7 @@ async function performAreaRefresh(areas, message = 'Änderungen werden übernomm
   if ('backups' in values) renderBackups();
   if ('users' in values || 'security' in values) renderUsers();
   if ('runStorage' in values && active === 'settings') renderSettings();
-  if ('mounts' in values) renderLegacyMounts();
+  if ('managerMounts' in values || 'archiveMountCapability' in values) { renderManagerArchiveMounts(); if (state.archiveData) renderArchives(); }
   if ('notifications' in values || 'notificationDeliveries' in values) renderNotifications();
   if (['hosts', 'repositories', 'jobs'].some((area) => requested.has(area))) fillSelects(active);
   setSyncState(`Aktualisiert · ${new Date().toLocaleTimeString(currentLocale())}`, 'success');
@@ -1411,7 +1414,7 @@ function renderJobs() {
     if (!admin) {
       return `<tr><td data-label="Status"><span class="badge ${operationalStatus.badgeClass}">${operationalStatus.label}</span>${!repo?.enabled ? '<small class="warning-text">Repository ist deaktiviert</small>' : !repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><span class="muted">Nur Ansicht</span></td></tr>`;
     }
-    return `<tr><td data-label="Status"><span class="badge ${operationalStatus.badgeClass}">${operationalStatus.label}</span>${!repo?.enabled ? '<small class="warning-text">Repository ist deaktiviert</small>' : !repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><div class="table-actions"><button ${bbmAction('action', job.id, 'backup')} ${startDisabled ? 'disabled' : ''} title="${esc(startTitle)}">Starten</button><button class="secondary" ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button><button class="secondary" ${bbmAction('editJob', job.id)}>Bearbeiten</button><button class="secondary" data-job-toggle="${job.id}" ${bbmAction('toggleJobActions', job.id)}>${open ? 'Weniger' : 'Mehr'}</button></div></td></tr><tr class="job-detail-row ${open ? '' : 'hidden'}" data-job-detail="${job.id}"><td colspan="7"><div class="job-more-grid"><section class="job-action-group job-action-group-wide"><div class="job-action-heading"><h4>Prüfen</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'probe')} ${accessReady && repositoryReady ? '' : 'disabled'}>Verbindung</button><button ${bbmAction('action', job.id, 'info')} ${accessReady && repositoryReady ? '' : 'disabled'}>Job-Info</button><button ${bbmAction('action', job.id, 'version')} ${repo?.enabled ? '' : 'disabled'}>Borg-Version</button><button ${bbmAction('action', job.id, 'source-stats')} ${host?.enabled && repo?.enabled ? '' : 'disabled'}>Quellenstatistik</button><button ${bbmAction('action', job.id, 'check')} ${accessReady && repositoryReady ? '' : 'disabled'}>Repository</button><button ${bbmAction('action', job.id, 'verify')} ${accessReady && repositoryReady ? '' : 'disabled'}>Vollprüfung</button>${relocationButton}</div></section>${accessSection}<section class="job-action-group"><div class="job-action-heading"><h4>Speicherpflege</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'prune')} ${accessReady && repositoryReady ? '' : 'disabled'}>Aufbewahrung</button><button ${bbmAction('action', job.id, 'compact')} ${accessReady && repositoryReady ? '' : 'disabled'}>Compact</button><button ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button></div></section>${manageSection}</div></td></tr>`;
+    return `<tr><td data-label="Status"><span class="badge ${operationalStatus.badgeClass}">${operationalStatus.label}</span>${!repo?.enabled ? '<small class="warning-text">Repository ist deaktiviert</small>' : !repositoryReady ? '<small class="warning-text">Repository fehlt oder ist nicht initialisiert</small>' : accessRequired && !accessReady ? '<small class="warning-text">Repository-Zugang fehlt</small>' : ''}</td><td data-label="Job">${jobLink}<small><code>${esc(job.archive_prefix)}*</code></small></td><td data-label="Gerät">${esc(host?.name || '?')}</td><td data-label="Repository">${esc(repo?.name || '?')}</td><td data-label="Quellen"><span class="path-list">${job.source_paths.map((path) => `<code>${esc(path)}</code>`).join('')}</span>${sourceStatsLine(job, true)}</td><td data-label="Zeitplan"><span>${esc(job.schedule_mode === 'scheduled' ? (job.schedule_names || []).join(', ') : 'Manuell')}</span><small>${esc(job.compression)}</small></td><td data-label="Aktionen"><div class="table-actions"><button ${bbmAction('action', job.id, 'backup')} ${startDisabled ? 'disabled' : ''} title="${esc(startTitle)}">Starten</button><button class="secondary" ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button><button class="secondary" ${bbmAction('editJob', job.id)}>Bearbeiten</button><button class="secondary" data-job-toggle="${job.id}" ${bbmAction('toggleJobActions', job.id)}>${open ? 'Weniger' : 'Mehr'}</button></div></td></tr><tr class="job-detail-row ${open ? '' : 'hidden'}" data-job-detail="${job.id}"><td colspan="7"><div class="job-more-grid"><section class="job-action-group job-action-group-wide"><div class="job-action-heading"><h4>Prüfen</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'probe')} ${accessReady && repositoryReady ? '' : 'disabled'}>Verbindung</button><button ${bbmAction('action', job.id, 'info')} ${accessReady && repositoryReady ? '' : 'disabled'}>Job-Info</button><button ${bbmAction('action', job.id, 'version')} ${repo?.enabled ? '' : 'disabled'}>Borg-Version</button><button ${bbmAction('action', job.id, 'source-stats')} ${host?.enabled && repo?.enabled ? '' : 'disabled'}>Quellenstatistik</button><button ${bbmAction('action', job.id, 'check')} ${accessReady && repositoryReady ? '' : 'disabled'}>Repository</button><button ${bbmAction('action', job.id, 'verify')} ${accessReady && repositoryReady ? '' : 'disabled'}>Vollprüfung</button>${relocationButton}</div></section>${accessSection}<section class="job-action-group"><div class="job-action-heading"><h4>Speicherpflege</h4></div><div class="job-action-buttons"><button ${bbmAction('action', job.id, 'prune')} ${accessReady && repositoryReady ? '' : 'disabled'}>Archive bereinigen</button><button ${bbmAction('action', job.id, 'compact')} ${accessReady && repositoryReady ? '' : 'disabled'}>Compact</button><button ${bbmAction('openRepositoryArchives', job.repository_id)} ${repositoryReady ? '' : 'disabled'}>Archive</button></div></section>${manageSection}</div></td></tr>`;
   }).join('');
   list.innerHTML = `<div class="table-scroll"><table class="data-table jobs-table"><thead><tr><th>Status</th><th>Job</th><th>Gerät</th><th>Repository</th><th>Quellen</th><th>Zeitplan</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -2130,8 +2133,9 @@ function renderBackups() {
     const clientCacheIncluded = Boolean(backup.manifest?.client_borg_cache_included);
     const compression = backup.manifest?.compression ? ` · ${esc(backup.manifest.compression)}` : '';
     const managerCacheLabel = cacheIncluded ? ' · Manager-Cache' : '';
+    const clientWarningCount = Number(backup.manifest?.client_borg_cache_warning_count || 0);
     const clientCacheLabel = clientCacheIncluded
-      ? ` · Client-Caches ${Number(backup.manifest?.client_borg_cache_saved_count || 0)}/${Number(backup.manifest?.client_borg_cache_target_count || 0)}`
+      ? ` · Client-Caches ${Number(backup.manifest?.client_borg_cache_saved_count || 0)}/${Number(backup.manifest?.client_borg_cache_target_count || 0)}${clientWarningCount ? ` · Warnungen ${clientWarningCount}` : ''}`
       : '';
     const cacheLabel = managerCacheLabel + clientCacheLabel;
     const cacheAction = (cacheIncluded || clientCacheIncluded)
@@ -3506,32 +3510,150 @@ function toggleCompressionMode() {
 }
 
 
-function renderLegacyMounts() {
-  const panel = $('#legacy-mount-panel');
-  const mounts = state.mounts || [];
-  panel.classList.toggle('hidden', mounts.length === 0);
-  if (!mounts.length) {
-    $('#legacy-mount-error').classList.add('hidden');
-    $('#legacy-mount-error').textContent = '';
-    $('#legacy-mount-list').innerHTML = '';
-    return;
-  }
-  $('#legacy-mount-list').innerHTML = mounts.map((mount) => `<div class="entity"><div><h3>${esc(mount.archive)}</h3><p>${esc(mount.job_name || `Job ${mount.job_id}`)} · ${esc(mount.mount_path)}</p></div><div class="actions"><button class="danger" data-legacy-unmount="${mount.id}">Aushängen und entfernen</button></div></div>`).join('');
-  $$('[data-legacy-unmount]').forEach((button) => button.onclick = () => unmountLegacyArchive(+button.dataset.legacyUnmount));
+function activeManagerArchiveMount(repositoryId, archive = null) {
+  return (state.managerMounts || []).find((mount) => Number(mount.repository_id) === Number(repositoryId)
+    && (mount.active || ['mounting', 'unmounting'].includes(mount.status))
+    && (archive == null || mount.archive === archive)) || null;
 }
 
-async function unmountLegacyArchive(mountId) {
-  $('#legacy-mount-error').classList.add('hidden');
-  $('#legacy-mount-error').textContent = '';
+function renderManagerArchiveMounts() {
+  const panel = $('#archive-mount-panel');
+  if (!panel) return;
+  if (state.currentUser?.role !== 'admin') {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+  const english = currentLanguage() === 'en';
+  const capability = state.archiveMountCapability;
+  const status = $('#archive-mount-capability');
+  const list = $('#archive-mount-list');
+  const error = $('#archive-mount-error');
+  error.classList.add('hidden');
+  error.textContent = '';
+  if (!capability) {
+    status.textContent = english ? 'Loading archive mount status …' : 'Archiv-Mount-Status wird geladen …';
+  } else if (capability.ready) {
+    const host = capability.host_path ? ` · ${english ? 'Host path' : 'Hostpfad'}: ${capability.host_path}` : '';
+    status.textContent = english
+      ? `FUSE archive mounts are enabled${host}. Archives are mounted read-only.`
+      : `FUSE-Archiv-Mounts sind aktiviert${host}. Archive werden schreibgeschützt eingebunden.`;
+  } else {
+    status.textContent = `${english ? 'Archive mounts are not ready' : 'Archiv-Mounts sind nicht einsatzbereit'}: ${(capability.issues || []).map(translateMessage).join(' ')}`;
+  }
+  const mounts = state.managerMounts || [];
+  list.innerHTML = mounts.length ? mounts.map((mount) => {
+    const mounting = mount.status === 'mounting';
+    const unmounting = mount.status === 'unmounting';
+    const statusLabel = mounting
+      ? (english ? 'mounting' : 'wird eingehängt')
+      : (unmounting
+        ? (english ? 'unmounting' : 'wird ausgehängt')
+        : (mount.active
+          ? (english ? 'mounted' : 'eingehängt')
+          : (mount.status === 'stale' ? (english ? 'no longer active' : 'nicht mehr aktiv') : mount.status)));
+    const path = mount.host_path || mount.mount_path;
+    const repositoryName = mount.repository_name || `Repository ${mount.repository_id}`;
+    const action = mounting
+      ? (english ? 'Mounting …' : 'Wird eingehängt …')
+      : (unmounting
+        ? (english ? 'Unmounting …' : 'Wird ausgehängt …')
+        : (mount.active ? (english ? 'Unmount' : 'Aushängen') : (english ? 'Remove entry' : 'Eintrag entfernen')));
+    return `<div class="entity archive-mount-row"><div><h3>${esc(mount.archive)} <span class="badge ${mount.active ? 'success' : 'warning'}">${esc(statusLabel)}</span></h3><p>${esc(repositoryName)} · <code>${esc(path)}</code></p>${mount.host_path ? `<small>Container: <code>${esc(mount.mount_path)}</code></small>` : ''}${mount.error ? `<p class="warning-text">${esc(translateMessage(mount.error))}</p>` : ''}</div><div class="actions"><button class="danger" data-manager-unmount="${mount.id}" ${(mounting || unmounting) ? 'disabled' : ''}>${action}</button></div></div>`;
+  }).join('') : `<div class="empty">${english ? 'No archives mounted.' : 'Keine Archive eingehängt.'}</div>`;
+  $$('[data-manager-unmount]').forEach((button) => button.onclick = () => unmountManagerArchive(button.dataset.managerUnmount, button));
+}
+
+async function mountManagerArchive(repositoryId, archive, button = null) {
+  const english = currentLanguage() === 'en';
+  const capability = state.archiveMountCapability;
+  if (!capability?.ready) {
+    toast((capability?.issues || [english ? 'Archive mounts are not enabled.' : 'Archiv-Mounts sind nicht aktiviert.']).map(translateMessage).join(' '), true);
+    return;
+  }
+  const repo = state.repos.find((item) => Number(item.id) === Number(repositoryId));
+  if (repo && !repo.managed) {
+    toast(english ? 'Archive mounts are supported only for locally managed repositories.' : 'Archiv-Mounts werden nur für lokal verwaltete Repositories unterstützt.', true);
+    return;
+  }
+  const hostRoot = capability.host_path || capability.container_path || '/archive-mounts';
+  const prompt = english
+    ? `Mount archive “${archive}” read-only?\n\nRepository: ${repo?.name || repositoryId}\nTarget area: ${hostRoot}\n\nWhile the mount is active, backup runs, archive cleanup and compact for this repository wait until it is unmounted.`
+    : `Archiv „${archive}“ schreibgeschützt einhängen?\n\nRepository: ${repo?.name || repositoryId}\nZielbereich: ${hostRoot}\n\nWährend der Mount aktiv ist, warten Backup-Läufe, Archivbereinigung und Compact dieses Repositorys bis zum Aushängen.`;
+  if (!confirm(prompt)) return;
+  const release = markButtonBusy(button || actionButton(), english ? 'Mounting …' : 'Wird eingehängt …');
+  const pendingId = `pending-${repositoryId}-${Date.now()}`;
+  state.managerMounts = [{
+    id: pendingId, repository_id: repositoryId, repository_name: repo?.name || '', archive,
+    mount_path: capability.container_path || '/archive-mounts', host_path: capability.host_path || null,
+    status: 'mounting', active: false, error: '',
+  }, ...(state.managerMounts || []).filter((item) => Number(item.repository_id) !== Number(repositoryId))];
+  renderManagerArchiveMounts();
+  if (state.archiveData) renderArchives();
+  setSyncState(english ? `Mounting archive “${archive}” …` : `Archiv „${archive}“ wird eingehängt …`, 'pending', true);
   try {
-    await api(`/mounts/${mountId}`, {method: 'DELETE'});
-    toast('Alter Archiv-Mount wurde ausgehängt');
-    await refreshAreas(['mounts']);
+    const mounted = await api(`/repositories/${repositoryId}/archive-mounts`, {method: 'POST', body: JSON.stringify({archive})});
+    if (mounted?.cancelled) {
+      state.managerMounts = (state.managerMounts || []).filter((item) => Number(item.repository_id) !== Number(repositoryId));
+      renderManagerArchiveMounts();
+      if (state.archiveData) renderArchives();
+      setSyncState(english ? 'Archive unmounted' : 'Archiv ausgehängt', 'success');
+      try { await refreshAreas(['archiveMounts', 'dashboard', 'runs']); } catch { /* unmount result remains authoritative */ }
+      return;
+    }
+    state.managerMounts = [mounted, ...(state.managerMounts || []).filter((item) => Number(item.repository_id) !== Number(repositoryId))];
+    renderManagerArchiveMounts();
+    if (state.archiveData) renderArchives();
+    setSyncState(english ? 'Archive mounted' : 'Archiv eingehängt', 'success');
+    toast(`${english ? 'Archive mounted' : 'Archiv eingehängt'}: ${mounted.host_path || mounted.mount_path}`);
+    await refreshAreas(['archiveMounts', 'dashboard', 'runs']);
   } catch (error) {
-    $('#legacy-mount-error').textContent = error.message;
-    $('#legacy-mount-error').classList.remove('hidden');
+    state.managerMounts = (state.managerMounts || []).filter((item) => item.id !== pendingId);
+    try { await refreshAreas(['archiveMounts']); } catch { renderManagerArchiveMounts(); }
+    if (state.archiveData) renderArchives();
+    setSyncState(english ? 'Archive could not be mounted' : 'Archiv konnte nicht eingehängt werden', 'error');
+    $('#archive-mount-error').textContent = translateMessage(error.message);
+    $('#archive-mount-error').classList.remove('hidden');
+    toast(translateMessage(error.message), true);
+  } finally {
+    release();
   }
 }
+
+
+async function unmountManagerArchive(mountId, button = null) {
+  const english = currentLanguage() === 'en';
+  const mount = (state.managerMounts || []).find((item) => String(item.id) === String(mountId));
+  if (!mount) return;
+  if (mount.active && !confirm(english ? `Unmount archive “${mount.archive}” now?` : `Archiv „${mount.archive}“ jetzt aushängen?`)) return;
+  const release = markButtonBusy(button || actionButton(), english ? 'Unmounting …' : 'Wird ausgehängt …');
+  const previous = {...mount};
+  mount.status = 'unmounting';
+  renderManagerArchiveMounts();
+  if (state.archiveData) renderArchives();
+  setSyncState(english ? `Unmounting archive “${mount.archive}” …` : `Archiv „${mount.archive}“ wird ausgehängt …`, 'pending', true);
+  try {
+    await api(`/archive-mounts/${mountId}`, {method: 'DELETE'});
+    state.managerMounts = (state.managerMounts || []).filter((item) => String(item.id) !== String(mountId));
+    renderManagerArchiveMounts();
+    if (state.archiveData) renderArchives();
+    setSyncState(english ? 'Archive unmounted' : 'Archiv ausgehängt', 'success');
+    toast(previous.active
+      ? (english ? 'Archive was unmounted' : 'Archiv wurde ausgehängt')
+      : (english ? 'Stale mount entry was removed' : 'Verwaister Mount-Eintrag wurde entfernt'));
+    await refreshAreas(['archiveMounts', 'dashboard', 'runs']);
+  } catch (error) {
+    try { await refreshAreas(['archiveMounts']); } catch { Object.assign(mount, previous); renderManagerArchiveMounts(); }
+    if (state.archiveData) renderArchives();
+    setSyncState(english ? 'Archive could not be unmounted' : 'Archiv konnte nicht ausgehängt werden', 'error');
+    $('#archive-mount-error').textContent = translateMessage(error.message);
+    $('#archive-mount-error').classList.remove('hidden');
+    toast(translateMessage(error.message), true);
+  } finally {
+    release();
+  }
+}
+
 
 function markArchivesStale() {
   const repositoryId = +$('#archive-repository').value;
@@ -3744,6 +3866,31 @@ function renderArchives() {
       ? `<button class="secondary" data-action-job="${actionJobId}" data-archive-rename="${esc(archive.name)}">Umbenennen</button><button class="secondary" data-action-job="${actionJobId}" data-archive-restore="${esc(archive.name)}" data-archive-legacy="${requiresLegacyRestore ? '1' : '0'}" data-archive-checkpoint="${archive.checkpoint ? '1' : '0'}">Wiederherstellen</button>`
       : '<span class="hint">Für Restore/Umbenennen muss das Gerät eindeutig einem Backup-Job zugeordnet sein.</span>';
     const deleteAction = admin ? `<button class="danger" data-repository-id="${state.archiveData.repository_id}" data-archive-delete="${esc(archive.name)}">Archiv löschen</button>` : '';
+    const mountedArchive = activeManagerArchiveMount(state.archiveData.repository_id, archive.name);
+    const repositoryMount = activeManagerArchiveMount(state.archiveData.repository_id);
+    let mountAction = '';
+    const english = currentLanguage() === 'en';
+    const mountLabel = english ? 'Mount archive' : 'Archiv einhängen';
+    const archiveRepository = state.repos.find((item) => Number(item.id) === Number(state.archiveData.repository_id));
+    if (admin && mountedArchive?.status === 'mounting') {
+      mountAction = `<button class="secondary" disabled>${english ? 'Mounting …' : 'Wird eingehängt …'}</button>`;
+    } else if (admin && mountedArchive?.status === 'unmounting') {
+      mountAction = `<button class="secondary" disabled>${english ? 'Unmounting …' : 'Wird ausgehängt …'}</button>`;
+    } else if (admin && mountedArchive) {
+      mountAction = `<button class="secondary" data-manager-unmount="${mountedArchive.id}">${english ? 'Unmount' : 'Aushängen'}</button>`;
+    } else if (admin && archiveRepository && !archiveRepository.managed) {
+      const title = english ? 'Archive mounts are supported only for locally managed repositories.' : 'Archiv-Mounts werden nur für lokal verwaltete Repositories unterstützt.';
+      mountAction = `<button class="secondary" disabled title="${esc(title)}">${mountLabel}</button>`;
+    } else if (admin && state.archiveMountCapability?.ready && !repositoryMount) {
+      mountAction = `<button class="secondary" data-repository-id="${state.archiveData.repository_id}" data-archive-mount="${esc(archive.name)}">${mountLabel}</button>`;
+    } else if (admin && repositoryMount) {
+      const title = english ? `Archive ${repositoryMount.archive} is already mounted in this repository.` : `In diesem Repository ist bereits ${repositoryMount.archive} eingehängt.`;
+      mountAction = `<button class="secondary" disabled title="${esc(title)}">${mountLabel}</button>`;
+    } else if (admin) {
+      const fallback = english ? 'FUSE archive mounts are not enabled.' : 'FUSE-Archiv-Mounts sind nicht aktiviert.';
+      const reason = (state.archiveMountCapability?.issues || [fallback]).map(translateMessage).join(' ');
+      mountAction = `<button class="secondary" disabled title="${esc(reason)}">${mountLabel}</button>`;
+    }
     const selection = admin ? `<label class="archive-select-control" title="Archiv auswählen"><input type="checkbox" data-archive-select="${esc(archive.name)}" ${state.archiveSelection.has(archive.name) ? 'checked' : ''}/><span>Auswählen</span></label>` : '';
     const statistics = `<div class="archive-stat-grid">
       <span><small>Dauer</small><b>${formatDuration(archive.duration)}</b></span>
@@ -3754,11 +3901,13 @@ function renderArchives() {
     </div>`;
     const deviceInfo = resolvedDevice ? ` · Gerät: ${esc(resolvedDevice)}` : ' · Gerät nicht eindeutig';
     const selectedClass = state.archiveSelection.has(archive.name) ? ' archive-selected' : '';
-    return `<div class="entity archive-row${selectedClass}">${selection}<div class="archive-main"><h3>${esc(archive.name)} ${checkpointBadge}</h3><p>${archive.start ? esc(formatDate(archive.start)) : 'Zeit unbekannt'} · ${esc(owner)}${deviceInfo}${archive.hostname ? ' · Borg-Hostname: ' + esc(archive.hostname) : ''}</p>${statistics}<p>${archive.id ? 'ID: ' + esc(archive.id) : ''}${archive.comment ? ' · ' + esc(archive.comment) : ''}</p></div><div class="actions"><button class="secondary" data-repository-id="${state.archiveData.repository_id}" data-archive-info="${esc(archive.name)}">Details</button><button data-repository-id="${state.archiveData.repository_id}" data-action-job="${actionJobId || ''}" data-archive-browse="${esc(archive.name)}">Inhalt durchsuchen</button>${restoreActions}${deleteAction}</div></div>`;
+    return `<div class="entity archive-row${selectedClass}">${selection}<div class="archive-main"><h3>${esc(archive.name)} ${checkpointBadge}</h3><p>${archive.start ? esc(formatDate(archive.start)) : 'Zeit unbekannt'} · ${esc(owner)}${deviceInfo}${archive.hostname ? ' · Borg-Hostname: ' + esc(archive.hostname) : ''}</p>${statistics}<p>${archive.id ? 'ID: ' + esc(archive.id) : ''}${archive.comment ? ' · ' + esc(archive.comment) : ''}</p></div><div class="actions"><button class="secondary" data-repository-id="${state.archiveData.repository_id}" data-archive-info="${esc(archive.name)}">Details</button><button data-repository-id="${state.archiveData.repository_id}" data-action-job="${actionJobId || ''}" data-archive-browse="${esc(archive.name)}">Inhalt durchsuchen</button>${mountAction}${restoreActions}${deleteAction}</div></div>`;
   }).join('') : '<div class="empty">Keine passenden Archive vorhanden.</div>';
   $$('[data-archive-info]').forEach((button) => button.onclick = () => archiveInfo(+button.dataset.repositoryId, button.dataset.archiveInfo));
   $$('[data-archive-rename]').forEach((button) => button.onclick = () => renameArchive(+button.dataset.actionJob, button.dataset.archiveRename));
   $$('[data-archive-browse]').forEach((button) => button.onclick = () => openArchiveBrowser(+button.dataset.repositoryId, button.dataset.archiveBrowse, +(button.dataset.actionJob || 0)));
+  $$('[data-archive-mount]').forEach((button) => button.onclick = () => mountManagerArchive(+button.dataset.repositoryId, button.dataset.archiveMount, button));
+  $$('[data-manager-unmount]').forEach((button) => button.onclick = () => unmountManagerArchive(button.dataset.managerUnmount, button));
   $$('[data-archive-restore]').forEach((button) => button.onclick = () => prepareRestore(+button.dataset.actionJob, button.dataset.archiveRestore, button.dataset.archiveLegacy === '1', [], button.dataset.archiveCheckpoint === '1'));
   $$('[data-archive-delete]').forEach((button) => button.onclick = () => deleteArchive(+button.dataset.repositoryId, button.dataset.archiveDelete));
   $$('[data-archive-select]').forEach((input) => input.onchange = () => {
@@ -4542,6 +4691,7 @@ function managerBackupDisplayMessage(task) {
   if (!task) return noun;
   if (task.status === 'failed') return english ? `${noun} failed.` : `${noun} konnte nicht erstellt werden.`;
   if (task.status === 'finished') return english ? `${noun} created successfully.` : `${noun} wurde erfolgreich erstellt.`;
+  if (task.status === 'warning') return english ? `${noun} created with warnings.` : `${noun} wurde mit Warnungen erstellt.`;
   const current = Number(task.current || 0);
   const total = Number(task.total || 0);
   const subject = [task.host_name, task.repository_name].filter(Boolean).join(' · ');
@@ -4582,7 +4732,8 @@ function managerBackupTaskDetail(task) {
   }
   if (task?.host_name || task?.repository_name) parts.push([task.host_name, task.repository_name].filter(Boolean).join(' · '));
   if (task?.status === 'failed' && task?.error) parts.push(task.error);
-  if (task?.status === 'finished' && task?.backup?.size_bytes) parts.push(`${english ? 'Backup size' : 'Backup-Größe'}: ${formatBytes(task.backup.size_bytes)}`);
+  if (task?.status === 'warning' && task?.warning) parts.push(translateMessage(task.warning));
+  if (['finished', 'warning'].includes(task?.status) && task?.backup?.size_bytes) parts.push(`${english ? 'Backup size' : 'Backup-Größe'}: ${formatBytes(task.backup.size_bytes)}`);
   return parts.join(' · ') || (english ? 'Progress is updated automatically.' : 'Der Fortschritt wird automatisch aktualisiert.');
 }
 
@@ -4602,8 +4753,8 @@ function renderManagerBackupTask() {
 
   managerBox.classList.add('hidden');
   cacheBox.classList.add('hidden');
-  managerBox.classList.remove('error-state');
-  cacheBox.classList.remove('error-state');
+  managerBox.classList.remove('error-state', 'warning-state');
+  cacheBox.classList.remove('error-state', 'warning-state');
 
   if (!task) {
     if (managerSubmit) { managerSubmit.disabled = false; managerSubmit.classList.remove('action-busy'); managerSubmit.textContent = 'Manager-Backup erstellen'; }
@@ -4613,9 +4764,10 @@ function renderManagerBackupTask() {
 
   box.classList.remove('hidden');
   box.classList.toggle('error-state', task.status === 'failed');
+  box.classList.toggle('warning-state', task.status === 'warning');
   const percent = Math.max(0, Math.min(100, Number(task.percent || 0)));
   $(`#${prefix}-status-title`).textContent = managerBackupDisplayMessage(task);
-  $(`#${prefix}-status-percent`).textContent = task.status === 'failed' ? 'Fehler' : `${Math.round(percent)} %`;
+  $(`#${prefix}-status-percent`).textContent = task.status === 'failed' ? 'Fehler' : (task.status === 'warning' ? 'Warnung' : `${Math.round(percent)} %`);
   $(`#${prefix}-progress-bar`).value = percent;
   $(`#${prefix}-status-detail`).textContent = managerBackupTaskDetail(task);
   const log = $(`#${prefix}-status-log`);
@@ -4642,6 +4794,7 @@ function renderManagerBackupTask() {
   const noun = backupTaskNoun(task, false);
   if (active) setSyncState(managerBackupDisplayMessage(task), 'pending', true);
   else if (task.status === 'failed') setSyncState(`${noun} konnte nicht erstellt werden`, 'error');
+  else if (task.status === 'warning') setSyncState(`${noun} mit Warnungen erstellt`, 'warning');
   else if (task.status === 'finished') setSyncState(`${noun} erstellt`, 'success');
 }
 
@@ -4668,9 +4821,11 @@ async function pollManagerBackupTask() {
       return;
     }
     clearManagerBackupTaskPoll();
-    if (task.status === 'finished') {
+    if (['finished', 'warning'].includes(task.status)) {
       const cacheTask = task.backup_type === 'cache';
-      toast(cacheTask ? 'Cache-Backup erstellt' : 'Manager-Backup erstellt');
+      toast(task.status === 'warning'
+        ? (task.warning || (cacheTask ? 'Cache-Backup mit Warnungen erstellt' : 'Manager-Backup mit Warnungen erstellt'))
+        : (cacheTask ? 'Cache-Backup erstellt' : 'Manager-Backup erstellt'), task.status === 'warning');
       const form = cacheTask ? $('#cache-backup-form') : $('#backup-form');
       if (form) form.reset();
       if (cacheTask) toggleCacheBackupEncryption();
@@ -4798,11 +4953,11 @@ function renderClientCacheRestoreInventory(data) {
     list.innerHTML = '';
     return;
   }
-  status.textContent = `${Number(data.saved_count || 0)} Cache(s) gesichert · ${Number(data.security_saved_count || 0)} Sicherheitsstände gesichert · ${Number(data.security_missing_count || 0)} Sicherheitsstände fehlen · ${Number(data.security_unresolved_count || 0)} nicht eindeutig zugeordnet · ${Number(data.skipped_count || 0)} übersprungen`;
+  status.textContent = `${Number(data.saved_count || 0)} Cache(s) gesichert · ${Number(data.security_saved_count || 0)} Sicherheitsstände gesichert · ${Number(data.security_missing_count || 0)} Sicherheitsstände fehlen · ${Number(data.security_unresolved_count || 0)} nicht eindeutig zugeordnet · ${Number(data.skipped_count || 0)} übersprungen · ${Number(data.warning_count || 0)} Warnung(en)`;
   status.classList.remove('hidden', 'error-state');
   list.innerHTML = (data.entries || []).length ? data.entries.map((item) => {
     const saved = item.status === 'saved';
-    const label = saved ? 'gesichert' : item.status === 'missing' ? 'nicht vorhanden' : 'übersprungen';
+    const label = saved ? 'gesichert' : item.status === 'missing' ? 'nicht vorhanden' : item.status === 'warning' ? 'nicht gesichert' : 'übersprungen';
     const badge = saved ? 'success' : item.status === 'missing' ? 'inactive' : 'warning';
     const size = saved && item.tar_bytes ? ` · ${formatBytes(item.tar_bytes)}` : '';
     const reason = item.reason ? `<small>${esc(item.reason)}</small>` : '';

@@ -29,7 +29,9 @@ def _isolated_security_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.setattr(security_store, "SECURITY_DATABASE_PATH", database)
     monkeypatch.setattr(security_store, "INITIAL_ADMIN_PATH", security_dir / "initial-admin.txt")
     monkeypatch.setattr(secret_crypto, "MASTER_KEY_PATH", security_dir / "master.key")
-    security_store.initialize_security_store("Security-Test-Password-2026!")
+    security_store.initialize_security_store()
+    admin = next(item for item in security_store.list_users() if item["role"] == "admin")
+    security_store.set_user_password(int(admin["id"]), "Security-Test-Password-2026!", must_change_password=False)
     return database
 
 
@@ -91,7 +93,7 @@ def test_restore_permissions_manifest_cannot_escape_staging(tmp_path: Path):
     staging.mkdir()
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT}))
+        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"sqlite-placeholder")
         archive.writestr("permissions.json", json.dumps({"../victim": 0o777}))
@@ -109,7 +111,7 @@ def test_restore_rejects_archives_exceeding_entry_limit(monkeypatch, tmp_path: P
     staging.mkdir()
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT}))
+        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"db")
     archive_bytes.seek(0)
@@ -122,7 +124,7 @@ def test_new_manager_backups_require_strong_encryption(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(backups, "BACKUP_DIR", tmp_path / "backups")
     monkeypatch.setattr(backups, "DATA_DIR", tmp_path)
     with pytest.raises(ValueError, match="verschlüsselt"):
-        backups.create_full_backup("1.0.38", "insecure", None)
+        backups.create_full_backup("1.1.0", "insecure", None)
     with pytest.raises(ValueError, match="mindestens 12"):
         backups._encrypt_backup(tmp_path / "missing.zip", tmp_path / "out.bbm", {}, "too-short")
 
@@ -203,7 +205,7 @@ def test_restore_rejects_single_entry_with_extreme_compression(monkeypatch, tmp_
     staging.mkdir()
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT}))
+        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"0" * 4096)
     archive_bytes.seek(0)
@@ -217,7 +219,7 @@ def test_restore_rejects_out_of_range_permission_modes(tmp_path: Path):
     staging.mkdir()
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT}))
+        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"db")
         archive.writestr("permissions.json", json.dumps({"data/manager.db": 0o10000}))
@@ -312,3 +314,43 @@ def test_entrypoint_marks_runtime_security_as_prepared_before_unprivileged_api_s
     api_pos = entrypoint.index("runuser -u borg -- env HOME=/repositories")
     assert bootstrap_pos < marker_pos < api_pos
     assert 'if os.getenv("BBM_RUNTIME_SECURITY_PREPARED") != "1":' in main
+
+
+def test_session_touch_does_not_fail_when_security_database_is_busy(monkeypatch, tmp_path: Path):
+    database = _isolated_security_store(monkeypatch, tmp_path)
+    user = security_store.authenticate_user("admin", "Security-Test-Password-2026!")
+    assert user is not None
+    token = security_store.create_session(user, 3600)
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE sessions SET last_seen_at=?", (stale,))
+        connection.commit()
+
+    blocker = sqlite3.connect(database, timeout=0.1)
+    try:
+        blocker.execute("BEGIN IMMEDIATE")
+        blocker.execute(
+            "INSERT INTO security_events(created_at,event) VALUES(?,?)",
+            (datetime.now(timezone.utc).isoformat(), "hold-write-lock"),
+        )
+        # Refreshing last_seen_at is optional. A concurrent security-store writer
+        # must never turn a valid session into a 500 response.
+        resolved = security_store.get_session_user(token)
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    assert resolved is not None
+    assert resolved.username == "admin"
+
+
+def test_session_touch_uses_separate_conditional_best_effort_write():
+    source = Path(security_store.__file__).read_text(encoding="utf-8")
+    start = source.index("def get_session_user(token: str | None, touch: bool = True)")
+    end = source.index("\n\ndef _user_agent_hash", start)
+    helper = source[start:end]
+    assert "with _connect() as connection" in helper
+    assert "_touch_session_last_seen_best_effort" in helper
+    assert 'connection.execute("UPDATE sessions SET last_seen_at' not in helper
+    assert "WHERE id=? AND last_seen_at=?" in source
+    assert "timeout_seconds=0.5" in source

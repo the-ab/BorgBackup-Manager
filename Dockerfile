@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     BBM_DATA_DIR=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssh-client openssh-server openssl borgbackup tzdata \
+    && apt-get install -y --no-install-recommends openssh-client openssh-server openssl borgbackup fuse3 python3-pyfuse3 util-linux tzdata \
     && borg_version="$(borg --version 2>/dev/null | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)" \
     && test -n "$borg_version" \
     && dpkg --compare-versions "$borg_version" ge 1.4.0 \
@@ -26,7 +26,9 @@ COPY docker/sshd_config /etc/ssh/sshd_config
 RUN groupadd --gid 1000 borg \
     && useradd --uid 1000 --gid borg --home-dir /repositories --shell /bin/sh borg \
     && passwd -d borg \
-    && mkdir -p /data /repositories /run/sshd \
+    && mkdir -p /data /repositories /archive-mounts /run/sshd \
+    && printf '%s\n' 'user_allow_other' > /etc/fuse.conf \
+    && chmod 644 /etc/fuse.conf \
     && chmod 755 /usr/local/bin/bbm-entrypoint /usr/local/bin/bbm-borg-serve
 
 EXPOSE 8443 2222

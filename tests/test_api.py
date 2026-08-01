@@ -11,8 +11,6 @@ from pathlib import Path
 
 TEST_DATA_DIR = Path(os.environ.get("BBM_DATA_DIR", str(Path(tempfile.gettempdir()) / f"bbm-test-data-{os.getpid()}")))
 shutil.rmtree(TEST_DATA_DIR, ignore_errors=True)
-os.environ.setdefault("BBM_ADMIN_TOKEN", "test-token")
-os.environ.setdefault("BBM_ALLOW_LEGACY_TOKEN_AUTH", "1")
 os.environ.setdefault("BBM_DATA_DIR", str(TEST_DATA_DIR))
 os.environ.setdefault("BBM_DATABASE_URL", "sqlite://")
 
@@ -27,7 +25,9 @@ from app import runner, service
 from app.vault import get_repository_secret
 
 
-AUTH = {"Authorization": "Bearer test-token"}
+from tests.auth_helpers import admin_headers, TEST_ADMIN_PASSWORD
+
+AUTH = admin_headers()
 HOST_KEY = "host.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEtesthostkeymaterial"
 
 BROWSER = {"X-BBM-Request": "1"}
@@ -236,7 +236,6 @@ def test_managed_repository_is_derived_and_secret_is_encrypted(monkeypatch):
         row = db.scalar(select(Repository).where(Repository.id == body["id"]))
         assert row is not None
         assert row.storage_path.replace("\\", "/").endswith("managed-main-612a8600")
-        assert row.encrypted_passphrase is None
         assert get_repository_secret(row, "passphrase") == "not stored in plaintext"
 
 
@@ -311,7 +310,6 @@ def test_managed_keyfile_is_captured_encrypted_and_removed(monkeypatch, tmp_path
     assert current["initialized"] is True
     with SessionLocal() as db:
         row = db.get(Repository, repository_id)
-        assert row.encrypted_keyfile is None
         assert get_repository_secret(row, "keyfile") == "SECRET-BORG-KEYFILE"
     assert list(tmp_path.iterdir()) == []
 
@@ -944,8 +942,25 @@ def test_archive_browser_listing_parser_returns_direct_children_only():
 
 
 def test_login_sets_secure_httponly_session_cookie_and_cookie_auth_works():
+    username = f"first-login-{int(time.time() * 1000)}"
+    initial_password = "Initial-Test-Password-2026!"
+    changed_password = "Changed-Test-Password-2026!"
+    with TestClient(app, base_url="https://testserver") as admin_client:
+        created = admin_client.post(
+            "/api/users", headers=AUTH,
+            json={
+                "username": username,
+                "password": initial_password,
+                "password_confirm": initial_password,
+                "role": "user",
+                "must_change_password": True,
+            },
+        )
+        assert created.status_code == 201
+        user_id = created.json()["id"]
+
     with TestClient(app, base_url="https://testserver") as client:
-        response = client.post("/api/auth/login", headers=BROWSER, json={"username": "admin", "password": "test-token"})
+        response = client.post("/api/auth/login", headers=BROWSER, json={"username": username, "password": initial_password})
         assert response.status_code == 200
         cookie = response.headers.get("set-cookie", "")
         assert "HttpOnly" in cookie
@@ -957,18 +972,20 @@ def test_login_sets_secure_httponly_session_cookie_and_cookie_auth_works():
         assert status.json()["must_change_password"] is True
         assert client.get("/api/hosts").status_code == 403
         changed = client.post("/api/auth/change-password", headers=BROWSER, json={
-            "current_password": "test-token",
-            "new_password": "New-Test-Password-2026!",
-            "new_password_confirm": "New-Test-Password-2026!",
+            "current_password": initial_password,
+            "new_password": changed_password,
+            "new_password_confirm": changed_password,
         })
         assert changed.status_code == 200
         assert client.get("/api/auth/status").status_code == 401
         relogin = client.post("/api/auth/login", headers=BROWSER, json={
-            "username": "admin", "password": "New-Test-Password-2026!",
+            "username": username, "password": changed_password,
         })
         assert relogin.status_code == 200
-        assert client.get("/api/hosts").status_code == 200
+        assert client.get("/api/jobs").status_code == 200
 
+    with TestClient(app) as admin_client:
+        assert admin_client.delete(f"/api/users/{user_id}", headers=AUTH).status_code == 204
 
 def test_session_cookie_survives_reload_on_http_proxy_origin(monkeypatch):
     record = next(item for item in main_module.list_users() if item["username"] == "admin")
@@ -1187,7 +1204,7 @@ def test_admin_can_manage_users_and_operator_cannot_change_infrastructure():
         assert denied.status_code == 403
         assert operator_client.get("/api/runs?limit=10").status_code == 200
         assert operator_client.get("/api/runs/999999").status_code == 403
-        assert operator_client.get("/api/mounts").status_code == 403
+        assert operator_client.get("/api/archive-mounts").status_code == 403
         assert operator_client.get("/api/repositories/999999/archives").status_code == 403
         assert operator_client.post("/api/jobs/999999/actions/backup", headers=BROWSER).status_code == 403
         assert operator_client.post("/api/repositories/999999/test", headers=BROWSER).status_code == 403
@@ -1204,7 +1221,7 @@ def test_session_token_is_only_stored_as_hash():
         response = client.post(
             "/api/auth/login",
             headers=BROWSER,
-            json={"username": "admin", "password": "New-Test-Password-2026!"},
+            json={"username": "admin", "password": TEST_ADMIN_PASSWORD},
         )
         assert response.status_code == 200
         raw_cookie = client.cookies.get(main_module.SESSION_COOKIE_NAME)
@@ -1384,46 +1401,6 @@ def test_external_repository_browser_works_without_job(monkeypatch):
     assert payload["repository_id"] == repository["id"]
     assert payload["access_mode"] == "manager-local"
     assert payload["entries"][0]["name"] == "home"
-
-
-def test_legacy_external_access_client_is_retired_without_deleting_repository():
-    from uuid import uuid4
-
-    suffix = uuid4().hex[:8]
-    with TestClient(app):
-        with SessionLocal() as db:
-            host = Host(
-                name=f"legacy-access-{suffix}", address="10.70.0.1", port=22,
-                username="root", enabled=True,
-            )
-            db.add(host)
-            db.flush()
-            repository = Repository(
-                name=f"legacy-external-{suffix}",
-                location="ssh://legacy@example.invalid:23/./repository",
-                encryption_mode="none",
-                storage_path=None,
-                access_host_id=host.id,
-                external_ssh_key_path="~/.ssh/legacy",
-                external_known_hosts_path="~/.ssh/legacy_known_hosts",
-                initialized=True,
-                extra_env_json="{}",
-            )
-            db.add(repository)
-            db.commit()
-            repository_id = repository.id
-
-        main_module.migrate_legacy_external_repository_access()
-
-        with SessionLocal() as db:
-            repository = db.get(Repository, repository_id)
-            assert repository is not None
-            assert repository.access_host_id is None
-            assert repository.external_ssh_key_path is None
-            assert repository.external_known_hosts_path is None
-            assert repository.initialized is False
-            assert "Manager-SSH-Schlüssel" in repository.validation_error
-
 
 
 def test_external_repository_failure_is_concise_and_details_are_persistent(monkeypatch):
@@ -2922,15 +2899,16 @@ def test_manager_backup_can_be_uploaded_as_raw_body(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(backups_module, "BACKUP_DIR", backup_dir)
     monkeypatch.setattr(backups_module, "DATA_DIR", data_dir)
 
-    name = "borgbackup-manager-backup-v1.0.42-20260719-123000-upload-api.bbm"
+    name = "borgbackup-manager-backup-v1.1.0-20260719-123000-upload-api.bbm"
     header = {
         "format": backups_module.BACKUP_ENVELOPE_FORMAT,
-        "format_version": 1,
-        "app_version": "1.0.42",
+        "format_version": 2,
+        "app_version": "1.1.0",
         "created_at": "2026-07-19T12:30:00+00:00",
         "label": "upload-api",
         "encrypted": True,
-        "cipher": "AES-256-GCM",
+        "cipher": "AES-256-GCM-stream",
+        "tag_bytes": 16,
         "kdf": "scrypt-n32768-r8-p1",
         "salt": base64.b64encode(b"s" * 16).decode("ascii"),
         "nonce": base64.b64encode(b"n" * 12).decode("ascii"),

@@ -22,9 +22,18 @@ def test_standalone_ghcr_compose_bundle_is_complete():
     assert "BBM_SHOW_INITIAL_ADMIN_ON_START=1" in sample
     assert "BBM_SHOW_INITIAL_ADMIN_ON_START: ${BBM_SHOW_INITIAL_ADMIN_ON_START:-1}" in compose
     assert "${BBM_REPOSITORY_PATH:-/docker_data/borgbackup-manager/repositories}:/repositories:rslave" in compose
-    assert "./.env:/run/bbm-host.env" in compose
+    assert "./.env:/run/bbm-host.env" not in compose
     assert "README.de.md or README.md" in compose
     assert "README.de.md / README.md" in sample
+    assert "BBM_ARCHIVE_MOUNT_PATH=" in sample
+    assert "BBM_ARCHIVE_MOUNTS_ENABLED: '1'" in compose
+    assert "/dev/fuse:/dev/fuse" in compose
+    assert "SYS_ADMIN" in compose
+    assert "apparmor:unconfined" in compose
+    assert "propagation: rshared" in compose
+    assert not (ROOT / "compose.archive-mounts.yaml").exists()
+    assert not (ROOT / "docker-compose/compose.archive-mounts.yaml").exists()
+
 
 
 def test_standalone_env_reference_documents_every_compose_variable():
@@ -78,9 +87,11 @@ def test_updater_preserves_standalone_compose_bundle():
     updater = (ROOT / "update.sh").read_text(encoding="utf-8")
     release_check = (ROOT / "scripts/release-check.sh").read_text(encoding="utf-8")
     assert "app docker docker-compose tests" in updater
+    assert "compose.yaml" in updater and "Dockerfile" in updater
     assert '"compose.yaml", "docker-compose", "Dockerfile"' in updater
     assert '"VERSION", "compose.yaml", "docker-compose"' in updater
     assert "docker-compose/compose.yaml docker-compose/.env.example" in release_check
     assert "docker-compose/README.de.md docker-compose/README.md" in release_check
     assert "Runtime directory must not be released" in release_check
+    assert "data repositories archive-mounts" in release_check
     assert "docker-compose/.env" in release_check

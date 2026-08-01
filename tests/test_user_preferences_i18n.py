@@ -4,6 +4,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.main import app
+from tests.auth_helpers import admin_headers
 
 
 PROJECT_ROOT = Path(__file__).parents[1]
@@ -12,9 +13,9 @@ PROJECT_ROOT = Path(__file__).parents[1]
 def test_user_preferences_are_persisted_and_returned_by_auth_status():
     username = f'pref-{uuid4().hex[:12]}'
     password = 'Preferences-Test-1!'
-    admin_headers = {'Authorization': 'Bearer test-token'}
+    headers = admin_headers()
     with TestClient(app, base_url='https://testserver') as client:
-        created = client.post('/api/users', headers=admin_headers, json={
+        created = client.post('/api/users', headers=headers, json={
             'username': username, 'password': password, 'password_confirm': password,
             'role': 'user', 'must_change_password': False,
         })
@@ -32,7 +33,7 @@ def test_user_preferences_are_persisted_and_returned_by_auth_status():
         assert status.status_code == 200
         assert status.json()['language'] == 'en'
         assert status.json()['appearance'] == 'dark'
-        assert client.delete(f'/api/users/{user_id}', headers=admin_headers).status_code == 204
+        assert client.delete(f'/api/users/{user_id}', headers=admin_headers()).status_code == 204
 
 
 def test_language_and_theme_controls_are_per_user_not_global_settings():
@@ -76,7 +77,7 @@ def test_german_and_english_ui_resources_cover_all_main_areas():
 
 
 def test_release_notes_endpoint_follows_requested_language():
-    headers = {'Authorization': 'Bearer test-token'}
+    headers = admin_headers()
     with TestClient(app, base_url='https://testserver') as client:
         german = client.get('/api/system/release-notes?language=de', headers=headers)
         english = client.get('/api/system/release-notes?language=en', headers=headers)

@@ -7,8 +7,6 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-os.environ.setdefault("BBM_ADMIN_TOKEN", "test-token")
-os.environ.setdefault("BBM_ALLOW_LEGACY_TOKEN_AUTH", "1")
 os.environ.setdefault("BBM_DATABASE_URL", "sqlite://")
 
 from app import service
@@ -270,16 +268,15 @@ def test_webui_is_https_only_with_persistent_tls_and_secure_sessions():
     assert 'Cache-Control' in main and 'no-store' in main
 
 
-def test_historical_default_cookie_name_is_normalized_without_replacing_bind_mount():
+def test_session_cookie_uses_current_configuration_without_legacy_rewrites():
     config = (PROJECT_ROOT / "app/config.py").read_text(encoding="utf-8")
     entrypoint = (PROJECT_ROOT / "docker/entrypoint.sh").read_text(encoding="utf-8")
     updater = (PROJECT_ROOT / "update.sh").read_text(encoding="utf-8")
-    assert '_CONFIGURED_SESSION_COOKIE_NAME in {"", "bbm_session"}' in config
-    assert 'SESSION_COOKIE_NAME = (' in config
-    assert "Historical session cookie name detected; using bbm_session_v2 at runtime" in entrypoint
+    assert '_CONFIGURED_SESSION_COOKIE_NAME = os.getenv("BBM_SESSION_COOKIE_NAME", "").strip()' in config
+    assert 'SESSION_COOKIE_NAME = _CONFIGURED_SESSION_COOKIE_NAME or "bbm_session_v2"' in config
+    assert "Historical session cookie name detected" not in entrypoint
     assert "sed -i 's/^BBM_SESSION_COOKIE_NAME" not in entrypoint
-    assert 'current[index] = "BBM_SESSION_COOKIE_NAME=bbm_session_v2"' in updater
-
+    assert 'current[index] = "BBM_SESSION_COOKIE_NAME=bbm_session_v2"' not in updater
 
 def test_job_actions_and_restore_ui_are_refresh_stable_and_explicit():
     javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
@@ -302,8 +299,9 @@ def test_authentication_uses_hashed_passwords_and_server_side_sessions():
     assert "hashlib.scrypt" in security_store
     assert "token_hash = hashlib.sha256" in security_store
     assert "CREATE TABLE IF NOT EXISTS sessions" in security_store
-    assert "ALLOW_LEGACY_TOKEN_AUTH" in security
-    assert "hmac.compare_digest" in security
+    assert "ALLOW_LEGACY_TOKEN_AUTH" not in security
+    assert "BBM_ADMIN_TOKEN" not in security
+    assert "get_session_user" in security
 
 
 def test_installer_defaults_to_persistent_docker_data_paths():
@@ -327,7 +325,9 @@ def test_update_healthcheck_separates_readiness_from_component_diagnostics():
 
     assert "probe_https_endpoint /api/ready" in update
     assert "probe_https_endpoint /api/health/strict" in update
-    assert "probe_https_endpoint /" in update
+    assert "probe_https_endpoint /api/ready" in update
+    assert "probe_https_endpoint /api/health/strict" in update
+    assert "probe_https_endpoint /" + "\n" not in update
     assert "for attempt in {1..90}" in update
     assert "Das Update wird nicht zurückgerollt" in update
     assert "/api/ready" in compose
@@ -434,31 +434,39 @@ def test_restore_script_supports_encrypted_manager_backups():
     restore = (PROJECT_ROOT / "restore-backup.sh").read_text(encoding="utf-8")
     assert "BBM-BACKUP-1" in restore
     assert "python3-cryptography" in restore
-    assert "AESGCM" in restore
+    assert "Cipher" in restore
+    assert "modes.GCM" in restore
+    assert 'MIN_SUPPORTED_BACKUP_VERSION="1.1.0"' in restore
     assert "Scrypt" in restore
     assert "Backup-Passphrase" in restore
 
 
-def test_security_migration_removes_legacy_secrets_from_host_env():
+def test_updater_canonicalizes_env_and_removes_pre_v110_settings():
     compose = (PROJECT_ROOT / "compose.yaml").read_text(encoding="utf-8")
     entrypoint = (PROJECT_ROOT / "docker/entrypoint.sh").read_text(encoding="utf-8")
+    updater = (PROJECT_ROOT / "update.sh").read_text(encoding="utf-8")
 
     assert "env_file:" not in compose
     assert "BBM_ADMIN_TOKEN:" not in compose
     assert "BBM_SECRET_KEY:" not in compose
-    assert "./.env:/run/bbm-host.env" in compose
+    assert "./.env:/run/bbm-host.env" not in compose
     assert "python -m app.security_bootstrap" in entrypoint
-    assert 'legacy = {"BBM_ADMIN_TOKEN", "BBM_SECRET_KEY", "BBM_ALLOW_LEGACY_TOKEN_AUTH"}' in entrypoint
-    assert "removed from the host .env" in entrypoint
+    for obsolete in (
+        "COMPOSE_FILE", "BBM_ADMIN_TOKEN", "BBM_SECRET_KEY",
+        "BBM_ALLOW_LEGACY_TOKEN_AUTH", "BBM_TLS_CERT_FILE", "BBM_TLS_KEY_FILE",
+    ):
+        assert obsolete in updater
+    assert 'MIN_SUPPORTED_VERSION="1.1.0"' in updater
+    assert "compose.archive-mounts.yaml" in updater  # deletion/rollback cleanup only
 
 
-def test_security_bootstrap_migrates_manager_schema_before_repository_reads():
+def test_security_bootstrap_uses_only_current_security_store():
     bootstrap = (PROJECT_ROOT / "app/security_bootstrap.py").read_text(encoding="utf-8")
 
-    assert "from app.security_migrate import run_security_migration" in bootstrap
-    migration_pos = bootstrap.index("migration = run_security_migration()")
-    key_material_pos = bootstrap.index("_migrate_or_generate_ed25519(", migration_pos)
-    assert migration_pos < key_material_pos
+    assert "security_migrate" not in bootstrap
+    initialize_pos = bootstrap.index("initialize_security_store()")
+    key_material_pos = bootstrap.index("_get_or_generate_ed25519(", initialize_pos)
+    assert initialize_pos < key_material_pos
 
 
 def test_schedule_editor_supports_multiple_times_and_common_presets():
@@ -537,7 +545,7 @@ def test_repository_workspace_is_stacked_responsive_and_distinguishes_add_from_c
 def test_second_repository_run_remains_queued_until_first_finishes(monkeypatch):
     from app.security_store import initialize_security_store
 
-    initialize_security_store("Queue-Test-Admin-2026!")
+    initialize_security_store()
     Base.metadata.create_all(engine)
     suffix = uuid4().hex
     with SessionLocal() as db:
@@ -602,7 +610,7 @@ def test_update_output_is_compact_and_reports_authentication_state():
     main = (PROJECT_ROOT / "app/main.py").read_text(encoding="utf-8")
     assert 'response.read(1024)' in update
     assert 'content_type == "text/html"' in update
-    assert 'attempt >= 15' in update
+    assert 'attempt == 10 || attempt == 30 || attempt == 60' in update
     assert 'python -m app.account_recovery status --json' in update
     assert 'python -m app.account_recovery reset admin --admin' in update
     assert 'authentication_readiness()' in main
@@ -650,7 +658,8 @@ def test_release_contains_interactive_recovery_script_and_archive_statistics_ui(
     assert "app.account_recovery reset" in recovery
     assert "reset-admin" in recovery
     update = (PROJECT_ROOT / "update.sh").read_text(encoding="utf-8")
-    assert "compose.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh" in update
+    for item in ("compose.yaml", "Dockerfile", "install.sh", "update.sh", "recovery.sh", "restore-backup.sh"):
+        assert item in update
     assert '"install.sh", "update.sh", "recovery.sh", "restore-backup.sh"' in update
     assert "Originalgröße" in javascript
     assert "Komprimierte Größe" in javascript

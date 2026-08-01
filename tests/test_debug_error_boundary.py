@@ -189,3 +189,25 @@ def test_repository_traceback_is_compacted_and_persisted(tmp_path):
         assert "PermissionError" in content
     finally:
         _restore_handlers(root, previous)
+
+
+def test_archive_unmount_timeout_incident_is_logged_with_error_id(tmp_path, monkeypatch):
+    path = tmp_path / "debug.log"
+    root, previous = _install_temp_debug_log(path)
+    try:
+        class _Db:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def get(self, *_args): return None
+        monkeypatch.setattr(main_module, "SessionLocal", lambda: _Db())
+        exc = main_module.archive_unmount_incident(7, "/archive-mounts/repo/archive", "command timed out", status_code=504)
+        assert exc.status_code == 504
+        assert "Fehler-ID: BBM-" in str(exc.detail)
+        for handler in root.handlers:
+            handler.flush()
+        content = path.read_text(encoding="utf-8")
+        assert "Archive mount 7 could not be unmounted" in content
+        assert "command timed out" in content
+        assert str(exc.detail).split("Fehler-ID: ", 1)[1] in content
+    finally:
+        _restore_handlers(root, previous)

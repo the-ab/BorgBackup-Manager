@@ -7,6 +7,8 @@ umask 077
 DEFAULT_BASE_PATH="/docker_data/borgbackup-manager"
 DEFAULT_DATA_PATH="$DEFAULT_BASE_PATH/data"
 DEFAULT_REPOSITORY_PATH="$DEFAULT_BASE_PATH/repositories"
+DEFAULT_ARCHIVE_MOUNT_PATH="$DEFAULT_BASE_PATH/archive-mounts"
+MIN_SUPPORTED_BACKUP_VERSION="1.1.0"
 DEFAULT_TIMEZONE="Europe/Berlin"
 
 fail() { echo "Fehler: $*" >&2; exit 1; }
@@ -20,7 +22,12 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$TMP_DIR"' EXIT
 
 backup_passphrase=""
-if [ "$(head -c 13 -- "$BACKUP_FILE" 2>/dev/null || true)" = "BBM-BACKUP-1" ]; then
+if python3 - "$BACKUP_FILE" <<'PYMAGIC'
+from pathlib import Path
+import sys
+raise SystemExit(0 if Path(sys.argv[1]).read_bytes()[:13] == b"BBM-BACKUP-1\n" else 1)
+PYMAGIC
+then
   python3 -c 'import cryptography' >/dev/null 2>&1 || fail "Verschlüsseltes Backup benötigt python3-cryptography (Debian: apt install python3-cryptography)"
   read -r -s -p "Backup-Passphrase: " backup_passphrase
   echo
@@ -43,6 +50,19 @@ max_cache_entries = int(os.environ.get("BBM_BACKUP_CACHE_MAX_ENTRIES", "250000")
 max_compression_ratio = int(os.environ.get("BBM_BACKUP_MAX_COMPRESSION_RATIO", "250"))
 max_cache_compression_ratio = int(os.environ.get("BBM_BACKUP_CACHE_MAX_COMPRESSION_RATIO", "5000"))
 
+minimum_supported_version = (1, 1, 0)
+
+def version_tuple(value):
+    import re
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?", str(value or "").strip())
+    if not match:
+        raise SystemExit("Backup enthält keine gültige BorgBackup-Manager-Version")
+    return tuple(int(part) for part in match.groups())
+
+def require_supported_version(metadata):
+    if version_tuple(metadata.get("app_version")) < minimum_supported_version:
+        raise SystemExit("Backups vor BorgBackup Manager v1.1.0 werden nicht mehr unterstützt")
+
 with source.open("rb") as handle:
     prefix = handle.read(len(magic))
 
@@ -52,7 +72,6 @@ if prefix == magic:
     try:
         from cryptography.exceptions import InvalidTag
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
     except ImportError as exc:
         raise SystemExit("python3-cryptography fehlt") from exc
@@ -77,6 +96,9 @@ if prefix == magic:
         nonce = base64.b64decode(header["nonce"], validate=True)
     except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SystemExit("Verschlüsselter Backup-Header ist ungültig") from exc
+    require_supported_version(header)
+    if header.get("format_version") != 2 or header.get("cipher") != "AES-256-GCM-stream":
+        raise SystemExit("Backup verwendet ein nicht mehr unterstütztes Verschlüsselungsformat")
     if header.get("backup_type") == "cache" or header.get("content_format") == "borgbackup-manager-cache-backup":
         raise SystemExit(
             "Diese Datei ist ein separates Cache-Backup und kein Manager-Vollbackup. "
@@ -89,44 +111,35 @@ if prefix == magic:
     passphrase = os.environ.get("BBM_RESTORE_BACKUP_PASSPHRASE", "")
     key = Scrypt(salt=salt, length=32, n=2**15, r=8, p=1).derive(passphrase.encode())
     aad = magic + raw_length + header_bytes
-    if header.get("format_version") == 2 and header.get("cipher") == "AES-256-GCM-stream":
-        tag_bytes = int(header.get("tag_bytes", 16))
-        if tag_bytes != 16:
-            raise SystemExit("Ungültige GCM-Tag-Größe im Backup")
-        size = source.stat().st_size
-        ciphertext_size = size - header_end - tag_bytes
-        if ciphertext_size <= 0:
-            raise SystemExit("Verschlüsseltes Backup ist unvollständig")
-        decrypted_path = destination / ".manager-backup-decrypted.zip"
-        with source.open("rb") as encrypted:
-            encrypted.seek(size - tag_bytes)
-            tag = encrypted.read(tag_bytes)
-            encrypted.seek(header_end)
-            decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag)).decryptor()
-            decryptor.authenticate_additional_data(aad)
-            remaining = ciphertext_size
-            try:
-                with decrypted_path.open("wb") as output:
-                    while remaining > 0:
-                        chunk = encrypted.read(min(1024 * 1024, remaining))
-                        if not chunk:
-                            raise SystemExit("Verschlüsseltes Backup ist unvollständig")
-                        remaining -= len(chunk)
-                        output.write(decryptor.update(chunk))
-                    output.write(decryptor.finalize())
-            except InvalidTag as exc:
-                decrypted_path.unlink(missing_ok=True)
-                raise SystemExit("Backup-Passphrase ist falsch oder das Backup wurde verändert") from exc
-        archive_source = decrypted_path
-    else:
-        raw = source.read_bytes()
+    tag_bytes = int(header.get("tag_bytes", 16))
+    if tag_bytes != 16:
+        raise SystemExit("Ungültige GCM-Tag-Größe im Backup")
+    size = source.stat().st_size
+    ciphertext_size = size - header_end - tag_bytes
+    if ciphertext_size <= 0:
+        raise SystemExit("Verschlüsseltes Backup ist unvollständig")
+    decrypted_path = destination / ".manager-backup-decrypted.zip"
+    with source.open("rb") as encrypted:
+        encrypted.seek(size - tag_bytes)
+        tag = encrypted.read(tag_bytes)
+        encrypted.seek(header_end)
+        decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag)).decryptor()
+        decryptor.authenticate_additional_data(aad)
+        remaining = ciphertext_size
         try:
-            decrypted = AESGCM(key).decrypt(nonce, raw[header_end:], raw[:header_end])
-        except Exception as exc:
+            with decrypted_path.open("wb") as output:
+                while remaining > 0:
+                    chunk = encrypted.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise SystemExit("Verschlüsseltes Backup ist unvollständig")
+                    remaining -= len(chunk)
+                    output.write(decryptor.update(chunk))
+                output.write(decryptor.finalize())
+        except InvalidTag as exc:
+            decrypted_path.unlink(missing_ok=True)
             raise SystemExit("Backup-Passphrase ist falsch oder das Backup wurde verändert") from exc
-        if not decrypted.startswith(b"PK"):
-            raise SystemExit("Entschlüsseltes Backup ist kein gültiges ZIP-Archiv")
-        archive_source = io.BytesIO(decrypted)
+    archive_source = decrypted_path
+
 else:
     if source.stat().st_size > max_file_bytes:
         raise SystemExit(f"Backup-Datei überschreitet das Größenlimit von {max_file_bytes} Bytes")
@@ -159,6 +172,7 @@ with zipfile.ZipFile(archive_source) as archive:
         raise SystemExit("Manifest fehlt oder ist ungültig") from exc
     if not isinstance(manifest, dict) or manifest.get("format") != "borgbackup-manager-full-backup":
         raise SystemExit("Datei ist kein BorgBackup-Manager-Vollbackup")
+    require_supported_version(manifest)
     include_cache = bool(manifest.get("borg_cache_included") or manifest.get("client_borg_cache_included"))
     entry_limit = max_cache_entries if include_cache else max_entries
     uncompressed_limit = max_cache_uncompressed_bytes if include_cache else max_uncompressed_bytes
@@ -238,17 +252,18 @@ prompt() {
 
 prompt BBM_DATA_PATH "Neues persistentes Manager-Datenverzeichnis" "$(env_value BBM_DATA_PATH "$DEFAULT_DATA_PATH")"
 prompt BBM_REPOSITORY_PATH "Verzeichnismount mit den vorhandenen Borg-Repositories" "$(env_value BBM_REPOSITORY_PATH "$DEFAULT_REPOSITORY_PATH")"
+prompt BBM_ARCHIVE_MOUNT_PATH "Host-Verzeichnis für schreibgeschützte Archiv-Mounts" "$(env_value BBM_ARCHIVE_MOUNT_PATH "$DEFAULT_ARCHIVE_MOUNT_PATH")"
 prompt BBM_REPOSITORY_PUBLIC_HOST "Vom Client erreichbarer DNS-Name / IP des neuen Servers" "$(env_value BBM_REPOSITORY_PUBLIC_HOST "$(hostname -f 2>/dev/null || hostname)")"
-prompt BBM_HTTPS_PORT "HTTPS-WebUI-Port" "$(env_value BBM_HTTPS_PORT "$(env_value BBM_HTTP_PORT 8443)")"
+prompt BBM_HTTPS_PORT "HTTPS-WebUI-Port" "$(env_value BBM_HTTPS_PORT 8443)"
 prompt BBM_REPOSITORY_SSH_PORT "Repository-SSH-Port" "$(env_value BBM_REPOSITORY_SSH_PORT 2222)"
 
-[[ "$BBM_DATA_PATH" == /* && "$BBM_REPOSITORY_PATH" == /* ]] || fail "Daten- und Repository-Pfad müssen absolut sein"
+[[ "$BBM_DATA_PATH" == /* && "$BBM_REPOSITORY_PATH" == /* && "$BBM_ARCHIVE_MOUNT_PATH" == /* ]] || fail "Daten- und Repository-Pfad müssen absolut sein"
 [[ "$BBM_DATA_PATH" != "$BBM_REPOSITORY_PATH" ]] || fail "Daten- und Repository-Pfad dürfen nicht identisch sein"
 [[ "$BBM_DATA_PATH/" != "$BBM_REPOSITORY_PATH/"* ]] || fail "Das Manager-Datenverzeichnis darf nicht innerhalb des Repository-Verzeichnisses liegen"
 RESTORE_TIMEZONE="$(env_value TZ "$DEFAULT_TIMEZONE")"
 [[ -n "$RESTORE_TIMEZONE" && "$RESTORE_TIMEZONE" =~ ^[A-Za-z0-9_+./-]+$ && "$RESTORE_TIMEZONE" != /* && "$RESTORE_TIMEZONE" != *'..'* ]] \
   || fail "Zeitzone im Backup ist ungültig: $RESTORE_TIMEZONE"
-mkdir -p -- "$BBM_DATA_PATH" "$BBM_REPOSITORY_PATH"
+mkdir -p -- "$BBM_DATA_PATH" "$BBM_REPOSITORY_PATH" "$BBM_ARCHIVE_MOUNT_PATH"
 if find "$BBM_DATA_PATH" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
   SAFETY_COPY="${BBM_DATA_PATH%/}-vor-restore-$(date +%Y%m%d-%H%M%S)"
   echo "Vorhandene Manager-Daten werden nach $SAFETY_COPY verschoben."
@@ -257,8 +272,6 @@ if find "$BBM_DATA_PATH" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
 fi
 cp -a -- "$TMP_DIR/data/." "$BBM_DATA_PATH/"
 
-LEGACY_ADMIN_TOKEN="$(env_value BBM_ADMIN_TOKEN '')"
-LEGACY_SECRET_KEY="$(env_value BBM_SECRET_KEY '')"
 cat > .env <<EOF
 TZ=$RESTORE_TIMEZONE
 BBM_HTTPS_PORT=$BBM_HTTPS_PORT
@@ -289,6 +302,7 @@ BBM_REPOSITORY_PUBLIC_HOST=$BBM_REPOSITORY_PUBLIC_HOST
 BBM_REPOSITORY_SSH_PORT=$BBM_REPOSITORY_SSH_PORT
 BBM_DATA_PATH=$BBM_DATA_PATH
 BBM_REPOSITORY_PATH=$BBM_REPOSITORY_PATH
+BBM_ARCHIVE_MOUNT_PATH=$BBM_ARCHIVE_MOUNT_PATH
 BBM_BORG_UID=$(env_value BBM_BORG_UID 1000)
 BBM_BORG_GID=$(env_value BBM_BORG_GID 1000)
 BBM_STORAGE_GUARD_ENABLED=$(env_value BBM_STORAGE_GUARD_ENABLED 1)
@@ -297,10 +311,6 @@ BBM_HEALTH_REQUIRE_SSHD=$(env_value BBM_HEALTH_REQUIRE_SSHD 1)
 BBM_LOG_MAX_BYTES=$(env_value BBM_LOG_MAX_BYTES 10485760)
 BBM_LOG_ROTATIONS=$(env_value BBM_LOG_ROTATIONS 5)
 EOF
-# Legacy values are only retained when restoring a pre-0.9 backup. The first
-# 0.9 startup migrates credentials and repository secrets into /data/security.
-if [[ -n "$LEGACY_ADMIN_TOKEN" ]]; then printf 'BBM_ADMIN_TOKEN=%s\n' "$LEGACY_ADMIN_TOKEN" >> .env; fi
-if [[ -n "$LEGACY_SECRET_KEY" ]]; then printf 'BBM_SECRET_KEY=%s\n' "$LEGACY_SECRET_KEY" >> .env; fi
 chmod 600 .env
 
 echo "Manager-Daten wiederhergestellt. Installation wird mit Sicherheitsdatenbank und Master-Key abgeschlossen."

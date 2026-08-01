@@ -7,6 +7,7 @@ cd "$project_root"
 required_files=(
   LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md
   .gitignore .dockerignore VERSION app/release.py scripts/project-audit.py
+  compose.yaml
   docker-compose/compose.yaml docker-compose/.env.example
   docker-compose/README.de.md docker-compose/README.md
 )
@@ -18,7 +19,7 @@ for forbidden in .env docker-compose/.env install-config.env docker-compose.over
   test ! -e "$forbidden" || { echo "Local-only file must not be released: $forbidden" >&2; exit 1; }
 done
 
-for runtime_directory in data repositories; do
+for runtime_directory in data repositories archive-mounts; do
   test ! -e "$runtime_directory" || { echo "Runtime directory must not be released: $runtime_directory" >&2; exit 1; }
 done
 
@@ -40,8 +41,6 @@ trap cleanup_runtime EXIT
 
 BBM_DATA_DIR="$runtime_dir" \
 BBM_DATABASE_URL="sqlite:///$runtime_dir/test.db" \
-BBM_ADMIN_TOKEN="${BBM_ADMIN_TOKEN:-test-token}" \
-BBM_ALLOW_LEGACY_TOKEN_AUTH="${BBM_ALLOW_LEGACY_TOKEN_AUTH:-1}" \
 pytest -q
 
 cleanup_runtime

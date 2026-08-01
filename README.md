@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.2.3
+# BorgBackup Manager 1.2.9
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -17,7 +17,7 @@ German documentation is available in [`README.de.md`](README.de.md). Installatio
 - Managed-repository service: integrated OpenSSH with restricted `borg serve`
 - Persistent application data: `/docker_data/borgbackup-manager/data` by default
 - Persistent managed repositories: `/docker_data/borgbackup-manager/repositories` by default
-- Published GHCR image: `ghcr.io/the-ab/borgbackup-manager:latest` or pinned `ghcr.io/the-ab/borgbackup-manager:v1.2.3`
+- Published GHCR image: `ghcr.io/the-ab/borgbackup-manager:latest` or pinned `ghcr.io/the-ab/borgbackup-manager:v1.2.9`
 - Local source build: `borgbackup-manager:latest`
 - Default timezone: `Europe/Berlin`
 - Container name: `borgbackup-manager`
@@ -40,7 +40,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.2.3.zip
+BorgBackup-Manager-1.2.9.zip
 ```
 
 The documentation naming convention is:
@@ -100,7 +100,7 @@ Backup and restore operations run on the relevant device because that is where s
 | Client version | Status |
 |---|---|
 | 1.2.0–1.2.4 | Usable, critical security warning |
-| 1.2.5–1.2.7 | Usable, update warning |
+| 1.2.6–1.2.8 | Usable, update warning |
 | 1.2.8–1.4.x | Supported |
 | older than 1.2.0 | Unsupported |
 | 2.x | Incompatible |
@@ -335,6 +335,8 @@ The archive browser is structured like a file browser and uses Borg JSON metadat
 - symbolic-link targets,
 - export and restore of selected paths.
 
+An administrator can also mount one archive from a locally managed repository read-only below `BBM_ARCHIVE_MOUNT_PATH` by default. The normal Compose configuration provides `/dev/fuse`, `SYS_ADMIN`, the AppArmor allowance, and `rshared` mount propagation. External SSH repositories are deliberately excluded in this release. At most one mount is active per repository; repository runs wait and archive cleanup, compact, deletion, and rename remain blocked until unmount. Active mounts are shown in a dedicated panel and `/data/exports` remains reserved for temporary TAR.GZ downloads.
+
 ## Restore
 
 Restore supports archive and path selection, dry-run, original paths and an alternative destination. Extraction runs on the selected target device. Existing destination data should be protected with an application-consistent backup before restore.
@@ -343,9 +345,9 @@ Restore supports archive and path selection, dry-run, original paths and an alte
 
 Since v1.0.77 BorgBackup Manager uses two separate backup types. This keeps the actual manager recovery artifact small while large Borg caches can be backed up, retained and restored independently.
 
-**Manager backup** (`borgbackup-manager-backup-v...bbm`) contains the application and security databases, master key, settings, controller/repository SSH material, Borg keyfiles, TLS files and relevant migration metadata. Repository contents, complete run logs and Borg caches are not included in newly created manager backups. New manager backups are always streaming AES-256-GCM encrypted `.bbm` files protected by a non-stored passphrase of at least twelve characters. Historical combined v1.0.75/v1.0.76 backups and older manager `.zip` files remain readable.
+**Manager backup** (`borgbackup-manager-backup-v...bbm`) contains the application and security databases, master key, settings, controller/repository SSH material, Borg keyfiles and TLS files. Repository contents, complete run logs and Borg caches are not included. New manager backups are streaming AES-256-GCM encrypted `.bbm` files protected by a non-stored passphrase of at least twelve characters. Import and restore require backup metadata version v1.1.0 or newer; older formats are rejected.
 
-**Cache backup** (`borgbackup-manager-cache-v...bbm`, or `.zip` when explicitly unencrypted) is fully separate. It can include the manager Borg cache `/data/borg-cache`, Borg repository security state `/data/borg-security`, the managed source devices' private `$HOME/.cache/borgbackup-manager/repository-<ID>` caches together with their repository-specific `$HOME/.config/borg/security/<Borg-Repository-ID>` state, or both cache groups. Client caches and their Borg security state are streamed directly over verified controller SSH into the cache artifact; no second complete client-cache tree is staged under `/data`. Disabled devices are documented as skipped, a missing cache is recorded as absent, and failure to reach an enabled device aborts cache creation. Volatile Borg locks and symbolic links are excluded. Cache backup creation requires that no run is queued or active.
+**Cache backup** (`borgbackup-manager-cache-v...bbm`, or `.zip` when explicitly unencrypted) is fully separate. It can include the manager Borg cache `/data/borg-cache`, Borg repository security state `/data/borg-security`, the managed source devices' private `$HOME/.cache/borgbackup-manager/repository-<ID>` caches together with their repository-specific `$HOME/.config/borg/security/<Borg-Repository-ID>` state, or both cache groups. Client caches and their Borg security state are streamed directly over verified controller SSH into the cache artifact; no second complete client-cache tree is staged under `/data`. Disabled devices are documented as skipped, a missing cache is recorded as absent, and failure to reach an enabled device is recorded as a warning while the remaining client caches continue. Volatile Borg locks and symbolic links are excluded. Cache backup creation requires that no run is queued or active.
 
 Cache-backup encryption is **enabled and recommended by default**, but may be deliberately disabled. Encrypted cache backups use `.bbm`; unencrypted cache backups use `.zip`. This setting is independent from manager-backup encryption, which remains mandatory.
 
@@ -357,7 +359,7 @@ Compression is selectable per backup: none, Deflate 1, Deflate 6 (default), or D
 
 **Upload backup** accepts supported manager and cache `.bbm`/`.zip` artifacts, validates type, filename, limits and structure, never overwrites an existing file and stores it with mode `0600`.
 
-**Restore manager backup** restores only manager backups. Separate cache artifacts are not accepted as complete manager state. Historical combined v1.0.75/v1.0.76 artifacts remain compatible with full manager restore.
+**Restore manager backup** restores only manager backups. Separate cache artifacts are not accepted as complete manager state. Only manager backups with metadata version v1.1.0 or newer are supported.
 
 **Restore cache backup** can restore the manager Borg cache/security state separately and can restore saved client caches one current device/repository assignment at a time. Existing manager or client caches are preserved under timestamped `pre-bbm-restore` names before replacement. A saved client Borg security state is restored only if the corresponding 64-hex repository security directory is missing; an existing state is kept rather than overwritten with an older backup copy.
 
@@ -403,7 +405,7 @@ Two separate deployment paths are provided.
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.2.3.zip
+unzip /path/BorgBackup-Manager-1.2.9.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -437,7 +439,21 @@ Set `BBM_SHOW_INITIAL_ADMIN_ON_START=0` to disable automatic log output. When en
 
 The complete variable reference is available in [`docker-compose/README.md`](docker-compose/README.md); the German version is [`docker-compose/README.de.md`](docker-compose/README.de.md).
 
-The standalone Compose file uses `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` follows the current published image; pin a release such as `v1.2.3` for reproducible deployments. On first start the entrypoint safely initializes a fresh empty repository mount that Docker created as `root`. Existing non-empty repository data is never recursively re-owned automatically; correct host ownership, group permissions or ACLs instead. See [`INSTALLATION.md`](INSTALLATION.md) for the complete procedure.
+Archive mounts are enabled by the normal `compose.yaml`; no override file is required. The Docker host must provide `/dev/fuse`. The Compose file passes the device through, adds `SYS_ADMIN`, permits FUSE through AppArmor, and enables `rshared` mount propagation.
+
+```bash
+sudo modprobe fuse
+sudo mkdir -p /docker_data/borgbackup-manager/archive-mounts
+sudo chown 1000:1000 /docker_data/borgbackup-manager/archive-mounts
+sudo chmod 700 /docker_data/borgbackup-manager/archive-mounts
+
+docker compose pull
+docker compose up -d
+```
+
+`/data/exports` remains reserved for temporary TAR.GZ downloads; real mounts are kept separately below `/archive-mounts` and propagated to the host path.
+
+The standalone Compose file uses `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` follows the current published image; pin a release such as `v1.2.8` for reproducible deployments. On first start the entrypoint safely initializes a fresh empty repository mount that Docker created as `root`. Existing non-empty repository data is never recursively re-owned automatically; correct host ownership, group permissions or ACLs instead. See [`INSTALLATION.md`](INSTALLATION.md) for the complete procedure.
 
 Default endpoints and paths:
 
@@ -447,11 +463,27 @@ Repository SSH:  SERVER:2222
 Data:            /docker_data/borgbackup-manager/data
 Repositories:    /docker_data/borgbackup-manager/repositories
 Local build:     borgbackup-manager:latest
-GHCR:            ghcr.io/the-ab/borgbackup-manager:latest or :v1.2.3
+GHCR:            ghcr.io/the-ab/borgbackup-manager:latest or :v1.2.9
 Container:       borgbackup-manager
 ```
 
 ## Update
+
+Direct updates are supported from v1.1.0 or newer. Releases older than v1.1.0 require a clean installation.
+
+### One-time transition from v1.2.4 to v1.2.5
+
+The v1.2.4 updater still requires the now-removed `compose.archive-mounts.yaml` inside a release ZIP. For this transition only, first extract the new updater from the already checksum-verified v1.2.5 ZIP:
+
+```bash
+cd /opt/BorgBackup-Manager
+unzip -p updates/BorgBackup-Manager-1.2.5.zip BorgBackup-Manager/update.sh > update.sh.new
+bash -n update.sh.new
+chmod 755 update.sh.new
+mv update.sh.new update.sh
+```
+
+Then run the normal v1.2.5 update command. The new updater removes the old override file, and cleans `COMPOSE_FILE` plus other obsolete values from `.env`.
 
 Verify the release checksum and run the updater:
 
@@ -466,10 +498,6 @@ bash update.sh \
 ```
 
 The updater validates the checksum before opening the ZIP, validates package paths and required files, stops the container for a consistent manager-data backup, excludes repositories and regenerable caches, applies the project files, builds, starts and verifies readiness. On failure it rolls back the project and restarts the previous container where possible.
-
-### Historical transitions
-
-Very old versions may require a one-time updater or recovery-script replacement. The complete commands remain documented in [`INSTALLATION.md`](INSTALLATION.md) and [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
 ## Recovery
 

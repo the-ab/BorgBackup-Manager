@@ -7,6 +7,10 @@ from pathlib import Path
 DATA_DIR = Path(os.getenv("BBM_DATA_DIR", "data"))
 BACKUP_DIR = DATA_DIR / "backups"
 EXPORT_DIR = DATA_DIR / "exports"
+ARCHIVE_MOUNTS_ENABLED = os.getenv("BBM_ARCHIVE_MOUNTS_ENABLED", "1").lower() in {"1", "true", "yes"}
+ARCHIVE_MOUNT_ROOT = Path(os.getenv("BBM_ARCHIVE_MOUNT_ROOT", "/archive-mounts"))
+_ARCHIVE_MOUNT_HOST_PATH = os.getenv("BBM_ARCHIVE_MOUNT_HOST_PATH", "").strip()
+ARCHIVE_MOUNT_HOST_PATH = Path(_ARCHIVE_MOUNT_HOST_PATH) if _ARCHIVE_MOUNT_HOST_PATH else None
 RUN_LOG_DIR = DATA_DIR / "run-logs"
 DEBUG_LOG_PATH = Path(os.getenv("BBM_DEBUG_LOG_PATH", str(DATA_DIR / "logs" / "debug.log")))
 ARCHIVE_CACHE_DIR = Path(os.getenv("BBM_ARCHIVE_CACHE_DIR", str(DATA_DIR / "archive-cache")))
@@ -15,13 +19,10 @@ NOTIFICATION_SETTINGS_PATH = DATA_DIR / "notifications.json"
 UPDATE_STATUS_PATH = DATA_DIR / "update-status.json"
 HEALTH_NOTIFICATION_STATE_PATH = DATA_DIR / "health-notification-state.json"
 DATABASE_URL = os.getenv("BBM_DATABASE_URL", f"sqlite:///{DATA_DIR / 'manager.db'}")
-LEGACY_ADMIN_TOKEN = os.getenv("BBM_ADMIN_TOKEN", "")
-LEGACY_SECRET_KEY = os.getenv("BBM_SECRET_KEY", "")
 SECURITY_DIR = DATA_DIR / "security"
 SECURITY_DATABASE_PATH = SECURITY_DIR / "security.db"
 MASTER_KEY_PATH = SECURITY_DIR / "master.key"
 INITIAL_ADMIN_PATH = SECURITY_DIR / "initial-admin.txt"
-ALLOW_LEGACY_TOKEN_AUTH = os.getenv("BBM_ALLOW_LEGACY_TOKEN_AUTH", "0").lower() in {"1", "true", "yes"}
 RUNTIME_SECRET_DIR = Path(os.getenv("BBM_RUNTIME_SECRET_DIR", "/run/bbm-secrets"))
 REPOSITORY_ROOT = Path(os.getenv("BBM_REPOSITORY_ROOT", "/repositories"))
 MANAGER_BORG_CACHE_DIR = Path(os.getenv("BBM_MANAGER_BORG_CACHE_DIR", str(DATA_DIR / "borg-cache")))
@@ -47,13 +48,7 @@ if SESSION_TTL_SECONDS < 300:
 if SESSION_IDLE_TIMEOUT_SECONDS < 60 or SESSION_IDLE_TIMEOUT_SECONDS > SESSION_TTL_SECONDS:
     raise ValueError("BBM_SESSION_IDLE_TIMEOUT_SECONDS must be between 60 and BBM_SESSION_TTL_SECONDS")
 _CONFIGURED_SESSION_COOKIE_NAME = os.getenv("BBM_SESSION_COOKIE_NAME", "").strip()
-# Treat the historical untouched default as the v2 name even during the first
-# start with an updater that cannot rewrite its own already-running logic.
-SESSION_COOKIE_NAME = (
-    "bbm_session_v2"
-    if _CONFIGURED_SESSION_COOKIE_NAME in {"", "bbm_session"}
-    else _CONFIGURED_SESSION_COOKIE_NAME
-)
+SESSION_COOKIE_NAME = _CONFIGURED_SESSION_COOKIE_NAME or "bbm_session_v2"
 SESSION_COOKIE_SECURE_MODE = os.getenv("BBM_SESSION_COOKIE_SECURE", "always").strip().lower() or "always"
 if SESSION_COOKIE_SECURE_MODE not in {"auto", "always", "never"}:
     raise ValueError("BBM_SESSION_COOKIE_SECURE must be auto, always or never")
@@ -90,6 +85,16 @@ for _name, _value in {
 }.items():
     if _value <= 0:
         raise ValueError(f"{_name} must be greater than zero")
+if ARCHIVE_MOUNTS_ENABLED and not ARCHIVE_MOUNT_ROOT.is_absolute():
+    raise ValueError("BBM_ARCHIVE_MOUNT_ROOT must be an absolute path")
+if ARCHIVE_MOUNTS_ENABLED:
+    mount_root = ARCHIVE_MOUNT_ROOT.resolve(strict=False)
+    for reserved in (DATA_DIR, EXPORT_DIR, REPOSITORY_ROOT):
+        reserved_path = reserved.resolve(strict=False)
+        if mount_root == reserved_path or reserved_path in mount_root.parents or mount_root in reserved_path.parents:
+            raise ValueError("BBM_ARCHIVE_MOUNT_ROOT must be separate from /data, exports and repositories")
+if ARCHIVE_MOUNT_HOST_PATH is not None and not ARCHIVE_MOUNT_HOST_PATH.is_absolute():
+    raise ValueError("BBM_ARCHIVE_MOUNT_HOST_PATH must be an absolute path")
 APP_TIMEZONE_NAME = os.getenv("TZ", "Europe/Berlin") or "Europe/Berlin"
 
 

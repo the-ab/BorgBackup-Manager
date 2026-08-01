@@ -8,8 +8,6 @@ from uuid import uuid4
 
 from sqlalchemy import create_engine, inspect
 
-os.environ.setdefault("BBM_ADMIN_TOKEN", "test-token")
-os.environ.setdefault("BBM_ALLOW_LEGACY_TOKEN_AUTH", "1")
 os.environ.setdefault("BBM_DATABASE_URL", "sqlite://")
 
 from app import service

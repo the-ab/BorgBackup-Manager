@@ -1,5 +1,98 @@
 # Release Notes
 
+## v1.2.9 – 01.08.2026
+
+### Keine verspätete Mount-Fehlermeldung nach erfolgreichem Aushängen
+
+- Ein noch laufender Einhänge-Aufruf erkennt jetzt, wenn derselbe Mount zwischenzeitlich bewusst ausgehängt oder sein Datenbankeintrag entfernt wurde. Der Vorgang endet dann als kontrolliert abgebrochen und zeigt nicht mehr nachträglich „Borg hat den Mount-Befehl beendet, aber der FUSE-Mount wurde innerhalb von 15 Sekunden nicht aktiv“ an.
+- Die Abbruchprüfung wird auch unmittelbar am Ende des 15-Sekunden-Fensters wiederholt. Damit ist die schmale Race Condition zwischen letzter Statusabfrage und Timeout geschlossen.
+- Die WebUI behandelt die Antwort des älteren Einhänge-Aufrufs als bereits ausgeführten Unmount. Der erfolgreiche Aushängestatus bleibt maßgeblich und wird nicht durch eine verspätete Fehlermeldung überschrieben.
+
+### Parallele Session-Aktualisierungen blockieren SQLite nicht mehr
+
+- Der bereitgestellte Debug-Log zeigte, dass ein Seiten-Refresh zahlreiche API-Endpunkte parallel authentifiziert. Alle Requests lasen denselben älteren `last_seen_at`-Wert und versuchten anschließend innerhalb ihrer laufenden Lesetransaktion gleichzeitig ein `UPDATE`; SQLite antwortete dadurch bei nahezu allen Endpunkten mit `sqlite3.OperationalError: database is locked`.
+- Das Lesen einer Sitzung und die optionale Aktualisierung von `last_seen_at` sind jetzt getrennt. Der Zeitstempel wird in einer neuen, kurzen und bedingten Schreibtransaktion aktualisiert, sodass nur der erste konkurrierende Request den alten Wert ersetzt.
+- Das Aktualisieren des Aktivitätszeitpunkts ist ausdrücklich bestmöglich: Ist die Security-Datenbank kurz belegt, bleibt die Sitzung gültig, die API-Anfrage läuft normal weiter und ein späterer Request aktualisiert den Zeitstempel. Eine rein technische Session-Berührung kann daher nicht mehr Benutzer-, Repository-, Mount-, Job- und Statusabfragen gleichzeitig mit HTTP 500/503 ausfallen lassen.
+- Auch das Bereinigen abgelaufener Sitzungen verwendet einen getrennten bestmöglichen Schreibvorgang, damit eine vorübergehende SQLite-Sperre nicht selbst eine zusätzliche Fehlerkaskade erzeugt.
+
+## v1.2.8 – 01.08.2026
+
+### FUSE-Mount-Aktivierung zuverlässig erkannt
+
+- Nach einem erfolgreichen `borg mount` wartet der Manager jetzt bis zu 15 Sekunden darauf, dass der neue FUSE-Eintrag tatsächlich in der Kernel-Mounttabelle sichtbar wird. Die frühere unmittelbare Einzelprüfung konnte fälschlich „Borg meldete keinen aktiven FUSE-Mount am vorgesehenen Zielpfad“ anzeigen, obwohl der Mount wenige Augenblicke später korrekt aktiv war.
+- Auch nach einem erfolgreichen Aushängebefehl wird der Mountstatus kurz nachgeführt, statt die Kernel-Mounttabelle nur einmal unmittelbar abzufragen. Dadurch werden verzögerte Mount-/Unmount-Übergänge nicht mehr als Fehler gemeldet.
+- Die Fehlerbereinigung nach einem fehlgeschlagenen Mount verwendet nun ebenfalls den direkten lokalen Lifecycle-Pfad und wartet nicht auf den normalen Repository-Ausführungslock.
+- Mount-Einträge im Übergang `mounting` oder `unmounting` werden bei parallelen Statusabfragen für 30 Sekunden nicht voreilig als verwaist markiert.
+
+### Sofortige Rückmeldung in der WebUI
+
+- Direkt nach dem Klick auf „Archiv einhängen“ wechselt die Schaltfläche sichtbar auf „Wird eingehängt …“, der globale Status zeigt den laufenden Vorgang und unter „Aktive Archiv-Mounts“ erscheint sofort ein vorläufiger Eintrag.
+- Sobald das Backend den aktiven FUSE-Mount bestätigt, wird der vorläufige Eintrag unmittelbar durch den echten Mount ersetzt. Ein manuelles Neuladen oder mehrfaches Klicken auf „Aktualisieren“ ist nicht mehr erforderlich.
+- Auch beim Aushängen werden Schaltfläche, Archivliste und Mount-Liste sofort auf „Wird ausgehängt …“ gesetzt und nach erfolgreichem Abschluss direkt aktualisiert.
+
+## v1.2.7 – 01.08.2026
+
+### Archiv-Aushängen wartet nicht mehr auf den Repository-Ausführungslock
+
+- Ein mit v1.2.6 eingeführter Unmount-Deadlock wurde behoben: Der lokale FUSE-Aushängebefehl lief bisher durch den normalen Repository-Ausführungspfad. Hielt bereits eine andere Repository-Aktion diesen Lock, wartete das Aushängen 24 Sekunden und endete mit HTTP 504, bevor überhaupt ein FUSE-Befehl ausgeführt wurde.
+- Das Aushängen führt jetzt ausschließlich den zeitlich begrenzten lokalen Lifecycle-Befehl aus und wartet weder auf Repository-, Storage-Mount-, Zeitplan- noch Manager-Cache-Kapazitäten. Ein normaler Unmount kann dadurch sofort abgeschlossen werden.
+- Vor dem Befehl erhält der Datenbankeintrag den Status `unmounting`. Doppelte Aushängeanforderungen werden sauber abgelehnt; die WebUI zeigt währenddessen „Wird ausgehängt …“ und deaktiviert die Schaltfläche.
+- Ein tatsächlich noch aktiver FUSE-Mount bleibt auch nach einem fehlgeschlagenen Aushängeversuch mit Status `error` ein Repository-Blocker. Backup, Archivbereinigung, Compact und andere Repository-Aktionen können nicht gegen einen weiterhin vorhandenen Mount starten.
+- Der Mount-Statusabgleich erhält `unmounting` und `error`, solange FUSE den Mount tatsächlich meldet, und markiert den Eintrag erst nach dem wirklichen Verschwinden als verwaist.
+
+## v1.2.6 – 01.08.2026
+
+### Archiv-Mounts vom Docker-Host zugänglich
+
+- Managerseitige Borg-Mounts verwenden jetzt ausdrücklich die FUSE-Option `allow_other`. Das Image aktiviert dafür `user_allow_other` in `/etc/fuse.conf`. Dadurch kann ein über `rshared` propagierter Archiv-Mount auch auf dem Docker-Host betreten werden; das bisherige `Permission denied` für Host-Root beziehungsweise andere Hostprozesse entfällt.
+- Die Archiv-Mount-Fähigkeitsprüfung kontrolliert zusätzlich `/etc/fuse.conf` und verweigert einen Mount mit klarer Diagnose, wenn `user_allow_other` fehlt.
+
+### Aushängen ohne Proxy-Hänger
+
+- Das Aushängen versucht jetzt zuerst `fusermount3 -u`, danach `borg umount`, anschließend `fusermount3 -uz` und als letzte Rückfallstufe `umount -l`. Jeder Einzelversuch und der gesamte API-Pfad besitzen kurze feste Zeitlimits.
+- Ein hängender Aushänge-Vorgang kann dadurch nicht mehr unkontrolliert bis zu einem Reverse-Proxy-504 weiterlaufen. Der Manager beendet den Versuch vorher selbst und antwortet mit einer eindeutigen Fehler-ID.
+- Timeout, fehlgeschlagener Unmount und ein trotz Erfolgsmeldung weiterhin aktiver FUSE-Mount werden als kritische Mount-Störung in `/data/logs/debug.log` gespeichert. Der Mount-Eintrag bleibt mit Fehlerhinweis erhalten, statt still zu verschwinden.
+- Auch die Entrypoint-Bereinigung beim Containerstopp verwendet begrenzte Unmount-Versuche und Lazy-Fallbacks.
+
+### Cache-Backup mit Teilwarnungen
+
+- Ein nicht erreichbares oder bei der Übertragung fehlschlagendes aktives Gerät bricht das gesamte Cache-Backup nicht mehr ab. Nur die betroffene Geräte-/Repository-Zuordnung wird als `warning` dokumentiert; alle übrigen erreichbaren Clients werden weiter gesichert.
+- Manifest und verschlüsselter Backup-Header enthalten `client_borg_cache_warning_count`. Die Backup-Liste zeigt die Warnungszahl, die Live-Anzeige nennt das betroffene Gerät und Repository, und der Backup-Task endet sichtbar mit dem Status „mit Warnungen erstellt“.
+- Deaktivierte Geräte und tatsächlich fehlende Caches behalten ihre bisherigen getrennten Statuswerte.
+
+### Prüfungen
+
+- Regressionstests decken `allow_other`, `user_allow_other`, begrenzte Unmount-Fallbacks, Debug-Protokollierung bei Unmount-Timeouts sowie fortgesetzte Cache-Backups bei Clientausfällen ab.
+
+## v1.2.5 – 31.07.2026
+
+### Archiv-Mounts als Standardfunktion und Mindestbasis v1.1.0
+
+- Schreibgeschützte Borg-Archiv-Mounts sind jetzt Bestandteil der normalen `compose.yaml` des lokalen Builds und der eigenständigen GHCR-Installation. Eine zusätzliche `compose.archive-mounts.yaml` ist nicht mehr erforderlich und wurde aus beiden Projektbereichen entfernt.
+- Die Standardkonfiguration reicht `/dev/fuse` durch, ergänzt `SYS_ADMIN`, erlaubt FUSE über AppArmor und verwendet `rshared`-Mount-Propagation für `BBM_ARCHIVE_MOUNT_PATH`. Der Docker-Host muss FUSE bereitstellen und der Mount-Pfad muss für `BBM_BORG_UID:BBM_BORG_GID` zugänglich sein.
+- `install.sh` prüft `/dev/fuse`, versucht das FUSE-Modul zu laden und legt den Archiv-Mount-Pfad mit passenden nicht rekursiven Eigentümerrechten an. `update.sh` prüft dieselben Voraussetzungen vor dem Neubau und Neustart.
+- Direkte Updates werden ausschließlich ab BorgBackup Manager v1.1.0 unterstützt. `update.sh` lehnt ältere Ausgangsversionen mit einer klaren Neuinstallationsaufforderung ab. Für den einmaligen Übergang von v1.2.4 wird der neue Updater vorab aus dem verifizierten ZIP übernommen, weil der alte v1.2.4-Updater noch die entfernte Override-Datei verlangt.
+- Manager- und Cache-Backups müssen in ihren Metadaten v1.1.0 oder neuer ausweisen. `restore-backup.sh`, Upload, Prüfung und WebUI-Restore lehnen ältere Artefakte ab.
+- Vor-v1.1.0-Kompatibilitätscode wurde entfernt: statische Admin-Token, alte Secret-Verschlüsselung, frühere Repository-Felder, alte Client-Mount-Sitzungen, alte Zeitplanfelder, historische kombinierte Cache-/Manager-Backups und frühere Datenbankschema-Fallbacks werden nicht mehr migriert.
+- `update.sh` ordnet eine bestehende `.env` anhand der aktuellen `.env.example` neu. Unterstützte eigene Werte bleiben erhalten, fehlende aktuelle Werte werden ergänzt und obsolete Einträge wie `COMPOSE_FILE`, alte Token-/Secret-Variablen, interne Mount-Schalter, `BBM_DEBUG_LOG_LEVEL`, `BBM_HTTP_PORT` und alte TLS-Dateipfade werden entfernt. Die Datei bleibt mit Modus `0600` geschützt.
+- Die Installations-, README-, Compose- und integrierten Hilfetexte beschreiben die Archiv-Mount-Funktion jetzt als Standard und nennen v1.1.0 einheitlich als Mindestbasis für Update und Restore.
+- Die Erkennung verschlüsselter Backups in `restore-backup.sh` liest keine Binärdaten mehr in eine Shell-Variable und vermeidet dadurch Warnungen zu Nullbytes.
+- 640 automatisierte Tests, Projekt-Audit sowie Python-, JavaScript-, Shell- und Compose-Strukturprüfungen sichern den bereinigten Stand.
+
+## v1.2.4 – 31.07.2026
+
+### Optionale schreibgeschützte Archiv-Mounts
+
+- Administratoren können Archive lokaler verwalteter Repositorys jetzt direkt aus der Archivübersicht schreibgeschützt einhängen und wieder aushängen. Pro Repository ist höchstens ein aktiver Manager-Mount zulässig.
+- Mounts liegen im Container ausschließlich unter `/archive-mounts`; der auf dem Docker-Host sichtbare Basispfad wird über `BBM_ARCHIVE_MOUNT_PATH` festgelegt. `/data/exports` bleibt weiterhin ausschließlich für temporäre TAR.GZ-Exporte reserviert.
+- Die Funktion ist standardmäßig vollständig deaktiviert. Die neue optionale `compose.archive-mounts.yaml` reicht `/dev/fuse` durch, ergänzt ausschließlich für diesen Betriebsmodus `SYS_ADMIN`, aktiviert `rshared`-Mount-Propagation und lockert AppArmor für den FUSE-Betrieb. Das Image installiert `fuse3` und die von Borg benötigten `python3-pyfuse3`-Bindungen ausdrücklich, da sie beim Debian-Paket nur empfohlen und durch `--no-install-recommends` sonst ausgelassen würden.
+- Der Borg-Prozess läuft weiterhin mit der konfigurierten unprivilegierten `BBM_BORG_UID:BBM_BORG_GID`; der Entrypoint überträgt nur die für FUSE benötigte Capability. Beim kontrollierten Containerstopp werden aktive Manager-Mounts vor dem Beenden ausgehängt.
+- Zielpfade werden deterministisch aus Repository-ID und Archivname erzeugt, auf den konfigurierten Mount-Stamm begrenzt und gegen symbolische Links sowie nicht leere Zielverzeichnisse abgesichert.
+- Aktive Archiv-Mounts blockieren beziehungsweise verzögern Backup, Archivbereinigung, Compact, Repository-Prüfung, Archivänderungen, Repository-Reset und Repository-Löschung desselben Repositorys. Verwaiste Datenbankeinträge werden beim Start abgeglichen und sicher bereinigt.
+- In dieser Version werden nur lokal verwaltete Repositorys unterstützt. Externe SSH-Repositorys bleiben ausgeschlossen, damit ein dauerhaft laufender FUSE-Prozess nicht von kurzlebigen temporären SSH-Schlüsseldateien abhängt.
+- Die WebUI zeigt Capability-Status, Container- und Hostpfad, Repository, Archiv, Mount-Zeitpunkt und Fehlerstatus. Nicht verfügbare FUSE-Voraussetzungen werden mit einer konkreten Diagnose angezeigt.
+- Die deutsche Oberfläche verwendet für die Aktion `borg prune` jetzt durchgehend **Archivbereinigung** beziehungsweise **Archive bereinigen**. **Aufbewahrung** bezeichnet weiterhin ausschließlich die Regeln, die festlegen, welche Archive erhalten bleiben.
+
 ## v1.2.3 – 31.07.2026
 
 ### Zweisprachige `.env`-Referenz für den GHCR-Compose-Stack

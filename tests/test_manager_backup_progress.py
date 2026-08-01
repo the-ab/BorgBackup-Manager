@@ -81,3 +81,17 @@ def test_client_cache_collection_reports_target_and_bytes(monkeypatch, tmp_path:
     assert events[-2]["bytes_done"] == 17
     assert events[-1]["status"] == "saved"
     assert events[-1]["security_status"] == "saved"
+
+
+def test_cache_backup_progress_can_finish_with_warning():
+    manager_backup_progress.begin_task("task-warning", label="test", backup_type="cache")
+    result = manager_backup_progress.finish_task(
+        "task-warning",
+        backup={"name": "cache.bbm", "size_bytes": 55},
+        warning="1 Client-Zuordnung konnte nicht gesichert werden.",
+    )
+    assert result["status"] == "warning"
+    assert result["percent"] == 100.0
+    assert result["warning"].startswith("1 Client")
+    assert any("Warnung:" in event["message"] for event in result["events"])
+    assert manager_backup_progress.current_task() is None

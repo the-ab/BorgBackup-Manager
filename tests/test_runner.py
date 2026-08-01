@@ -17,12 +17,10 @@ from app.runner import (
     archive_info_command,
     backup_command,
     browse_archive_command,
-    browse_mount_command,
     delete_archive_command,
     delete_archives_command,
     diff_archives_command,
     host_repository_bootstrap_command,
-    mount_archive_command,
     prune_command,
     repository_command,
     repository_validation_command,
@@ -38,7 +36,6 @@ from app.runner import (
     job_archive_prefixes,
     manager_borg_argv,
 )
-from app.security import encrypt_secret
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -57,7 +54,7 @@ def isolated_runner_security_store(tmp_path_factory):
     security_store.SECURITY_DATABASE_PATH = security_dir / "security.db"
     security_store.INITIAL_ADMIN_PATH = security_dir / "initial-admin.txt"
     secret_crypto.MASTER_KEY_PATH = security_dir / "master.key"
-    security_store.initialize_security_store(None)
+    security_store.initialize_security_store()
     try:
         yield
     finally:
@@ -348,20 +345,6 @@ def test_borg_version_check_supports_old_cli_variants_without_repository(job):
     assert "borg version" not in remote
 
 
-def test_repository_init_keeps_encrypted_secret_out_of_command(job):
-    job.repository.storage_path = "/repositories/main"
-    job.repository.passphrase_env = None
-    job.repository.encrypted_passphrase = encrypt_secret("managed secret")
-    command = repository_init_command(job.repository)
-    assert command.argv[-1] == "/repositories/main"
-    assert "--lock-wait" in command.argv
-    assert "managed secret" not in command.preview
-    assert command.stdin_data == b"managed secret\n"
-    assert command.env["BORG_PASSPHRASE_FD"] == "0"
-    assert command.env["BORG_CACHE_DIR"] == str(MANAGER_BORG_CACHE_DIR.resolve() / "repository-7")
-    assert command.env["BORG_SECURITY_DIR"] == str(MANAGER_BORG_SECURITY_DIR)
-
-
 def test_unencrypted_repository_init_has_no_secret(job):
     job.repository.storage_path = "/repositories/public"
     job.repository.passphrase_env = None
@@ -373,30 +356,6 @@ def test_unencrypted_repository_init_has_no_secret(job):
         "BORG_CACHE_DIR": str(MANAGER_BORG_CACHE_DIR.resolve() / "repository-7"),
         "BORG_SECURITY_DIR": str(MANAGER_BORG_SECURITY_DIR),
     }
-
-
-def test_keyfile_repository_provisions_key_without_exposing_it(job):
-    job.repository.storage_path = "/repositories/keyfile"
-    job.repository.encryption_mode = "keyfile-blake2"
-    job.repository.encrypted_keyfile = encrypt_secret("BORG-KEY-MATERIAL")
-    command = backup_command(job)
-    assert "BORG_KEY_FILE" in command.argv[-1]
-    assert "BORG-KEY-MATERIAL" not in command.argv[-1]
-    assert "BORG-KEY-MATERIAL" not in command.preview
-    assert command.stdin_data is not None
-    assert len(command.stdin_data.splitlines()) == 4
-    assert b"super secret value" not in command.stdin_data
-
-
-def test_keyfile_repository_init_uses_persistent_temporary_key_path(job):
-    job.repository.id = 9
-    job.repository.storage_path = "/repositories/keyfile"
-    job.repository.encryption_mode = "keyfile"
-    job.repository.passphrase_env = None
-    job.repository.encrypted_passphrase = encrypt_secret("managed secret")
-    command = repository_init_command(job.repository)
-    assert command.env["BORG_KEY_FILE"].endswith("repository-9.key")
-    assert "--encryption=keyfile" in command.argv
 
 
 @pytest.mark.parametrize("target", ["relative/path", "/srv/../etc"])
@@ -471,39 +430,6 @@ def test_bootstrap_replaces_dedicated_repository_known_hosts_file(job):
     assert 'ssh-keygen -f "$known" -R' not in remote
 
 
-def test_archive_commands_accept_iso_timestamp_names(job):
-    archive = "bbm-job-42-host-2026-07-13T22:00:00"
-    info = archive_info_command(job, archive)
-    delete = delete_archive_command(job, archive, compact_after=True)
-    mount = mount_archive_command(job, archive)
-    assert f"::{archive}" in info.preview
-    assert f"::{archive}" in delete.preview
-    assert 'borg --lock-wait 600 compact --verbose --show-rc' in delete.preview
-    assert 'borg --lock-wait 600 mount' in mount.argv[-1]
-    assert archive in mount.argv[-1]
-
-
-def test_archive_commands_reject_path_like_archive_names(job):
-    with pytest.raises(ValueError):
-        delete_archive_command(job, "../archive")
-    with pytest.raises(ValueError):
-        mount_archive_command(job, "archive/name")
-
-
-def test_archive_browser_lists_one_safe_relative_directory(job):
-    command = browse_mount_command(
-        job,
-        "/root/.local/share/bbm/mounts/job-42-abc123",
-        "home/user",
-    )
-    remote = command.argv[-1]
-    assert "mountpoint -q" in remote
-    assert "-mindepth 1 -maxdepth 1" in remote
-    assert "home/user" in remote
-    with pytest.raises(ValueError):
-        browse_mount_command(job, "/root/.local/share/bbm/mounts/job-42-abc123", "../etc")
-
-
 def test_archive_rename_preserves_exact_names_and_diff_supports_paths(job):
     first = "bbm-job-42-host-2026-07-12T22:00:00"
     second = "bbm-job-42-host-2026-07-13T22:00:00"
@@ -520,39 +446,15 @@ def test_archive_rename_preserves_exact_names_and_diff_supports_paths(job):
     assert "home/user" in diff.preview
 
 
-def test_archive_mount_checks_fuse_availability(job):
-    command = mount_archive_command(job, "bbm-job-42-host-2026-07-13T22:00:00")
-    assert "fusermount3" in command.argv[-1]
-    assert "/dev/fuse" in command.argv[-1]
-
-
 def test_managed_archive_management_uses_local_repository_path(job):
     job.repository.storage_path = "/repositories/main"
     command = repository_command(job, "list-all")
-    assert command.argv[:5] == ["runuser", "-u", "borg", "--", "sh"]
+    assert command.argv[:5] == ["runuser", "-u", "borg", "--", "borg"]
     assert command.env["BORG_REPO"] == "/repositories/main"
     assert command.preview.startswith("[direkt im Manager]")
     assert "ssh" not in command.argv[:5]
 
 
-
-
-def test_managed_keyfile_repository_uses_temporary_local_key(job):
-    job.repository.storage_path = "/repositories/keyfile"
-    job.repository.encryption_mode = "keyfile-blake2"
-    job.repository.encrypted_passphrase = encrypt_secret("repository-passphrase")
-    job.repository.encrypted_keyfile = encrypt_secret("BORG_KEY 0000\nkey material\n")
-    job.repository.passphrase_env = None
-    command = repository_command(job, "list-all")
-    assert command.argv[:5] == ["runuser", "-u", "borg", "--", "sh"]
-    assert "mktemp -d /tmp/bbm-borg" in command.argv[6]
-    assert command.env["BORG_REPO"] == "/repositories/keyfile"
-    assert "BORG_PASSPHRASE_FD" not in command.env
-    assert command.stdin_data is not None
-    assert len(command.stdin_data.splitlines()) == 4
-    assert b"repository-passphrase" not in command.stdin_data
-    assert b"key material" not in command.stdin_data
-    assert "BORG_KEY_FILE" not in command.preview
 
 
 def test_managed_backup_still_runs_on_source_client(job):
@@ -601,69 +503,6 @@ def test_repository_archive_listing_can_include_checkpoint_archives(job):
 
     normal = repository_command(job, "list-all")
     assert "--consider-checkpoints" not in normal.argv
-
-
-def test_external_repository_is_managed_directly_and_credentials_are_temporary(monkeypatch):
-    from app.runner import repository_list_command
-
-    repository = Repository(
-        id=92,
-        name="storagebox",
-        location="ssh://u123456@u123456.your-storagebox.de:23/./borg-repository",
-        encryption_mode="none",
-        storage_path=None,
-        encrypted_external_ssh_key=encrypt_secret(
-            "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nTEST\n-----END OPENSSH " + "PRIVATE KEY-----\n"
-        ),
-        encrypted_external_known_hosts=encrypt_secret(
-            "[u123456.your-storagebox.de]:23 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n"
-        ),
-        extra_env_json="{}",
-    )
-    command = repository_list_command(repository)
-    joined = " ".join(command.argv)
-    assert command.argv[:4] == ["runuser", "-u", "borg", "--"]
-    assert "ssh backup@" not in command.preview
-    assert "[direkt im Manager]" in command.preview
-    assert "borg --lock-wait 600 list --json" in command.preview
-    assert "BORG_RSH" not in command.env
-    assert command.stdin_data is not None
-    assert command.stdin_controlled_cancel is True
-    assert len(command.stdin_data.splitlines()) == 4
-    assert "storagebox" not in joined
-
-
-def test_external_backup_runs_on_source_client_with_temporary_manager_credentials(job):
-    job.repository.storage_path = None
-    job.repository.location = "ssh://u123456@u123456.your-storagebox.de:23/./borg-repository"
-    job.repository.encryption_mode = "none"
-    job.repository.passphrase_env = None
-    job.repository.encrypted_external_ssh_key = encrypt_secret(
-        "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nTEST-PRIVATE-MATERIAL\n-----END OPENSSH " + "PRIVATE KEY-----\n"
-    )
-    job.repository.encrypted_external_known_hosts = encrypt_secret(
-        "[u123456.your-storagebox.de]:23 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEUdWrG3dnKa9pj3X6CSpTSHZ2jwzp1UgSyGgtyY+XJf\n"
-    )
-
-    command = backup_command(job)
-
-    assert command.argv[0] == "ssh"
-    assert "backup@10.0.0.4" in command.argv
-    assert "[temporärer Manager-Schlüssel]" in command.preview
-    assert "TEST-PRIVATE-MATERIAL" not in command.preview
-    assert "TEST-PRIVATE-MATERIAL" not in " ".join(command.argv)
-    assert command.stdin_data is not None
-    assert command.stdin_controlled_cancel is True
-    assert len(command.stdin_data.splitlines()) == 4
-    assert b"TEST-PRIVATE-MATERIAL" not in command.stdin_data
-    assert "mktemp -d /tmp/bbm-borg" in command.argv[-1]
-    assert "repository-7" in command.argv[-1]
-    assert "borgbackup-manager" in command.argv[-1]
-    assert "while IFS= read -r _ <&4" in command.argv[-1]
-    assert 'signal_child "$graceful_signal"' in command.argv[-1]
-    assert "python3 -S -c" in command.argv[-1]
-    assert "env --default-signal" not in command.argv[-1]
-    assert 'graceful_signal="TERM"' in command.argv[-1]
 
 
 def test_remote_wrapper_does_not_depend_on_gnu_env_default_signal():
@@ -754,29 +593,6 @@ async def test_remote_wrapper_starts_without_python3(tmp_path):
     assert return_code == 0
     assert stdout == "fallback"
     assert stderr == ""
-
-
-def test_external_repository_validation_does_not_enable_verbose_ssh():
-    from app.runner import repository_validation_command
-
-    repository = Repository(
-        id=99,
-        name="quiet-storagebox",
-        location="ssh://u123@example:23/./repo",
-        encryption_mode="none",
-        storage_path=None,
-        encrypted_external_ssh_key=encrypt_secret(
-            "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nTEST\n-----END OPENSSH " + "PRIVATE KEY-----\n"
-        ),
-        encrypted_external_known_hosts=encrypt_secret(
-            "[example]:23 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n"
-        ),
-        extra_env_json="{}",
-    )
-    command = repository_validation_command(repository)
-    assert command.argv[command.argv.index("--") + 1] == "sh"
-    assert command.argv[8] == "0"
-    assert "-vv" not in command.preview
 
 
 def test_repository_location_confirmation_is_explicit_and_one_shot(job):

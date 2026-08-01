@@ -51,16 +51,9 @@ class Repository(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     location: Mapped[str] = mapped_column(String(500))
     passphrase_env: Mapped[str | None] = mapped_column(String(150), nullable=True)
-    encrypted_passphrase: Mapped[str | None] = mapped_column(Text, nullable=True)
     encryption_mode: Mapped[str] = mapped_column(String(40), default="repokey-blake2")
-    encrypted_keyfile: Mapped[str | None] = mapped_column(Text, nullable=True)
     storage_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    access_host_id: Mapped[int | None] = mapped_column(ForeignKey("hosts.id"), nullable=True)
-    external_ssh_key_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    external_known_hosts_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    encrypted_external_ssh_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     external_ssh_public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
-    encrypted_external_known_hosts: Mapped[str | None] = mapped_column(Text, nullable=True)
     external_host_fingerprint: Mapped[str | None] = mapped_column(String(120), nullable=True)
     validation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     validation_details: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -95,7 +88,6 @@ class Job(Base):
     archive_template: Mapped[str] = mapped_column(String(200), default="{hostname}-{now:%Y-%m-%dT%H:%M:%S}")
     archive_prefix: Mapped[str | None] = mapped_column(String(80), nullable=True)
     archive_prefix_history_json: Mapped[str] = mapped_column(Text, default="[]")
-    schedule: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     compression: Mapped[str] = mapped_column(String(100), default="zstd,6")
     prune_options_json: Mapped[str] = mapped_column(Text, default="{}")
     create_options_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -181,18 +173,22 @@ class Run(Base):
     repository: Mapped[Repository | None] = relationship()
 
 
-class ArchiveMount(Base):
-    __tablename__ = "archive_mounts"
+
+class ManagerArchiveMount(Base):
+    __tablename__ = "manager_archive_mounts"
+    __table_args__ = (
+        UniqueConstraint("repository_id", name="uq_manager_archive_mount_repository"),
+        UniqueConstraint("mount_path", name="uq_manager_archive_mount_path"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
-    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
-    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id"))
-    host_id: Mapped[int] = mapped_column(ForeignKey("hosts.id"))
+    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"))
     archive: Mapped[str] = mapped_column(String(300))
     mount_path: Mapped[str] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(20), default="mounting")
+    error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    job: Mapped[Job] = relationship()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     repository: Mapped[Repository] = relationship()
-    host: Mapped[Host] = relationship()
 
 
 class NotificationDelivery(Base):

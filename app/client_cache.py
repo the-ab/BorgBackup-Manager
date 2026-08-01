@@ -243,9 +243,9 @@ def collect_client_borg_caches(archive: zipfile.ZipFile, progress: Callable[[dic
     """Stream assigned BBM client caches and their Borg security state into a cache backup.
 
     Disabled devices are recorded but deliberately not contacted. A connection
-    or tar failure on an enabled device aborts the backup rather than silently
-    presenting an incomplete cache backup as complete. Missing cache/security
-    data is a valid state and is recorded explicitly.
+    or transfer failure on one enabled device is recorded as a warning and does
+    not abort the remaining cache backup. Missing cache/security data is a valid
+    state and is recorded explicitly.
     """
     entries: list[dict] = []
     targets = _target_rows()
@@ -309,10 +309,25 @@ def collect_client_borg_caches(archive: zipfile.ZipFile, progress: Callable[[dic
                 if progress is not None else _stream_one_security(archive, host, repository, security_arcname)
             )
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            raise ValueError(
+            reason = (
                 f"Client-Borg-Zustand von Gerät „{host.name}“ / Repository „{repository.name}“ "
                 f"konnte nicht gesichert werden: {exc}"
-            ) from exc
+            )
+            metadata.update({
+                "status": "warning",
+                "security_status": "warning",
+                "reason": reason,
+                "security_reason": reason,
+                "warning": True,
+            })
+            entries.append(metadata)
+            if progress is not None:
+                progress({
+                    **metadata,
+                    "event": "target_done", "component": "complete", "index": index, "total": total,
+                    "bytes_done": 0,
+                })
+            continue
 
         if status == "missing":
             metadata.update({
@@ -356,6 +371,7 @@ def client_cache_summary(entries: list[dict]) -> dict[str, int]:
         "saved_count": sum(1 for item in entries if item.get("status") == "saved"),
         "missing_count": sum(1 for item in entries if item.get("status") == "missing"),
         "skipped_count": sum(1 for item in entries if str(item.get("status", "")).startswith("skipped_")),
+        "warning_count": sum(1 for item in entries if item.get("status") == "warning"),
         "tar_bytes": sum(int(item.get("tar_bytes") or 0) for item in entries if item.get("status") == "saved"),
         "security_saved_count": sum(1 for item in entries if item.get("security_status") == "saved"),
         "security_missing_count": sum(1 for item in entries if item.get("security_status") == "missing"),

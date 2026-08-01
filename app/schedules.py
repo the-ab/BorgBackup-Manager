@@ -123,35 +123,3 @@ def validate_job_schedule_conflicts(db, job: Job, *, exclude_job_id: int | None 
             matches.append(schedule.name)
     if len(matches) > 1:
         raise ValueError("Der Backup-Job würde mehreren aktiven Zeitplänen zugeordnet: " + ", ".join(matches))
-
-
-def migrate_legacy_job_schedules(db) -> int:
-    migrated = 0
-    existing_names = {name.casefold() for name in db.scalars(select(BackupSchedule.name))}
-    for job in db.scalars(select(Job).where(Job.schedule.is_not(None))):
-        normalized = normalize_schedule(job.schedule)
-        if not normalized:
-            job.schedule = None
-            continue
-        base = f"Migriert – {job.name}"[:100]
-        name = base
-        index = 2
-        while name.casefold() in existing_names:
-            suffix = f" ({index})"
-            name = (base[:100-len(suffix)] + suffix)
-            index += 1
-        schedule = BackupSchedule(
-            name=name,
-            expressions=normalized,
-            target_mode="jobs",
-            target_job_ids_json=json.dumps([job.id]),
-            target_host_ids_json="[]",
-            enabled=job.enabled,
-        )
-        db.add(schedule)
-        existing_names.add(name.casefold())
-        job.schedule = None
-        migrated += 1
-    if migrated:
-        db.commit()
-    return migrated

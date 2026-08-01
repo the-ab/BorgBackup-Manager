@@ -8,8 +8,6 @@ from pathlib import Path
 
 TEST_DATA_DIR = Path(tempfile.gettempdir()) / f"bbm-host-ssh-actions-{os.getpid()}"
 shutil.rmtree(TEST_DATA_DIR, ignore_errors=True)
-os.environ.setdefault("BBM_ADMIN_TOKEN", "test-token")
-os.environ.setdefault("BBM_ALLOW_LEGACY_TOKEN_AUTH", "1")
 os.environ.setdefault("BBM_DATA_DIR", str(TEST_DATA_DIR))
 os.environ.setdefault("BBM_DATABASE_URL", "sqlite://")
 
@@ -20,7 +18,9 @@ from app.main import app
 from app.runner import Command, host_ssh_action_command
 from app import service
 
-AUTH = {"Authorization": "Bearer test-token"}
+from tests.auth_helpers import admin_headers
+
+AUTH = admin_headers()
 HOST_KEY = "host.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEtesthostkeymaterial"
 
 

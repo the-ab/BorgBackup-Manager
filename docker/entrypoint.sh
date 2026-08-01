@@ -11,10 +11,24 @@ if [ "$borg_uid" -eq 0 ] || [ "$borg_gid" -eq 0 ]; then
   exit 1
 fi
 
+archive_mounts_enabled="${BBM_ARCHIVE_MOUNTS_ENABLED:-1}"
+archive_mount_root="${BBM_ARCHIVE_MOUNT_ROOT:-/archive-mounts}"
+case "$archive_mounts_enabled" in
+  0|1) ;;
+  *) echo "BBM_ARCHIVE_MOUNTS_ENABLED must be 0 or 1" >&2; exit 1 ;;
+esac
+case "$archive_mount_root" in
+  /*) ;;
+  *) echo "BBM_ARCHIVE_MOUNT_ROOT must be an absolute path" >&2; exit 1 ;;
+esac
+
 groupmod -o -g "$borg_gid" borg
 usermod -o -u "$borg_uid" -g "$borg_gid" borg
 
 mkdir -p /data/repository-ssh /data/logs /data/exports /data/run-logs /data/archive-cache /data/security /data/borg-cache /data/borg-security /repositories /run/sshd /run/bbm-secrets
+if [ "$archive_mounts_enabled" = "1" ]; then
+  mkdir -p "$archive_mount_root"
+fi
 chmod 711 /data
 chmod 700 /data/security /data/exports /data/run-logs /data/archive-cache /data/borg-cache /data/borg-security /run/bbm-secrets
 chmod 711 /data/repository-ssh
@@ -62,28 +76,46 @@ for access in r w x; do
   fi
 done
 
-# Alte Installationen können einmalig Admin-Token und BBM_SECRET_KEY in der
-# Host-.env enthalten. Die Werte werden nur zur Migration eingelesen.
-legacy_env_file=/run/bbm-host.env
-# v1.0.20 and older may still contain the historical default cookie name.
-# app/config.py normalizes it for this process. Never rewrite this file from
-# inside the container: it is a single-file Docker bind mount and atomic
-# replacement tools such as `sed -i` fail with "Device or resource busy".
-if [ -f "$legacy_env_file" ] && grep -qx 'BBM_SESSION_COOKIE_NAME=bbm_session' "$legacy_env_file"; then
-  echo "Historical session cookie name detected; using bbm_session_v2 at runtime"
-fi
-read_legacy_value() {
-  key="$1"
-  [ -f "$legacy_env_file" ] || return 0
-  sed -n "s/^${key}=//p" "$legacy_env_file" | tail -n 1
+archive_mount_access_ok() {
+  [ -d "$archive_mount_root" ] && [ ! -L "$archive_mount_root" ] || return 1
+  for access in r w x; do
+    runuser -u borg -- test "-$access" "$archive_mount_root" || return 1
+  done
 }
-if [ -z "${BBM_ADMIN_TOKEN:-}" ]; then BBM_ADMIN_TOKEN=$(read_legacy_value BBM_ADMIN_TOKEN); fi
-if [ -z "${BBM_SECRET_KEY:-}" ]; then BBM_SECRET_KEY=$(read_legacy_value BBM_SECRET_KEY); fi
-export BBM_ADMIN_TOKEN BBM_SECRET_KEY
 
-# Migriert alle Geheimnisse in /data/security/security.db und materialisiert
-# ausschließlich die für die Containerlaufzeit erforderlichen Schlüssel unter
-# /run/bbm-secrets. /run ist nicht persistent.
+if [ "$archive_mounts_enabled" = "1" ]; then
+  if ! archive_mount_access_ok; then
+    archive_mount_entry=""
+    archive_mount_scan_ok=0
+    if archive_mount_entry="$(find "$archive_mount_root" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)"; then
+      archive_mount_scan_ok=1
+    fi
+    if [ "$archive_mount_scan_ok" -eq 1 ] && [ -z "$archive_mount_entry" ]; then
+      echo "[borgbackup-manager] Initializing empty archive mount directory $archive_mount_root for UID:GID ${borg_uid}:${borg_gid}."
+      chown "${borg_uid}:${borg_gid}" "$archive_mount_root" || true
+      chmod u+rwx "$archive_mount_root" || true
+    elif [ "$archive_mount_scan_ok" -eq 1 ]; then
+      echo "[borgbackup-manager] Archive mount directory $archive_mount_root contains existing data; recursive ownership changes are disabled." >&2
+    else
+      echo "[borgbackup-manager] Archive mount directory $archive_mount_root could not be inspected safely." >&2
+    fi
+  fi
+  if ! archive_mount_access_ok; then
+    echo "Archive mount directory $archive_mount_root lacks r/w/x access for UID:GID ${borg_uid}:${borg_gid}." >&2
+    echo "Correct the ownership/permissions or ACLs of BBM_ARCHIVE_MOUNT_PATH on the Docker host." >&2
+    exit 1
+  fi
+  [ -e /dev/fuse ] || { echo "/dev/fuse is required when archive mounts are enabled" >&2; exit 1; }
+  command -v fusermount3 >/dev/null 2>&1 || command -v fusermount >/dev/null 2>&1 || {
+    echo "fusermount3/fusermount is required when archive mounts are enabled" >&2; exit 1;
+  }
+  grep -Eq '^[[:space:]]*user_allow_other([[:space:]]*(#.*)?)?$' /etc/fuse.conf || {
+    echo "/etc/fuse.conf must contain user_allow_other when archive mounts are enabled" >&2; exit 1;
+  }
+fi
+
+# Initialize the current security store and materialize only the runtime keys
+# required under /run/bbm-secrets. /run is not persistent.
 python -m app.security_bootstrap
 
 show_initial_admin_on_start="${BBM_SHOW_INITIAL_ADMIN_ON_START:-0}"
@@ -125,24 +157,6 @@ chmod 600 /run/bbm-secrets/repository-ssh/ssh_host_ed25519_key
 chown root:borg /run/bbm-secrets/repository-ssh/ssh_host_ed25519_key.pub
 chmod 640 /run/bbm-secrets/repository-ssh/ssh_host_ed25519_key.pub
 
-if [ -f "$legacy_env_file" ] && { [ -n "${BBM_ADMIN_TOKEN:-}" ] || [ -n "${BBM_SECRET_KEY:-}" ]; }; then
-  python - "$legacy_env_file" <<'PYSECURITYENV'
-from pathlib import Path
-import os, sys
-path = Path(sys.argv[1])
-lines = path.read_text(encoding="utf-8").splitlines()
-legacy = {"BBM_ADMIN_TOKEN", "BBM_SECRET_KEY", "BBM_ALLOW_LEGACY_TOKEN_AUTH"}
-cleaned = [line for line in lines if line.split("=", 1)[0].strip() not in legacy]
-with path.open("w", encoding="utf-8") as handle:
-    handle.write("\n".join(cleaned).rstrip() + "\n")
-    handle.flush(); os.fsync(handle.fileno())
-try: path.chmod(0o600)
-except OSError: pass
-PYSECURITYENV
-  echo "Legacy security values were migrated and removed from the host .env"
-fi
-unset BBM_ADMIN_TOKEN BBM_SECRET_KEY
-
 rm -f /run/bbm-secrets/sshd-config.valid
 /usr/sbin/sshd -t
 printf 'ok\n' > /run/bbm-secrets/sshd-config.valid
@@ -152,12 +166,51 @@ chmod 640 /run/bbm-secrets/sshd-config.valid
 sshd_pid=""
 api_pid=""
 stopping=0
+archive_mount_points() {
+  python - "$archive_mount_root" <<'PYARCHIVEMOUNTS'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+def decode(value: str) -> str:
+    return value.replace(r"\040", " ").replace(r"\011", "\t").replace(r"\012", "\n").replace(r"\134", "\\")
+rows = []
+try:
+    lines = Path("/proc/self/mountinfo").read_text(encoding="utf-8", errors="replace").splitlines()
+except OSError:
+    lines = []
+for line in lines:
+    before, sep, after = line.partition(" - ")
+    if not sep:
+        continue
+    fields = before.split(); tail = after.split()
+    if len(fields) < 5 or not tail or not tail[0].startswith("fuse"):
+        continue
+    path = Path(decode(fields[4]))
+    if path == root or root in path.parents:
+        rows.append(path)
+for path in sorted(set(rows), key=lambda item: (len(item.parts), str(item)), reverse=True):
+    print(path)
+PYARCHIVEMOUNTS
+}
+cleanup_archive_mounts() {
+  [ "$archive_mounts_enabled" = "1" ] || return 0
+  archive_mount_points | while IFS= read -r mount_path; do
+    [ -n "$mount_path" ] || continue
+    echo "[borgbackup-manager] Unmounting archive mount $mount_path."
+    timeout -k 1 5 runuser -u borg -- fusermount3 -u "$mount_path" 2>/dev/null \
+      || timeout -k 1 5 runuser -u borg -- borg umount "$mount_path" 2>/dev/null \
+      || timeout -k 1 5 runuser -u borg -- fusermount3 -uz "$mount_path" 2>/dev/null \
+      || timeout -k 1 5 umount -l "$mount_path" 2>/dev/null \
+      || echo "[borgbackup-manager] Archive mount could not be unmounted cleanly: $mount_path" >&2
+  done
+}
 stop_services() {
   [ "$stopping" -eq 0 ] || return 0
   stopping=1
   [ -z "$api_pid" ] || kill -TERM "$api_pid" 2>/dev/null || true
-  [ -z "$sshd_pid" ] || kill -TERM "$sshd_pid" 2>/dev/null || true
   [ -z "$api_pid" ] || wait "$api_pid" 2>/dev/null || true
+  cleanup_archive_mounts
+  [ -z "$sshd_pid" ] || kill -TERM "$sshd_pid" 2>/dev/null || true
   [ -z "$sshd_pid" ] || wait "$sshd_pid" 2>/dev/null || true
 }
 trap 'stop_services; exit 143' TERM INT HUP
@@ -196,10 +249,19 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
-runuser -u borg -- env HOME=/repositories \
-  uvicorn app.main:app --host 0.0.0.0 --port 8443 \
-  --ssl-certfile /run/bbm-secrets/tls/fullchain.pem \
-  --ssl-keyfile /run/bbm-secrets/tls/privkey.pem --no-proxy-headers &
+if [ "$archive_mounts_enabled" = "1" ]; then
+  setpriv --reuid="$borg_uid" --regid="$borg_gid" --clear-groups \
+    --inh-caps=+sys_admin --ambient-caps=+sys_admin \
+    env HOME=/repositories \
+    uvicorn app.main:app --host 0.0.0.0 --port 8443 \
+    --ssl-certfile /run/bbm-secrets/tls/fullchain.pem \
+    --ssl-keyfile /run/bbm-secrets/tls/privkey.pem --no-proxy-headers &
+else
+  runuser -u borg -- env HOME=/repositories \
+    uvicorn app.main:app --host 0.0.0.0 --port 8443 \
+    --ssl-certfile /run/bbm-secrets/tls/fullchain.pem \
+    --ssl-keyfile /run/bbm-secrets/tls/privkey.pem --no-proxy-headers &
+fi
 api_pid=$!
 
 log_max_bytes="${BBM_LOG_MAX_BYTES:-10485760}"

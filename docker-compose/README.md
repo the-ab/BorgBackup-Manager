@@ -10,7 +10,7 @@ This installation mode does not require the project source tree or `install.sh`.
 
 ## Prepare the files
 
-Copy the three required files into a dedicated deployment directory:
+Copy the two required files into a dedicated deployment directory:
 
 ```bash
 sudo mkdir -p /opt/borgbackup-manager
@@ -36,13 +36,14 @@ The `.env` file must remain next to `compose.yaml`. It is also mounted read-only
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `BBM_IMAGE_TAG` | `latest` | GHCR tag to deploy. Pin a release such as `v1.2.3` for reproducible installations. |
+| `BBM_IMAGE_TAG` | `latest` | GHCR tag to deploy. Pin a release such as `v1.2.9` for reproducible installations. |
 | `TZ` | `Europe/Berlin` | Time zone used by the Web UI, schedules, and Borg processes. Use a valid IANA time-zone name. |
 | `BBM_HTTPS_PORT` | `8443` | HTTPS Web UI port published on the Docker host. |
 | `BBM_REPOSITORY_SSH_PORT` | `2222` | SSH port published on the Docker host for Borg repository access. |
 | `BBM_TLS_HOSTS` | Example host, `localhost`, `127.0.0.1` | Comma-separated DNS names and IP addresses for the TLS certificate generated on first start. Do not use spaces. |
 | `BBM_DATA_PATH` | `/docker_data/borgbackup-manager/data` | Absolute host path for the database, settings, logs, security material, and manager backups. |
 | `BBM_REPOSITORY_PATH` | `/docker_data/borgbackup-manager/repositories` | Absolute host path for managed Borg repositories and submounts. |
+| `BBM_ARCHIVE_MOUNT_PATH` | `/docker_data/borgbackup-manager/archive-mounts` | Host path for read-only archive mounts enabled by default. |
 | `BBM_BORG_UID` | `1000` | Numeric UID of the restricted `borg` user inside the container. It must match host or NFS permissions on the repository path. |
 | `BBM_BORG_GID` | `1000` | Numeric GID of the restricted `borg` user inside the container. It must match host or NFS permissions on the repository path. |
 | `BBM_SHOW_INITIAL_ADMIN_ON_START` | `1` | Writes the administrator name and temporary password exactly once to the container startup log on a genuine new installation. Set to `0` to disable automatic output. |
@@ -58,13 +59,13 @@ BBM_IMAGE_TAG=latest
 `latest` follows the most recently published image. Prefer a fixed release for controlled deployments:
 
 ```dotenv
-BBM_IMAGE_TAG=v1.2.3
+BBM_IMAGE_TAG=v1.2.9
 ```
 
 This selects:
 
 ```text
-ghcr.io/the-ab/borgbackup-manager:v1.2.3
+ghcr.io/the-ab/borgbackup-manager:v1.2.9
 ```
 
 ## Network and TLS
@@ -163,6 +164,41 @@ BBM_REPOSITORY_PATH=/docker_data/borgbackup-manager/repositories
 ```
 
 On first start, an empty directory created by Docker as `root` is initialized only at the mount root for `BBM_BORG_UID:BBM_BORG_GID`. Existing content is never recursively changed with `chown`.
+
+### `BBM_ARCHIVE_MOUNT_PATH` and default FUSE support
+
+Archive mounts are enabled by the normal `compose.yaml`. The host must provide `/dev/fuse`; no additional Compose file is required.
+
+```dotenv
+BBM_ARCHIVE_MOUNT_PATH=/docker_data/borgbackup-manager/archive-mounts
+```
+
+Prepare the host path for the configured Borg UID/GID:
+
+```bash
+sudo modprobe fuse
+sudo mkdir -p /docker_data/borgbackup-manager/archive-mounts
+sudo chown 1000:1000 /docker_data/borgbackup-manager/archive-mounts
+sudo chmod 700 /docker_data/borgbackup-manager/archive-mounts
+
+docker compose config
+docker compose pull
+docker compose up -d
+```
+
+The standard configuration uses `/dev/fuse`, `CAP_SYS_ADMIN`, an AppArmor allowance, and `rshared` mount propagation. These permissions require a trusted Docker host. Mounted archives appear below:
+
+```text
+BBM_ARCHIVE_MOUNT_PATH/
+└── REPOSITORY-rID/
+    └── ARCHIVE-HASH/
+```
+
+Mounts are read-only. This release supports the feature only for **locally managed repositories**; external SSH repositories are not mounted. At most one archive mount is allowed per repository. While it is active, backup, archive-cleanup, and compact runs for that repository wait; archive deletion and renaming are blocked. All active mounts are unmounted during a controlled container stop. After a hard stop, stale database rows are reconciled on the next start.
+
+On the Docker host, FUSE access is intended for the numeric identity `BBM_BORG_UID:BBM_BORG_GID`. The host user accessing the files should therefore use the same UID; FUSE may reject access by other users.
+
+`/data/exports` remains separate and is used only for temporary TAR.GZ downloads from the archive browser.
 
 ### `BBM_BORG_UID` and `BBM_BORG_GID`
 
@@ -400,4 +436,4 @@ docker compose pull
 docker compose up -d
 ```
 
-Persistent state and repositories remain in the host directories configured by `BBM_DATA_PATH` and `BBM_REPOSITORY_PATH`.
+Persistent state, repositories, and archive mount paths remain in the host directories configured by `BBM_DATA_PATH`, `BBM_REPOSITORY_PATH`, and `BBM_ARCHIVE_MOUNT_PATH`. All later `pull`, `up`, `stop`, and `down` commands use only the normal `compose.yaml`.

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
 import json
 import os
 import re
@@ -47,6 +46,10 @@ class Command:
     # The service serializes these commands separately from client-side backup
     # jobs so metadata requests cannot race prune/compact on the same cache.
     manager_cache_repository_id: int | None = None
+    # Archive-mount lifecycle commands and repository-independent source scans
+    # may run while a manager-side archive mount record exists. All other
+    # repository commands are rejected with a clear conflict before Borg starts.
+    allow_active_archive_mount: bool = False
 
 
 class CommandCancelled(RuntimeError):
@@ -1174,12 +1177,14 @@ else
 fi
 exit "$bbm_rc"
 '''.strip()
-    return _ssh_argv(
+    command = _ssh_argv(
         job.host,
         ["sh", "-c", script, "--", *sources],
         {},
         supervised=True,
     )
+    command.allow_active_archive_mount = True
+    return command
 
 def prune_command(job: Job) -> Command:
     options = json.loads(job.prune_options_json or "{}")
@@ -2101,96 +2106,6 @@ def browse_archive_command(job: Job, archive: str, relative_path: str = "") -> C
     return _repository_operation(job, parts)
 
 
-def mount_archive_command(job: Job, archive: str) -> Command:
-    archive = validate_archive_name(archive)
-    suffix = hashlib.sha256(archive.encode("utf-8")).hexdigest()[:12]
-    mount_name = f"job-{job.id}-{suffix}"
-    script = r'''
-set -eu
-archive="$1"
-mount_name="$2"
-command -v mountpoint >/dev/null 2>&1 || {
-  printf '%s\n' 'FEHLER: mountpoint fehlt auf dem Client (Paket util-linux).' >&2
-  exit 76
-}
-if ! command -v fusermount3 >/dev/null 2>&1 && ! command -v fusermount >/dev/null 2>&1; then
-  printf '%s\n' 'FEHLER: FUSE fehlt auf dem Client (unter Debian/Ubuntu Paket fuse3 installieren).' >&2
-  exit 79
-fi
-[ -e /dev/fuse ] || {
-  printf '%s\n' 'FEHLER: /dev/fuse ist auf dem Client nicht verfügbar.' >&2
-  exit 80
-}
-mount_root="$HOME/.local/share/bbm/mounts"
-mount_path="$mount_root/$mount_name"
-mkdir -p "$mount_path"
-if ! mountpoint -q "$mount_path"; then
-  borg --lock-wait 600 mount "::$archive" "$mount_path"
-fi
-if ! mountpoint -q "$mount_path"; then
-  printf 'FEHLER: Archiv wurde nicht eingehängt: %s\n' "$mount_path" >&2
-  exit 77
-fi
-printf 'BBM_MOUNT_PATH=%s\n' "$mount_path"
-'''.strip()
-    return _ssh_argv(
-        job.host,
-        ["sh", "-c", script, "--", archive, mount_name],
-        _remote_env(job.repository),
-    )
-
-
-def unmount_archive_command(job: Job, mount_path: str) -> Command:
-    path = PurePosixPath(mount_path)
-    if not mount_path.startswith("/") or ".." in path.parts or any(c in mount_path for c in "\x00\r\n"):
-        raise ValueError("Invalid mount path")
-    script = r'''
-set -eu
-mount_path="$1"
-if command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$mount_path"; then
-  borg umount "$mount_path"
-fi
-rmdir "$mount_path" 2>/dev/null || true
-printf 'BBM_UNMOUNTED=%s\n' "$mount_path"
-'''.strip()
-    return _ssh_argv(job.host, ["sh", "-c", script, "--", mount_path], {})
-
-
-def browse_mount_command(job: Job, mount_path: str, relative_path: str = "") -> Command:
-    mount = PurePosixPath(mount_path)
-    relative = PurePosixPath(relative_path or ".")
-    if not mount_path.startswith("/") or ".." in mount.parts or any(c in mount_path for c in "\x00\r\n"):
-        raise ValueError("Invalid mount path")
-    if relative_path.startswith("/") or ".." in relative.parts or any(c in relative_path for c in "\x00\r\n"):
-        raise ValueError("Invalid archive browser path")
-    script = r'''
-set -eu
-mount_path="$1"
-relative_path="$2"
-command -v mountpoint >/dev/null 2>&1 || exit 76
-mountpoint -q "$mount_path" || {
-  printf 'FEHLER: Archiv ist nicht mehr eingehängt: %s\n' "$mount_path" >&2
-  exit 77
-}
-target="$mount_path"
-if [ -n "$relative_path" ]; then target="$mount_path/$relative_path"; fi
-[ -d "$target" ] || {
-  printf 'FEHLER: Verzeichnis im Archiv nicht gefunden: %s\n' "$relative_path" >&2
-  exit 78
-}
-command -v find >/dev/null 2>&1 || {
-  printf '%s\n' 'FEHLER: find fehlt auf dem Client (unter Debian/Ubuntu Paket findutils).' >&2
-  exit 84
-}
-if ! find "$target" -maxdepth 0 -printf '' >/dev/null 2>&1; then
-  printf '%s\n' 'FEHLER: Der Archivbrowser benötigt GNU find mit -printf (Paket findutils).' >&2
-  exit 85
-fi
-find "$target" -mindepth 1 -maxdepth 1 -printf '%f\0%y\0%s\0%T@\0%l\0'
-'''.strip()
-    return _ssh_argv(job.host, ["sh", "-c", script, "--", mount_path, relative_path], {})
-
-
 def repository_init_command(repository: Repository) -> Command:
     if not repository.storage_path:
         raise ValueError("Only managed repositories can be initialized by the manager")
@@ -2274,6 +2189,57 @@ def repository_browse_archive_command(repository: Repository, archive: str, rela
         f"::{archive}",
     ]
     return repository_access_command(repository, parts)
+
+
+def manager_archive_mount_command(repository: Repository, archive: str, mount_path: str) -> Command:
+    archive = validate_archive_name(archive)
+    target = PurePosixPath(mount_path)
+    if not mount_path.startswith("/") or ".." in target.parts or any(c in mount_path for c in "\x00\r\n"):
+        raise ValueError("Invalid archive mount path")
+    command = repository_access_command(
+        repository,
+        [*_borg_base("mount"), "-o", "allow_other", f"::{archive}", mount_path],
+    )
+    command.allow_active_archive_mount = True
+    command.timeout_seconds = min(COMMAND_TIMEOUT, 900)
+    return command
+
+
+def manager_archive_unmount_command(mount_path: str) -> Command:
+    target = PurePosixPath(mount_path)
+    if not mount_path.startswith("/") or ".." in target.parts or any(c in mount_path for c in "\x00\r\n"):
+        raise ValueError("Invalid archive mount path")
+    script = r"""
+set +e
+mount_path="$1"
+if command -v mountpoint >/dev/null 2>&1 && ! mountpoint -q "$mount_path"; then
+  exit 0
+fi
+try_unmount() {
+  timeout -k 1 5 "$@" "$mount_path"
+}
+if command -v fusermount3 >/dev/null 2>&1; then
+  try_unmount fusermount3 -u && exit 0
+elif command -v fusermount >/dev/null 2>&1; then
+  try_unmount fusermount -u && exit 0
+fi
+try_unmount borg umount && exit 0
+if command -v fusermount3 >/dev/null 2>&1; then
+  try_unmount fusermount3 -uz && exit 0
+elif command -v fusermount >/dev/null 2>&1; then
+  try_unmount fusermount -uz && exit 0
+fi
+if command -v umount >/dev/null 2>&1; then
+  try_unmount umount -l && exit 0
+fi
+exit 79
+""".strip()
+    return Command(
+        argv=manager_borg_argv(["sh", "-c", script, "--", mount_path]),
+        preview=f"[direkt im Manager] Archiv-Mount aushängen: {shlex.quote(mount_path)}",
+        timeout_seconds=18,
+        allow_active_archive_mount=True,
+    )
 
 
 def repository_keyfile_path(repository: Repository) -> PurePosixPath:

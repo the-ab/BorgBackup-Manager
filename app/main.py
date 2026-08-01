@@ -28,11 +28,16 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 
 from app.archive_cache import invalidate_archive_cache, load_archive_cache
+from app.archive_mounts import (
+    archive_mount_capability, archive_mount_host_path, archive_mount_is_active,
+    archive_mount_path, cleanup_archive_mount_path, prepare_archive_mount_path,
+    require_archive_mount_capability,
+)
 from app.archive_metadata import annotate_archive_devices, infer_archive_device, sort_archives_newest_first
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
 from app.borg_progress import get_run_item_activity, get_run_network_activity, get_run_progress
@@ -96,14 +101,13 @@ from app.notifications import (
 )
 from app.repository_state import managed_repository_present
 from app.release import APP_RELEASE_DATE
-from app.log_filter import extract_error_output, strip_borg_item_lines
-from app.models import ArchiveMount, BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, JobIdReservation, NotificationDelivery, Repository, Run
+from app.log_filter import extract_error_output
+from app.models import BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, JobIdReservation, ManagerArchiveMount, NotificationDelivery, Repository, Run
 from app.runner import (
     archive_export_command,
     archive_info_command,
+    execute,
     browse_archive_command,
-    browse_mount_command,
-    mount_archive_command,
     host_version_command,
     repository_command,
     repository_keyfile_path,
@@ -113,8 +117,9 @@ from app.runner import (
     repository_browse_archive_command,
     job_archive_prefixes,
     manager_borg_argv,
+    manager_archive_mount_command,
+    manager_archive_unmount_command,
     scan_host_key,
-    unmount_archive_command,
 )
 from app.schemas import (
     ArchiveDeleteIn,
@@ -161,21 +166,20 @@ from app.repository_sizes import (
     managed_repository_filesystem_size, repository_statistics_from_borg_info,
     store_repository_statistics,
 )
-from app.run_logs import available_run_log_ids, append_run_log, cleanup_orphan_run_logs, delete_run_log, read_run_log, read_run_log_delta, run_log_path, run_log_storage_bytes
+from app.run_logs import available_run_log_ids, cleanup_orphan_run_logs, delete_run_log, read_run_log, read_run_log_delta, run_log_path, run_log_storage_bytes
 from app.settings import load_settings, save_settings
 from app.update_check import check_latest_release, load_update_status
 from app.storage_guard import (
     effective_storage_guard, mounted_filesystems_below, repository_mount_path,
     repository_storage_filesystems, repository_storage_status,
 )
-from app.time_utils import APP_TIMEZONE, APP_TIMEZONE_NAME, iso_utc
+from app.time_utils import APP_TIMEZONE, APP_TIMEZONE_NAME, ensure_utc, iso_utc
 from app.schedules import (
-    migrate_legacy_job_schedules, schedule_assignments, schedule_expressions,
+    schedule_assignments, schedule_expressions,
     schedule_target_job_ids, validate_job_schedule_conflicts, validate_schedule_conflicts,
     validate_schedule_targets_exist,
 )
 from app.security_bootstrap import bootstrap_security_material
-from app.security_migrate import migrate_repository_secrets
 from app.security_store import (
     AuthUser, authenticate_user, change_own_password, consume_login_attempt, create_session, create_session_reload_token, create_user,
     delete_user as delete_security_user, get_session_user, get_session_user_by_reload_token, initialize_security_store,
@@ -185,7 +189,6 @@ from app.vault import (
     delete_repository_secrets, get_repository_secret, repository_secret_exists,
     set_repository_secret, store_repository_environment,
 )
-from app.config import LEGACY_ADMIN_TOKEN
 from app.security import require_authenticated_user, require_token, session_cookie_values
 from app.request_security import (
     client_address,
@@ -193,6 +196,7 @@ from app.request_security import (
     request_uses_https,
 )
 from app.service import (
+    ActiveArchiveMountError,
     bootstrap_host_repository,
     clear_repository_cache,
     execute_interactive,
@@ -237,22 +241,17 @@ def _set_session_cookie(response: Response, request: Request, token: str) -> Non
         samesite="strict",
         path="/",
     )
-    # v1.0.21 changes the default cookie name so a stale Secure cookie from an
-    # older proxy configuration cannot mask the new browser session.
-    if SESSION_COOKIE_NAME != "bbm_session":
-        response.delete_cookie("bbm_session", path="/", httponly=True, samesite="strict")
 
 
 def _delete_session_cookie(response: Response, request: Request) -> None:
     secure = _request_uses_https(request)
-    for name in dict.fromkeys((SESSION_COOKIE_NAME, "bbm_session")):
-        response.delete_cookie(
-            name,
-            path="/",
-            secure=secure,
-            httponly=True,
-            samesite="strict",
-        )
+    response.delete_cookie(
+        SESSION_COOKIE_NAME,
+        path="/",
+        secure=secure,
+        httponly=True,
+        samesite="strict",
+    )
 
 
 def host_out(row: Host) -> HostOut:
@@ -383,26 +382,6 @@ async def prepare_external_repository_credentials(data, existing: Repository | N
         "external_known_hosts": known_hosts,
         "external_host_fingerprint": fingerprint,
     }
-
-
-def migrate_legacy_external_repository_access() -> None:
-    """Retire the 0.9.3 access-client model without deleting repositories."""
-    with SessionLocal() as db:
-        changed = False
-        for row in db.scalars(select(Repository).where(Repository.storage_path.is_(None))):
-            if row.access_host_id or row.external_ssh_key_path or row.external_known_hosts_path:
-                row.access_host_id = None
-                row.external_ssh_key_path = None
-                row.external_known_hosts_path = None
-                if not repository_secret_exists(row, "external_ssh_private_key"):
-                    row.initialized = False
-                    row.validation_error = (
-                        "Die frühere Zugriffs-Client-Konfiguration wurde entfernt. "
-                        "Bitte einen Manager-SSH-Schlüssel und known_hosts hinterlegen."
-                    )
-                changed = True
-        if changed:
-            db.commit()
 
 
 def migrate_repository_validation_diagnostics() -> None:
@@ -949,58 +928,6 @@ def run_storage_info() -> dict:
     }
 
 
-def migrate_run_payloads_to_files() -> int:
-    """Move legacy/full run output out of SQLite and keep only small previews.
-
-    Older releases stored up to several MiB three times per execution. Existing
-    data is copied to the persistent file log when no file exists, then reduced
-    to bounded previews. The operation is idempotent.
-    """
-    migrated = 0
-    preview_log = 16 * 1024
-    preview_stdout = 4 * 1024
-    preview_stderr = 8 * 1024
-    max_file_bytes = load_settings().run_log_max_mib * 1024 * 1024
-    with SessionLocal() as db:
-        rows = db.scalars(
-            select(Run).where(
-                (Run.output != "") | (Run.error != "") | (Run.log_output != "")
-            )
-        ).all()
-        for row in rows:
-            changed = False
-            combined = row.log_output or (row.output + ("\n" if row.output and row.error else "") + row.error)
-            if combined and not run_log_path(row.id).is_file():
-                append_run_log(row.id, combined, max_file_bytes)
-            if row.action == "backup" and row.status == "warning" and not row.warning_summary_json:
-                summary = parse_borg_warnings(combined)
-                if summary:
-                    row.warning_summary_json = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
-                    changed = True
-            new_output = strip_borg_item_lines(row.output or "")[-preview_stdout:]
-            new_error = strip_borg_item_lines(extract_error_output(row.error or ""))[-preview_stderr:]
-            preview_parts = [part for part in (new_output, new_error) if part]
-            new_log = "\n".join(preview_parts)[-preview_log:]
-            if row.output != new_output or row.error != new_error or row.log_output != new_log:
-                row.output = new_output
-                row.error = new_error
-                row.log_output = new_log
-                changed = True
-            if changed:
-                migrated += 1
-        if migrated:
-            db.commit()
-    return migrated
-
-
-
-async def scheduled_update_check() -> None:
-    settings = load_settings()
-    if not settings.update_check_enabled:
-        return
-    await asyncio.to_thread(check_latest_release, APP_VERSION)
-
-
 def _update_check_next_run(interval_hours: int, *, immediate: bool = False) -> datetime:
     """Keep the release-check cadence stable when application schedules are rebuilt."""
     now = datetime.now(timezone.utc)
@@ -1021,6 +948,13 @@ def _update_check_next_run(interval_hours: int, *, immediate: bool = False) -> d
     due = previous + timedelta(hours=max(1, int(interval_hours)))
     return due if due > now else now
 
+
+
+async def scheduled_update_check() -> None:
+    settings = load_settings()
+    if not settings.update_check_enabled:
+        return
+    await asyncio.to_thread(check_latest_release, APP_VERSION)
 
 def sync_update_check_job(*, immediate: bool = False) -> None:
     if scheduler.get_job(UPDATE_CHECK_JOB_ID) is not None:
@@ -1085,6 +1019,21 @@ def recover_interrupted_runs() -> None:
 
 
 
+def reconcile_manager_archive_mounts() -> None:
+    """Drop stale database rows left by a container restart or hard stop."""
+    with SessionLocal() as db:
+        rows = list(db.scalars(select(ManagerArchiveMount).order_by(ManagerArchiveMount.id)))
+        for row in rows:
+            if archive_mount_is_active(row.mount_path):
+                row.status = "mounted"
+                row.error = ""
+            else:
+                mount_path = row.mount_path
+                db.delete(row)
+                cleanup_archive_mount_path(mount_path)
+        db.commit()
+
+
 async def system_health_watch_loop() -> None:
     """Watch core health independently from APScheduler.
 
@@ -1116,24 +1065,18 @@ async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     migrate_schema()
-    initialize_security_store(LEGACY_ADMIN_TOKEN)
+    reconcile_manager_archive_mounts()
+    initialize_security_store()
     # The container entrypoint materializes runtime TLS and SSH material as root
     # before dropping privileges.  Do not repeat that privileged operation in
     # the unprivileged Web API process.  Direct development/test starts still
     # bootstrap normally when the marker is absent.
     if os.getenv("BBM_RUNTIME_SECURITY_PREPARED") != "1":
         bootstrap_security_material()
-    migrate_repository_secrets()
-    migrate_legacy_external_repository_access()
     migrate_repository_validation_diagnostics()
     sync_managed_repository_locations()
     sync_job_archive_prefixes()
-    with SessionLocal() as db:
-        migrate_legacy_job_schedules(db)
     repair_invalid_stored_borg_versions()
-    migrated_run_payloads = migrate_run_payloads_to_files()
-    if migrated_run_payloads:
-        vacuum_database()
     with SessionLocal() as db:
         cleanup_orphan_run_logs(set(db.scalars(select(Run.id))))
     sync_repository_access_assignments()
@@ -1156,6 +1099,11 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="BorgBackup Manager", version=APP_VERSION, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.exception_handler(ActiveArchiveMountError)
+async def active_archive_mount_exception(_request: Request, exc: ActiveArchiveMountError):
+    return JSONResponse({"detail": str(exc)}, status_code=409)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -1206,13 +1154,10 @@ admin_protected = [Depends(require_admin_access)]
 @app.middleware("http")
 async def browser_security_headers(request: Request, call_next):
     if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path.startswith("/api/"):
-        authorization = request.headers.get("authorization", "")
-        legacy_bearer = authorization.startswith("Bearer ")
-        if not legacy_bearer:
-            if request.headers.get("x-bbm-request", "") != "1":
-                return JSONResponse({"detail": "Missing anti-CSRF request header"}, status_code=403)
-            if not origin_matches_request(request):
-                return JSONResponse({"detail": "Request origin does not match this BorgBackup Manager"}, status_code=403)
+        if request.headers.get("x-bbm-request", "") != "1":
+            return JSONResponse({"detail": "Missing anti-CSRF request header"}, status_code=403)
+        if not origin_matches_request(request):
+            return JSONResponse({"detail": "Request origin does not match this BorgBackup Manager"}, status_code=403)
     try:
         response = await call_next(request)
     except Exception as exc:
@@ -1390,18 +1335,6 @@ def users_list() -> list[dict]:
 @app.get("/api/users/security-status", dependencies=admin_protected)
 def users_security_status() -> dict:
     status = security_status()
-    with SessionLocal() as db:
-        legacy_rows = db.scalar(
-            select(func.count()).select_from(Repository).where(or_(
-                Repository.passphrase_env.is_not(None),
-                Repository.encrypted_passphrase.is_not(None),
-                Repository.encrypted_keyfile.is_not(None),
-                Repository.encrypted_external_ssh_key.is_not(None),
-                Repository.encrypted_external_known_hosts.is_not(None),
-                Repository.external_ssh_key_path.is_not(None),
-                Repository.external_known_hosts_path.is_not(None),
-            ))
-        ) or 0
     obsolete_private_files = []
     for path in (
         DATA_DIR / "ssh" / "id_ed25519",
@@ -1411,9 +1344,8 @@ def users_security_status() -> dict:
         if path.is_file():
             obsolete_private_files.append(str(path))
     status.update({
-        "legacy_repository_secret_rows": legacy_rows,
         "obsolete_private_files": obsolete_private_files,
-        "sensitive_storage_ok": legacy_rows == 0 and not obsolete_private_files,
+        "sensitive_storage_ok": not obsolete_private_files,
         "secret_database": status.get("database"),
         "master_key_note": "Der Master-Key bleibt als einziges externes Vertrauensanker-Geheimnis unter /data/security/master.key.",
     })
@@ -2646,9 +2578,6 @@ async def create_repository(data: RepositoryIn):
             passphrase_env=None,
             encryption_mode=data.encryption_mode,
             storage_path=storage_path,
-            access_host_id=None,
-            external_ssh_key_path=None,
-            external_known_hosts_path=None,
             external_ssh_public_key=external_credentials.get("external_ssh_public_key"),
             external_host_fingerprint=external_credentials.get("external_host_fingerprint"),
             initialized=False,
@@ -2737,9 +2666,6 @@ async def update_repository(row_id: int, data: RepositoryUpdate):
                 row.external_storage_path = None
                 row.external_storage_checked_at = None
                 row.external_storage_error = None
-            row.access_host_id = None
-            row.external_ssh_key_path = None
-            row.external_known_hosts_path = None
             row.external_ssh_public_key = next_public_key
             row.external_host_fingerprint = next_fingerprint
             if connection_changed:
@@ -2859,7 +2785,12 @@ def delete_repository(row_id: int):
             raise HTTPException(404, "Repository not found")
         if db.scalar(select(func.count()).select_from(Job).where(Job.repository_id == row_id)):
             raise HTTPException(409, "Repository is still used by jobs")
-        if db.scalar(select(func.count()).select_from(ArchiveMount).where(ArchiveMount.repository_id == row_id)):
+        if db.scalar(
+            select(func.count()).select_from(ManagerArchiveMount).where(
+                ManagerArchiveMount.repository_id == row_id,
+                ManagerArchiveMount.status.in_(["mounting", "mounted"]),
+            )
+        ):
             raise HTTPException(409, "Repository still has an active archive mount")
         if db.scalar(
             select(func.count()).select_from(Run).where(
@@ -2908,7 +2839,10 @@ async def compact_repository(repository_id: int) -> dict:
     with SessionLocal() as db:
         repository = load_repository_with_access(db, repository_id)
         if db.scalar(
-            select(ArchiveMount.id).where(ArchiveMount.repository_id == repository_id).limit(1)
+            select(ManagerArchiveMount.id).where(
+                ManagerArchiveMount.repository_id == repository_id,
+                ManagerArchiveMount.status.in_(["mounting", "mounted"]),
+            ).limit(1)
         ):
             raise HTTPException(409, "Repository Compact is blocked while an archive is mounted")
         subject = f"Repository: {repository.name}"
@@ -3113,8 +3047,6 @@ def delete_job(row_id: int):
             )
         ):
             raise HTTPException(409, "Job has a queued or running execution and cannot be deleted yet")
-        if db.scalar(select(func.count()).select_from(ArchiveMount).where(ArchiveMount.job_id == row_id)):
-            raise HTTPException(409, "Unmount all archives of this job before deleting it")
         for run in db.scalars(select(Run).where(Run.job_id == row_id)):
             run.job_name_snapshot = run.job_name_snapshot or row.name
             run.job_id = None
@@ -3293,9 +3225,10 @@ async def delete_repository_archives(repository_id: int, data: ArchiveBulkDelete
         ):
             raise HTTPException(409, "Repository has a queued or running execution")
         mounted = set(db.scalars(
-            select(ArchiveMount.archive).where(
-                ArchiveMount.repository_id == repository_id,
-                ArchiveMount.archive.in_(data.archives),
+            select(ManagerArchiveMount.archive).where(
+                ManagerArchiveMount.repository_id == repository_id,
+                ManagerArchiveMount.archive.in_(data.archives),
+                ManagerArchiveMount.status.in_(["mounting", "mounted"]),
             )
         ))
         if mounted:
@@ -3413,9 +3346,10 @@ async def delete_archive(job_id: int, data: ArchiveDeleteIn) -> dict:
         repository_id = job.repository_id
         subject = f"Gerät: {job.host.name}"
         if db.scalar(
-            select(ArchiveMount.id).where(
-                ArchiveMount.repository_id == repository_id,
-                ArchiveMount.archive == data.archive,
+            select(ManagerArchiveMount.id).where(
+                ManagerArchiveMount.repository_id == repository_id,
+                ManagerArchiveMount.archive == data.archive,
+                ManagerArchiveMount.status.in_(["mounting", "mounted"]),
             )
         ):
             raise HTTPException(409, "Archive is currently mounted and must be unmounted first")
@@ -3443,9 +3377,10 @@ async def rename_archive(job_id: int, data: ArchiveRenameIn) -> dict:
         job = load_job_with_connections(db, job_id, require_client_access=False)
         repository_jobs = list(db.scalars(select(Job).where(Job.repository_id == job.repository_id)))
         if db.scalar(
-            select(ArchiveMount.id).where(
-                ArchiveMount.repository_id == job.repository_id,
-                ArchiveMount.archive == data.archive,
+            select(ManagerArchiveMount.id).where(
+                ManagerArchiveMount.repository_id == job.repository_id,
+                ManagerArchiveMount.archive == data.archive,
+                ManagerArchiveMount.status.in_(["mounting", "mounted"]),
             )
         ):
             raise HTTPException(409, "Archive is currently mounted and must be unmounted first")
@@ -3647,117 +3582,300 @@ async def export_archive_selection(job_id: int, data: ArchiveExportIn) -> FileRe
     )
 
 
-def mount_json(row: ArchiveMount, job_name: str | None = None) -> dict:
+async def wait_for_archive_mount_state(
+    path: str | Path,
+    *,
+    active: bool,
+    timeout_seconds: float,
+    poll_seconds: float = 0.2,
+) -> bool:
+    """Wait briefly for the kernel mount table to reflect a Borg FUSE lifecycle change."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout_seconds)
+    while True:
+        if archive_mount_is_active(path) is active:
+            return True
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(max(0.02, poll_seconds), remaining))
+
+
+async def wait_for_archive_mount_activation(
+    mount_id: int,
+    path: str | Path,
+    *,
+    timeout_seconds: float,
+    poll_seconds: float = 0.2,
+) -> str:
+    """Wait for mount activation while respecting a concurrent unmount request.
+
+    The WebUI polls the mount list while the original POST request is still in
+    flight. A second browser tab or an early refresh can therefore request an
+    unmount before the POST has observed the new FUSE entry. Treat that state as
+    an intentional cancellation instead of reporting a delayed activation
+    failure after the archive was already unmounted.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout_seconds)
+    while True:
+        with SessionLocal() as db:
+            row = db.get(ManagerArchiveMount, mount_id)
+            if row is None or row.status in {"unmounting", "stale"}:
+                return "cancelled"
+        if archive_mount_is_active(path):
+            return "active"
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            # Close the narrow race where an unmount deletes or changes the row
+            # just after the last status read but before the deadline check.
+            with SessionLocal() as db:
+                row = db.get(ManagerArchiveMount, mount_id)
+                if row is None or row.status in {"unmounting", "stale"}:
+                    return "cancelled"
+            return "active" if archive_mount_is_active(path) else "timeout"
+        await asyncio.sleep(min(max(0.02, poll_seconds), remaining))
+
+
+def manager_mount_json(row: ManagerArchiveMount, repository_name: str | None = None) -> dict:
+    active = archive_mount_is_active(row.mount_path)
+    status = row.status
+    if active and status not in {"mounting", "unmounting", "error"}:
+        status = "mounted"
     return {
         "id": row.id,
-        "job_id": row.job_id,
-        "job_name": job_name or (row.job.name if row.job else None),
+        "kind": "manager",
         "repository_id": row.repository_id,
-        "host_id": row.host_id,
+        "repository_name": repository_name or (row.repository.name if row.repository else None),
         "archive": row.archive,
         "mount_path": row.mount_path,
+        "host_path": archive_mount_host_path(row.mount_path),
+        "status": status,
+        "active": active,
+        "error": row.error or "",
         "created_at": row.created_at,
+        "updated_at": row.updated_at,
     }
 
 
-@app.get("/api/mounts", dependencies=admin_protected)
-def list_mounts() -> list[dict]:
-    with SessionLocal() as db:
-        rows = db.scalars(
-            select(ArchiveMount).options(joinedload(ArchiveMount.job)).order_by(ArchiveMount.id.desc())
-        ).all()
-        return [mount_json(row) for row in rows]
+@app.get("/api/archive-mounts/capability", dependencies=admin_protected)
+def archive_mount_capability_api() -> dict:
+    return archive_mount_capability()
 
 
-@app.post("/api/jobs/{job_id}/mounts", status_code=201, dependencies=admin_protected)
-async def mount_archive(job_id: int, data: ArchiveMountIn) -> dict:
+@app.get("/api/archive-mounts", dependencies=admin_protected)
+def list_manager_archive_mounts() -> list[dict]:
     with SessionLocal() as db:
-        job = load_job_with_connections(db, job_id)
-        existing = db.scalar(
-            select(ArchiveMount).where(
-                ArchiveMount.job_id == job_id,
-                ArchiveMount.archive == data.archive,
+        rows = list(db.scalars(
+            select(ManagerArchiveMount)
+            .options(joinedload(ManagerArchiveMount.repository))
+            .order_by(ManagerArchiveMount.id.desc())
+        ))
+        changed = False
+        result: list[dict] = []
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            active = archive_mount_is_active(row.mount_path)
+            transition_at = ensure_utc(row.updated_at) or ensure_utc(row.created_at)
+            transition_recent = bool(
+                row.status in {"mounting", "unmounting"}
+                and transition_at
+                and now - transition_at < timedelta(seconds=30)
             )
-        )
-        if existing:
-            return mount_json(existing, job.name)
-    if not await archive_exists(job, data.archive):
-        raise HTTPException(404, "Archive not found in this repository")
-    command = mount_archive_command(job, data.archive)
-    code, output, error = await execute_interactive(job.repository_id, command)
-    if code != 0:
-        raise borg_operation_error(output, error, code)
-    match = re.search(r"^BBM_MOUNT_PATH=(.+)$", output, flags=re.MULTILINE)
-    if not match:
-        raise HTTPException(400, "Client did not return the archive mount path")
-    mount_path = match.group(1).strip()
+            if active and row.status not in {"mounted", "mounting", "unmounting", "error"}:
+                row.status = "mounted"
+                row.error = ""
+                changed = True
+            elif active and row.status == "mounting" and not transition_recent:
+                # A normally running POST finalizes this state itself. Promote
+                # only an old transition, for example after a worker restart.
+                row.status = "mounted"
+                row.error = ""
+                changed = True
+            elif not active and row.status in {"mounting", "mounted", "unmounting"} and not transition_recent:
+                row.status = "stale"
+                row.error = "Mount ist nicht mehr im Container aktiv. Eintrag kann entfernt werden."
+                changed = True
+            result.append(manager_mount_json(row))
+        if changed:
+            db.commit()
+        return result
+
+
+@app.post("/api/repositories/{repository_id}/archive-mounts", status_code=201, dependencies=admin_protected)
+async def create_manager_archive_mount(repository_id: int, data: ArchiveMountIn) -> dict:
+    try:
+        require_archive_mount_capability()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    mount_path: Path | None = None
+    row_id: int | None = None
     with SessionLocal() as db:
-        row = ArchiveMount(
-            job_id=job_id,
-            repository_id=job.repository_id,
-            host_id=job.host_id,
+        repository = load_repository_with_access(db, repository_id)
+        if not repository.enabled:
+            raise HTTPException(409, "Repository ist deaktiviert")
+        if not repository.initialized:
+            raise HTTPException(409, "Repository ist nicht initialisiert")
+        if not repository.storage_path:
+            raise HTTPException(
+                409,
+                "Archiv-Mounts werden derzeit nur für lokal verwaltete Repositories unterstützt",
+            )
+        if repository.storage_path and not managed_repository_present(repository):
+            raise HTTPException(409, "Verwaltetes Repository ist derzeit nicht verfügbar")
+        if db.scalar(select(Run.id).where(
+            Run.repository_id == repository_id,
+            Run.status.in_(["queued", "running"]),
+        ).limit(1)):
+            raise HTTPException(409, "Repository besitzt eine laufende oder wartende Ausführung")
+        existing = db.scalar(select(ManagerArchiveMount).where(
+            ManagerArchiveMount.repository_id == repository_id,
+        ).limit(1))
+        if existing:
+            if archive_mount_is_active(existing.mount_path):
+                if existing.archive == data.archive:
+                    return manager_mount_json(existing, repository.name)
+                raise HTTPException(409, f"Repository besitzt bereits einen aktiven Archiv-Mount: {existing.archive}")
+            stale_path = existing.mount_path
+            db.delete(existing)
+            db.commit()
+            cleanup_archive_mount_path(stale_path)
+        mount_path = prepare_archive_mount_path(
+            archive_mount_path(repository.id, repository.name, data.archive)
+        )
+        row = ManagerArchiveMount(
+            repository_id=repository.id,
             archive=data.archive,
-            mount_path=mount_path,
+            mount_path=str(mount_path),
+            status="mounting",
         )
         db.add(row)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            cleanup_archive_mount_path(mount_path)
+            raise HTTPException(409, "Repository wird bereits als Archiv-Mount verwendet") from exc
+        row_id = row.id
+        db.expunge(repository)
+
+    try:
+        command = manager_archive_mount_command(repository, data.archive, str(mount_path))
+        code, output, error = await execute_interactive(repository_id, command)
+        if code != 0:
+            raise borg_operation_error(output, error, code)
+        activation_state = await wait_for_archive_mount_activation(
+            row_id, mount_path, timeout_seconds=15.0, poll_seconds=0.2,
+        )
+        if activation_state == "cancelled":
+            return {
+                "cancelled": True,
+                "repository_id": repository_id,
+                "archive": data.archive,
+                "status": "unmounted",
+                "active": False,
+            }
+        if activation_state != "active":
+            raise HTTPException(
+                400,
+                "Borg hat den Mount-Befehl beendet, aber der FUSE-Mount wurde innerhalb von 15 Sekunden nicht aktiv.",
+            )
+        with SessionLocal() as db:
+            row = db.get(ManagerArchiveMount, row_id)
+            if not row:
+                raise HTTPException(500, "Archiv-Mount wurde erstellt, aber der Datenbankeintrag fehlt")
+            row.status = "mounted"
+            row.error = ""
+            db.commit()
+            return manager_mount_json(row, repository.name)
+    except Exception:
+        if mount_path and archive_mount_is_active(mount_path):
+            try:
+                command = manager_archive_unmount_command(str(mount_path))
+                await asyncio.wait_for(execute(command), timeout=24)
+            except Exception:
+                pass
+        with SessionLocal() as db:
+            row = db.get(ManagerArchiveMount, row_id) if row_id else None
+            if row:
+                db.delete(row)
+                db.commit()
+        if mount_path:
+            cleanup_archive_mount_path(mount_path)
+        raise
+
+
+def archive_unmount_incident(mount_id: int, mount_path: str, detail: str, *, status_code: int = 500) -> HTTPException:
+    error_id = log_unexpected_exception(
+        f"Archive mount {mount_id} could not be unmounted",
+        detail=f"Mount path: {mount_path}\n{detail}",
+        logger_name="bbm.archive_mount",
+    )
+    try:
+        with SessionLocal() as db:
+            current = db.get(ManagerArchiveMount, mount_id)
+            if current:
+                current.status = "error"
+                current.error = f"Aushängen fehlgeschlagen. Debug-Log, Fehler-ID {error_id}."
+                db.commit()
+    except Exception:
+        pass
+    if status_code == 504:
+        message = "Zeitüberschreitung beim Aushängen des Archiv-Mounts."
+    else:
+        message = "Archiv-Mount konnte nicht sicher ausgehängt werden."
+    return HTTPException(
+        status_code,
+        f"{message} Details wurden im Debug-Log gespeichert. Fehler-ID: {error_id}",
+    )
+
+
+@app.delete("/api/archive-mounts/{mount_id}", status_code=204, dependencies=admin_protected)
+async def delete_manager_archive_mount(mount_id: int):
+    with SessionLocal() as db:
+        row = db.get(ManagerArchiveMount, mount_id)
+        if not row:
+            raise HTTPException(404, "Archiv-Mount nicht gefunden")
+        if row.status == "unmounting":
+            raise HTTPException(409, "Archiv-Mount wird bereits ausgehängt")
+        mount_path = row.mount_path
+        row.status = "unmounting"
+        row.error = ""
         db.commit()
-        return mount_json(row, job.name)
 
-
-@app.get("/api/mounts/{mount_id}/browse", dependencies=admin_protected)
-async def browse_mount(mount_id: int, path: str = "") -> dict:
+    if archive_mount_is_active(mount_path):
+        command = manager_archive_unmount_command(mount_path)
+        try:
+            # A FUSE unmount must never wait for the normal repository execution
+            # lock. That lock can be occupied by a repository operation which is
+            # itself waiting for this archive mount to disappear. Execute only
+            # the bounded local lifecycle command here.
+            code, output, error = await asyncio.wait_for(execute(command), timeout=24)
+        except TimeoutError as exc:
+            raise archive_unmount_incident(
+                mount_id, mount_path, "Aushänge-Operation überschritt das API-Zeitlimit von 24 Sekunden.", status_code=504,
+            ) from exc
+        if code == 124:
+            raise archive_unmount_incident(
+                mount_id, mount_path, f"Aushänge-Befehl überschritt sein Zeitlimit. stdout={output!r} stderr={error!r}", status_code=504,
+            )
+        if code != 0:
+            raise archive_unmount_incident(
+                mount_id, mount_path, f"Aushänge-Befehl fehlgeschlagen (rc {code}). stdout={output!r} stderr={error!r}",
+            )
+        if not await wait_for_archive_mount_state(
+            mount_path, active=False, timeout_seconds=4.0, poll_seconds=0.15,
+        ):
+            raise archive_unmount_incident(
+                mount_id, mount_path, "Der Aushänge-Befehl meldete Erfolg, der FUSE-Mount ist aber weiterhin aktiv.",
+            )
     with SessionLocal() as db:
-        row = db.get(ArchiveMount, mount_id)
-        if not row:
-            raise HTTPException(404, "Archive mount not found")
-        job = load_job_with_connections(db, row.job_id)
-        command = browse_mount_command(job, row.mount_path, path)
-        repository_id = row.repository_id
-        archive = row.archive
-    code, output, error = await execute_interactive(repository_id, command)
-    if code != 0:
-        raise borg_operation_error(output, error, code)
-    fields = output.split("\x00")
-    if fields and fields[-1] == "":
-        fields.pop()
-    if len(fields) % 5:
-        raise HTTPException(400, "Client returned an incomplete archive directory listing")
-    entries = []
-    type_names = {"d": "directory", "f": "file", "l": "symlink"}
-    current = path.strip("/")
-    for index in range(0, len(fields), 5):
-        name, file_type, size, mtime, target = fields[index:index + 5]
-        relative = f"{current}/{name}" if current else name
-        entries.append({
-            "name": name,
-            "path": relative,
-            "type": type_names.get(file_type, "other"),
-            "size": int(size) if size.isdigit() else 0,
-            "mtime": float(mtime) if mtime else None,
-            "target": target or None,
-        })
-    entries.sort(key=lambda item: (item["type"] != "directory", item["name"].casefold()))
-    parent = "/".join(current.split("/")[:-1]) if current else None
-    return {"mount_id": mount_id, "archive": archive, "path": current, "parent": parent, "entries": entries}
-
-
-@app.delete("/api/mounts/{mount_id}", status_code=204, dependencies=admin_protected)
-async def unmount_archive(mount_id: int):
-    with SessionLocal() as db:
-        row = db.get(ArchiveMount, mount_id)
-        if not row:
-            raise HTTPException(404, "Archive mount not found")
-        job = load_job_with_connections(db, row.job_id)
-        command = unmount_archive_command(job, row.mount_path)
-        repository_id = row.repository_id
-    code, output, error = await execute_interactive(repository_id, command)
-    if code != 0:
-        raise borg_operation_error(output, error, code)
-    with SessionLocal() as db:
-        row = db.get(ArchiveMount, mount_id)
+        row = db.get(ManagerArchiveMount, mount_id)
         if row:
             db.delete(row)
             db.commit()
+    cleanup_archive_mount_path(mount_path)
     return Response(status_code=204)
 
 
@@ -4194,7 +4312,13 @@ def _cache_backup_task_worker(
             progress=progress,
         )
         backup = next(item for item in list_full_backups() if item["name"] == path.name)
-        finish_manager_backup_task(task_id, backup=backup)
+        warning_count = int(backup.get("manifest", {}).get("client_borg_cache_warning_count") or 0)
+        warning = (
+            f"{warning_count} Client-Zuordnung(en) konnten nicht gesichert werden. "
+            "Das Cache-Backup wurde ohne diese Clients erstellt."
+            if warning_count else None
+        )
+        finish_manager_backup_task(task_id, backup=backup, warning=warning)
     except Exception as exc:
         error_id = log_unexpected_exception(
             f"Cache backup task {task_id} failed", exc=exc, logger_name="bbm.background",

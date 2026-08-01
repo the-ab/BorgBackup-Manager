@@ -35,12 +35,13 @@ from app.database import SessionLocal
 from app.debug_logging import (
     detail_requires_debug_log, log_unexpected_exception, public_error_message,
 )
-from app.models import ArchiveMount, BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, Repository, Run
+from app.models import BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, ManagerArchiveMount, Repository, Run
 from app.repository_sizes import (
     managed_repository_filesystem_size, repository_statistics_from_borg_info,
     store_repository_statistics,
 )
 from app.archive_cache import invalidate_archive_cache, store_archive_cache
+from app.archive_mounts import archive_mount_is_active
 from app.repository_cache import clear_repository_manager_cache, clear_repository_manager_cache_locks
 from app.repository_diagnostics import compact_repository_diagnostic
 from app.repository_state import (
@@ -84,6 +85,42 @@ from app.schedules import schedule_target_job_ids
 from app.storage_guard import (
     effective_storage_guard, mounted_filesystems_below, repository_mount_path, repository_storage_status,
 )
+
+
+
+class ActiveArchiveMountError(RuntimeError):
+    def __init__(self, repository_id: int, archive: str):
+        self.repository_id = repository_id
+        self.archive = archive
+        super().__init__(
+            f'Repository besitzt einen aktiven Archiv-Mount ({archive}). '
+            'Archiv zuerst aushängen.'
+        )
+
+
+def _active_manager_archive_mount(repository_id: int | None) -> ManagerArchiveMount | None:
+    if repository_id is None:
+        return None
+    with SessionLocal() as db:
+        row = db.scalar(
+            select(ManagerArchiveMount).where(
+                ManagerArchiveMount.repository_id == repository_id,
+            ).order_by(ManagerArchiveMount.id).limit(1)
+        )
+        if row is None:
+            return None
+        # Treat every physically active FUSE mount as a repository blocker,
+        # including mounts whose previous unmount attempt ended in an error.
+        # A freshly inserted "mounting" row is also active until creation either
+        # succeeds or rolls back.
+        if row.status == "mounting" or archive_mount_is_active(row.mount_path):
+            db.expunge(row)
+            return row
+        if row.status != "stale":
+            row.status = "stale"
+            row.error = "Mount ist nicht mehr im Container aktiv. Eintrag kann entfernt werden."
+            db.commit()
+        return None
 
 
 
@@ -682,6 +719,18 @@ def _execution_plan(
     queued = [row for row in rows if row.status == "queued"]
     settings = load_settings()
     global_limit = settings.max_parallel_runs
+    active_archive_mount_repositories: set[int] = set()
+    mount_rows = list(db.scalars(select(ManagerArchiveMount)))
+    mount_state_changed = False
+    for mount_row in mount_rows:
+        if mount_row.status == "mounting" or archive_mount_is_active(mount_row.mount_path):
+            active_archive_mount_repositories.add(mount_row.repository_id)
+        elif mount_row.status != "stale":
+            mount_row.status = "stale"
+            mount_row.error = "Mount ist nicht mehr im Container aktiv. Eintrag kann entfernt werden."
+            mount_state_changed = True
+    if mount_state_changed:
+        db.flush()
     mounts = _execution_mounts()
     chain_reservations, run_chain_tokens = _repository_chain_snapshot()
 
@@ -732,6 +781,13 @@ def _execution_plan(
     source_stats_occupants = [row.id for row in running if row.action == "source-stats"]
     for row in queued:
         repository_key = row_repository_keys.get(row.id)
+        if row.repository_id in active_archive_mount_repositories and row.action != "source-stats":
+            blockers[row.id] = {
+                "kind": "archive-mount",
+                "blocker_id": 0,
+                "repository": row.repository.name if row.repository else "Repository",
+            }
+            continue
         reservation = chain_reservations.get(repository_key) if repository_key else None
         if reservation:
             owner_token = str(reservation.get("token") or "")
@@ -826,6 +882,11 @@ def _queue_message(reason: dict[str, int | str] | None) -> str:
     blocker = int(reason.get("blocker_id", 0) or 0)
     suffix = f" #{blocker}" if blocker else ""
     wait_target = f"Ausführung #{blocker}" if blocker else "freie Kapazität"
+    if reason.get("kind") == "archive-mount":
+        return (
+            f"WARTESCHLANGE: Repository „{reason.get('repository', 'Repository')}“ besitzt einen aktiven "
+            "Archiv-Mount; die Ausführung startet nach dem Aushängen."
+        )
     if reason.get("kind") == "repository":
         return (
             f"WARTESCHLANGE: Repository „{reason.get('repository', 'Repository')}“ wird bereits von "
@@ -849,7 +910,7 @@ def _queue_message(reason: dict[str, int | str] | None) -> str:
     if reason.get("kind") == "maintenance-chain":
         return (
             f"WARTESCHLANGE: Repository „{reason.get('repository', 'Repository')}“ ist bis zum Ende "
-            f"der manuellen Backup-/Prune-/Compact-Kette reserviert; warte auf {wait_target}."
+            f"der manuellen Backup-/Archivbereinigungs-/Compact-Kette reserviert; warte auf {wait_target}."
         )
     if reason.get("kind") == "global":
         return (
@@ -883,6 +944,10 @@ async def _wait_for_repository_turn(run_id: int, repository_id: int | None) -> b
 
 async def execute_interactive(repository_id: int | None, command: Command) -> tuple[int, str, str]:
     """Execute an interactive command under repository and manager-cache limits."""
+    if repository_id is not None and not command.allow_active_archive_mount:
+        active_mount = _active_manager_archive_mount(repository_id)
+        if active_mount is not None:
+            raise ActiveArchiveMountError(repository_id, active_mount.archive)
     mount_lock = None
     repository_lock = _repository_lock(repository_id)
     manager_lock = _manager_borg_lock(command.manager_cache_repository_id)
@@ -1681,8 +1746,9 @@ async def reset_managed_repository_state(repository_id: int) -> dict[str, int | 
             ):
                 raise ValueError("Repository hat eine wartende oder laufende Ausführung")
             if db.scalar(
-                select(ArchiveMount.id).where(
-                    ArchiveMount.repository_id == repository_id
+                select(ManagerArchiveMount.id).where(
+                    ManagerArchiveMount.repository_id == repository_id,
+                    ManagerArchiveMount.status.in_(["mounting", "mounted"]),
                 ).limit(1)
             ):
                 raise ValueError("Repository besitzt noch einen aktiven Archiv-Mount")
@@ -1699,7 +1765,6 @@ async def reset_managed_repository_state(repository_id: int) -> dict[str, int | 
             repository.compressed_size_bytes = None
             repository.deduplicated_size_bytes = None
             repository.size_checked_at = None
-            repository.encrypted_keyfile = None
             run = Run(
                 job_id=None,
                 job_name_snapshot=f"Repository: {repository.name}"[:100],
@@ -2531,7 +2596,7 @@ def queue_manual_backup(job_id: int) -> int:
         compact_after = bool(job.manual_compact_after_prune) and prune_after
         repository_id = int(job.repository_id)
         if prune_after and not _has_retention(job):
-            raise ValueError("Manuelles Prune ist aktiviert, aber es ist keine Aufbewahrungsregel konfiguriert")
+            raise ValueError("Manuelle Archivbereinigung ist aktiviert, aber es ist keine Aufbewahrungsregel konfiguriert")
 
     if not prune_after:
         return queue_job_action(job_id, "backup")
@@ -2627,7 +2692,7 @@ async def _scheduled_backup_group(
             detail = _background_error_message(f"Scheduled prune queueing failed for job {job_id}", exc)
             failed_run_id = _record_schedule_error(
                 job_id,
-                f"Prune konnte nicht gestartet werden: {detail}",
+                f"Archivbereinigung konnte nicht gestartet werden: {detail}",
                 schedule_name,
                 schedule_id=schedule_id,
                 schedule_parallel_limit=schedule_parallel_limit,

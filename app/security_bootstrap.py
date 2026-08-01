@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import os
-import shutil
 import stat
 import subprocess
 import tempfile
 from pathlib import Path
 
-from app.config import DATA_DIR
 from app.external_repository import generate_ed25519_keypair, public_key_from_private
-from app.security_migrate import run_security_migration
 from app.vault import get_system_secret, set_system_secret
+from app.security_store import initialize_security_store
 
 RUNTIME_ROOT = Path(os.getenv("BBM_RUNTIME_SECRET_DIR", "/run/bbm-secrets"))
 
@@ -70,30 +68,17 @@ def _write_runtime(
     _chmod_if_owned(path, mode)
 
 
-def _read_first(paths: list[Path]) -> str | None:
-    for path in paths:
-        if path.is_file() and path.stat().st_size:
-            return path.read_text(encoding="utf-8")
-    return None
 
-
-def _migrate_or_generate_ed25519(private_name: str, public_name: str, old_private: list[Path], comment: str) -> tuple[str, str]:
+def _get_or_generate_ed25519(private_name: str, public_name: str, comment: str) -> tuple[str, str]:
     private = get_system_secret(private_name)
     public = get_system_secret(public_name)
     if not private:
-        private = _read_first(old_private)
-        if private:
-            public = public_key_from_private(private, comment)
-        else:
-            private, public = generate_ed25519_keypair(comment)
+        private, public = generate_ed25519_keypair(comment)
         set_system_secret(private_name, private)
         set_system_secret(public_name, public)
     elif not public:
         public = public_key_from_private(private, comment)
         set_system_secret(public_name, public)
-    for path in old_private:
-        path.unlink(missing_ok=True)
-        Path(str(path) + ".pub").unlink(missing_ok=True)
     assert public is not None
     return private, public
 
@@ -127,20 +112,17 @@ def _generate_tls(hosts: str) -> tuple[str, str]:
         return cert.read_text(encoding="utf-8"), key.read_text(encoding="utf-8")
 
 
-def bootstrap_security_material() -> dict[str, int | bool]:
-    migration = run_security_migration()
-    migrated = int(migration["repository_secrets_migrated"])
+def bootstrap_security_material() -> dict[str, bool]:
+    initialize_security_store()
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
     _chmod_if_owned(RUNTIME_ROOT, 0o700)
 
-    controller_private, controller_public = _migrate_or_generate_ed25519(
-        "controller_private_key", "controller_public_key",
-        [DATA_DIR / "ssh" / "id_ed25519"], "borgbackup-manager-controller",
+    controller_private, controller_public = _get_or_generate_ed25519(
+        "controller_private_key", "controller_public_key", "borgbackup-manager-controller",
     )
 
-    repository_private, repository_public = _migrate_or_generate_ed25519(
-        "repository_ssh_host_private_key", "repository_ssh_host_public_key",
-        [DATA_DIR / "repository-ssh" / "ssh_host_ed25519_key"], "borgbackup-manager-repository-host",
+    repository_private, repository_public = _get_or_generate_ed25519(
+        "repository_ssh_host_private_key", "repository_ssh_host_public_key", "borgbackup-manager-repository-host",
     )
     _write_runtime(
         RUNTIME_ROOT / "repository-ssh" / "ssh_host_ed25519_key",
@@ -152,39 +134,21 @@ def bootstrap_security_material() -> dict[str, int | bool]:
 
     tls_cert = get_system_secret("tls_certificate")
     tls_key = get_system_secret("tls_private_key")
-    old_cert = Path(os.getenv("BBM_TLS_CERT_FILE", str(DATA_DIR / "tls" / "fullchain.pem")))
-    old_key = Path(os.getenv("BBM_TLS_KEY_FILE", str(DATA_DIR / "tls" / "privkey.pem")))
     if not tls_cert or not tls_key:
-        if old_cert.is_file() and old_key.is_file() and old_cert.stat().st_size and old_key.stat().st_size:
-            tls_cert = old_cert.read_text(encoding="utf-8")
-            tls_key = old_key.read_text(encoding="utf-8")
-        else:
-            hosts = os.getenv("BBM_TLS_HOSTS", f"{os.getenv('BBM_REPOSITORY_PUBLIC_HOST', 'localhost')},localhost,127.0.0.1")
-            tls_cert, tls_key = _generate_tls(hosts)
+        hosts = os.getenv("BBM_TLS_HOSTS", f"{os.getenv('BBM_REPOSITORY_PUBLIC_HOST', 'localhost')},localhost,127.0.0.1")
+        tls_cert, tls_key = _generate_tls(hosts)
         set_system_secret("tls_certificate", tls_cert)
         set_system_secret("tls_private_key", tls_key)
-    old_key.unlink(missing_ok=True)
-    old_cert.unlink(missing_ok=True)
     _write_runtime(RUNTIME_ROOT / "tls" / "fullchain.pem", tls_cert, 0o644)
     _write_runtime(RUNTIME_ROOT / "tls" / "privkey.pem", tls_key, 0o600)
 
-    # Remove obsolete persistent controller material and keyfile cache.
-    shutil.rmtree(DATA_DIR / "ssh", ignore_errors=True)
-    shutil.rmtree(DATA_DIR / "repository-keys", ignore_errors=True)
-    # Alte persistente TLS-/Host-Key-Verzeichnisse dürfen keine privaten Schlüssel mehr enthalten.
-    for legacy in [DATA_DIR / "tls", DATA_DIR / "repository-ssh"]:
-        if legacy.is_dir():
-            for item in legacy.iterdir():
-                if item.name != "authorized_keys":
-                    if item.is_dir(): shutil.rmtree(item, ignore_errors=True)
-                    else: item.unlink(missing_ok=True)
-    return {"repository_secrets_migrated": migrated, "controller_ready": bool(controller_private), "tls_ready": bool(tls_key)}
+    return {"controller_ready": bool(controller_private), "tls_ready": bool(tls_key)}
+
 
 
 if __name__ == "__main__":
     result = bootstrap_security_material()
     print(
         "Security material ready: "
-        f"repository_secrets_migrated={result['repository_secrets_migrated']}, "
         f"controller_ready={result['controller_ready']}, tls_ready={result['tls_ready']}"
     )

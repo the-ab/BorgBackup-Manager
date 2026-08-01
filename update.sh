@@ -6,6 +6,7 @@ PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$PROJECT_DIR"
 
 CURRENT_VERSION="$(cat VERSION 2>/dev/null || echo 0.0.0)"
+MIN_SUPPORTED_VERSION="1.1.0"
 UPDATE_DIR="${UPDATE_DIR:-updates}"
 ASSUME_YES=0
 NO_BUILD=0
@@ -197,66 +198,86 @@ PY
 
 merge_env_example() {
   [[ -f .env && -f .env.example ]] || return 0
-  python3 - .env .env.example "$(cat VERSION 2>/dev/null || echo unknown)" <<'PY'
+  python3 - .env .env.example "$(cat VERSION 2>/dev/null || echo unknown)" <<'PYENV'
 from pathlib import Path
-import re, sys
+import os
+import re
+import sys
 
 target, example, version = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-current = target.read_text(encoding="utf-8").splitlines()
-sample = example.read_text(encoding="utf-8").splitlines()
-pattern = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
-# v1.0.21 changes only the unchanged historical default. Custom cookie names
-# remain untouched. The new name avoids collisions with a stale Secure cookie.
-migrated_cookie_name = False
-for index, line in enumerate(current):
-    if line.strip() == "BBM_SESSION_COOKIE_NAME=bbm_session":
-        current[index] = "BBM_SESSION_COOKIE_NAME=bbm_session_v2"
-        migrated_cookie_name = True
-known = {match.group(1) for line in current if (match := pattern.match(line.strip()))}
+current_lines = target.read_text(encoding="utf-8").splitlines()
+sample_lines = example.read_text(encoding="utf-8").splitlines()
+pattern = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+obsolete = {
+    "COMPOSE_FILE",
+    "BBM_ARCHIVE_MOUNTS_ENABLED",
+    "BBM_ARCHIVE_MOUNT_ROOT",
+    "BBM_ARCHIVE_MOUNT_HOST_PATH",
+    "BBM_ADMIN_TOKEN",
+    "BBM_SECRET_KEY",
+    "BBM_ALLOW_LEGACY_TOKEN_AUTH",
+    "BBM_DEBUG_LOG_LEVEL",
+    "BBM_HTTP_PORT",
+    "BBM_TLS_CERT_FILE",
+    "BBM_TLS_KEY_FILE",
+}
+current_values = {}
+current_order = []
+removed = []
+for raw in current_lines:
+    match = pattern.match(raw.strip())
+    if not match:
+        continue
+    key, value = match.groups()
+    if key in obsolete:
+        removed.append(key)
+        continue
+    if key not in current_values:
+        current_order.append(key)
+    current_values[key] = value
+sample_keys = []
+output = []
+added = []
+for raw in sample_lines:
+    match = pattern.match(raw.strip())
+    if not match:
+        output.append(raw)
+        continue
+    key, sample_value = match.groups()
+    sample_keys.append(key)
+    if key in current_values:
+        output.append(f"{key}={current_values[key]}")
+    else:
+        output.append(f"{key}={sample_value}")
+        added.append(key)
 required = {"BBM_REPOSITORY_PUBLIC_HOST", "BBM_DATA_PATH", "BBM_REPOSITORY_PATH"}
-missing_required = sorted(required - known)
+missing_required = sorted(key for key in required if not current_values.get(key, "").strip())
 if missing_required:
     raise SystemExit(
         "Pflichtwert fehlt in .env: " + ", ".join(missing_required)
         + ". Bitte zuerst `bash install.sh --config-only` ausführen."
     )
-
-blocks = []
-pending_comments = []
-for line in sample:
-    stripped = line.strip()
-    match = pattern.match(stripped)
-    if match:
-        key = match.group(1)
-        if key not in known:
-            block = [*pending_comments, line]
-            blocks.append(block)
-            known.add(key)
-        pending_comments = []
-    elif not stripped or stripped.startswith("#"):
-        pending_comments.append(line)
-    else:
-        pending_comments = []
-
-if blocks:
-    if current and current[-1]:
-        current.append("")
-    current.append(f"# Automatisch ergänzt durch Update auf v{version}")
-    for index, block in enumerate(blocks):
-        if index and current and current[-1]:
-            current.append("")
-        while block and not block[0].strip():
-            block.pop(0)
-        current.extend(block)
-if blocks or migrated_cookie_name:
-    target.write_text("\n".join(current).rstrip() + "\n", encoding="utf-8")
-if migrated_cookie_name:
-    print("Standard-Sitzungscookie auf bbm_session_v2 migriert")
-if blocks:
-    print(f"{len(blocks)} neue .env-Werte ergänzt")
-elif not migrated_cookie_name:
-    print("Keine neuen .env-Werte erforderlich")
-PY
+custom = [key for key in current_order if key not in sample_keys and key not in obsolete]
+if custom:
+    while output and not output[-1].strip():
+        output.pop()
+    output.extend(["", f"# Benutzerdefinierte Werte, beibehalten beim Update auf v{version}"])
+    output.extend(f"{key}={current_values[key]}" for key in custom)
+with target.open("w", encoding="utf-8") as handle:
+    handle.write("\n".join(output).rstrip() + "\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+try:
+    target.chmod(0o600)
+except OSError:
+    pass
+if removed:
+    print("Veraltete .env-Werte entfernt: " + ", ".join(sorted(set(removed))))
+if added:
+    print(f"{len(added)} aktuelle .env-Werte ergänzt")
+if not removed and not added:
+    print(".env ist bereits aktuell und wurde geordnet")
+PYENV
 }
 
 cleanup_on_exit() {
@@ -282,8 +303,50 @@ project_items() {
   printf '%s\n' \
     .dockerignore .env.example .gitattributes .gitignore \
     LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md pytest.ini scripts \
-    compose.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh INSTALLATION.md INSTALLATION.de.md README.md README.de.md \
+    compose.yaml compose.archive-mounts.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh INSTALLATION.md INSTALLATION.de.md README.md README.de.md \
     RELEASE_NOTES.md RELEASE_NOTES.de.md VERSION requirements.in requirements.txt requirements-dev.txt app docker docker-compose tests
+}
+
+ensure_supported_source_version() {
+  if version_gt "$MIN_SUPPORTED_VERSION" "$CURRENT_VERSION"; then
+    fail "Direkte Updates werden erst ab BorgBackup Manager v$MIN_SUPPORTED_VERSION unterstützt. Für v$CURRENT_VERSION ist eine Neuinstallation mit anschließender Wiederherstellung eines unterstützten Backups erforderlich."
+  fi
+}
+
+ensure_fuse_ready() {
+  [[ -c /dev/fuse ]] && return 0
+  if command -v modprobe >/dev/null 2>&1; then
+    if [[ "$(id -u)" == "0" ]]; then
+      modprobe fuse 2>/dev/null || true
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo modprobe fuse 2>/dev/null || true
+    fi
+  fi
+  [[ -c /dev/fuse ]] || fail "/dev/fuse fehlt. Die standardmäßige Archiv-Mount-Funktion benötigt das FUSE-Kernelmodul auf dem Docker-Host."
+}
+
+prepare_archive_mount_path() {
+  local path uid gid
+  path="$(env_value BBM_ARCHIVE_MOUNT_PATH /docker_data/borgbackup-manager/archive-mounts)"
+  uid="$(env_value BBM_BORG_UID 1000)"
+  gid="$(env_value BBM_BORG_GID 1000)"
+  [[ "$path" == /* ]] || fail "BBM_ARCHIVE_MOUNT_PATH muss ein absoluter Hostpfad sein: $path"
+  if [[ ! -d "$path" ]]; then
+    if ! mkdir -p -- "$path" 2>/dev/null; then
+      command -v sudo >/dev/null 2>&1 || fail "Archiv-Mount-Verzeichnis kann nicht erstellt werden: $path"
+      sudo mkdir -p -- "$path" || fail "Archiv-Mount-Verzeichnis kann nicht erstellt werden: $path"
+    fi
+  fi
+  if [[ -z "$(find "$path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    if [[ "$(stat -c '%u:%g' "$path")" != "$uid:$gid" ]]; then
+      if [[ "$(id -u)" == "0" ]]; then
+        chown "$uid:$gid" "$path" || fail "Eigentümer des Archiv-Mount-Verzeichnisses konnte nicht gesetzt werden"
+      elif command -v sudo >/dev/null 2>&1; then
+        sudo chown "$uid:$gid" "$path" || fail "Eigentümer des Archiv-Mount-Verzeichnisses konnte nicht gesetzt werden"
+      fi
+    fi
+    chmod 700 "$path" 2>/dev/null || sudo chmod 700 "$path" 2>/dev/null || true
+  fi
 }
 
 validate_runtime_paths() {
@@ -447,6 +510,11 @@ legacy_github = target / ".github"
 if legacy_github.exists() or legacy_github.is_symlink():
     shutil.rmtree(legacy_github) if legacy_github.is_dir() and not legacy_github.is_symlink() else legacy_github.unlink()
 
+for obsolete_name in ("compose.archive-mounts.yaml",):
+    obsolete_path = target / obsolete_name
+    if obsolete_path.exists() or obsolete_path.is_symlink():
+        shutil.rmtree(obsolete_path) if obsolete_path.is_dir() and not obsolete_path.is_symlink() else obsolete_path.unlink()
+
 for name in ("install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "docker/entrypoint.sh", "docker/borg-serve.sh"):
     path = target / name
     if path.exists():
@@ -536,31 +604,20 @@ PYHTTP
 }
 
 wait_for_health() {
-  local attempt last_result="Noch keine Antwort" legacy_result=""
+  local attempt last_result="Noch keine Antwort"
   for attempt in {1..90}; do
     if last_result="$(probe_https_endpoint /api/ready)"; then
       log "Web-Bereitschaft bestätigt: $last_result"
       return 0
     fi
-
     if (( attempt == 10 || attempt == 30 || attempt == 60 )); then
       log "Containerstart läuft noch (Bereitschaftsprüfung $attempt/90): $last_result"
       compose ps borg-manager || true
       compose logs --tail=20 borg-manager || true
     fi
-
-    # Erst auf den aktuellen Readiness-Endpunkt warten. Der Startseiten-
-    # Fallback ist nur für ein tatsächliches Rollback auf alte Versionen.
-    if (( attempt >= 15 )); then
-      if legacy_result="$(probe_https_endpoint /)"; then
-        log "Web-Bereitschaft über kompatiblen Startseiten-Test bestätigt: $legacy_result"
-        return 0
-      fi
-    fi
     sleep 1
   done
   log "Letzte Bereitschaftsprüfung: $last_result"
-  [[ -z "$legacy_result" ]] || log "Letzter kompatibler Startseiten-Test: $legacy_result"
   return 1
 }
 
@@ -586,6 +643,8 @@ report_component_health() {
 }
 
 build_and_start() {
+  ensure_fuse_ready
+  prepare_archive_mount_path
   if ! compose config --quiet; then
     restore_project_backup || true
     PROJECT_APPLIED=0
@@ -632,6 +691,7 @@ main() {
   need_cmd docker
   need_cmd sha256sum
   [[ -f .env ]] || fail ".env fehlt; zuerst bash install.sh ausführen"
+  ensure_supported_source_version
   detect_compose
   validate_runtime_paths
   mkdir -p "$UPDATE_DIR"
