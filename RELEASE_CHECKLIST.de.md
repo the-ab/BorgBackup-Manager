@@ -25,6 +25,7 @@ Diese Checkliste ist bei jeder Version vollständig abzuarbeiten. Nicht zutreffe
 - [ ] Migrationen kopieren und prüfen Daten vor dem Entfernen alter Strukturen.
 - [ ] Abbruch-, Neustart- und Wiederholungsfälle einer Migration sind abgesichert.
 - [ ] SQLite-WAL/SHM-, Freelist- und Klartextreste wurden bei sicherheitsrelevanten Migrationen berücksichtigt.
+- [ ] Vertrauliche Altdaten wurden in aktiven Tabellen, historischen Laufvorschauen, Ausgabe-/Fehler-/Logfeldern, Benachrichtigungsdetails, dateibasierten Laufprotokollen und Wartungskopien geprüft.
 - [ ] Lösch-, Geräte-, Repository-, Backup- und Wartungsabläufe berücksichtigen das neue Datenmodell.
 - [ ] Keine ungenutzten Module, Importe, Routen oder Frontend-Handler zurückgelassen.
 
@@ -35,6 +36,7 @@ Diese Checkliste ist bei jeder Version vollständig abzuarbeiten. Nicht zutreffe
 - [ ] Manager-Backup enthält alle benötigten Sicherheitsdaten und prüft deren Entschlüsselbarkeit.
 - [ ] Restore stellt zusammengehörige Datenbank- und Schlüsselstände konsistent wieder her.
 - [ ] Dateirechte, temporäre Dateien, Fehler- und Abbruchbereinigung geprüft.
+- [ ] Sicherheitskopien werden erst nach einer erforderlichen Geheimnisbereinigung dauerhaft abgelegt und führen entfernte Klartextdaten nicht wieder ein.
 - [ ] Rollen- und API-Berechtigungen für neue Funktionen geprüft.
 - [ ] Neue Abhängigkeiten auf Herkunft, feste Version, Hash und Lizenz geprüft.
 

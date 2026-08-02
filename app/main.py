@@ -109,6 +109,11 @@ from app.release import APP_RELEASE_DATE
 from app.log_filter import extract_error_output
 from app.models import BackupSchedule, Host, HostRepositoryAccess, Job, JobIdReservation, ManagerArchiveMount, NotificationDelivery, Repository, Run
 from app.host_ssh_actions import migrate_legacy_host_ssh_actions
+from app.ssh_history_cleanup import (
+    purge_sensitive_maintenance_backups,
+    sanitize_legacy_ssh_run_history,
+    verify_no_legacy_ssh_plaintext_markers,
+)
 from app.sqlite_maintenance import run_pending_manager_vacuum
 from app.runner import (
     archive_export_command,
@@ -1083,7 +1088,10 @@ async def lifespan(_: FastAPI):
     reconcile_manager_archive_mounts()
     initialize_security_store()
     migrate_legacy_host_ssh_actions()
+    sanitize_legacy_ssh_run_history(engine)
+    purge_sensitive_maintenance_backups()
     run_pending_manager_vacuum(engine)
+    verify_no_legacy_ssh_plaintext_markers(engine)
     cleanup_stale_security_snapshots()
     # The container entrypoint materializes runtime TLS and SSH material as root
     # before dropping privileges.  Do not repeat that privileged operation in

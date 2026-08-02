@@ -2442,7 +2442,7 @@ body.entity-edit-dialog-open { overflow: hidden; }
 }
 #database-maintenance-details { margin-top: 10px; }
 
-/* 1.3.4: dedicated profile page and compact sidebar account block */
+/* Dedicated profile page and compact sidebar account block */
 .aside-account {
   display: grid;
   flex: 1 0 100%;

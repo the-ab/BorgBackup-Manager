@@ -25,6 +25,7 @@ Complete this checklist for every release. Mark non-applicable items explicitly 
 - [ ] Migrations copy and verify data before removing legacy structures.
 - [ ] Interruption, restart and repeated migration cases are safe.
 - [ ] Considered SQLite WAL/SHM, freelist and plaintext remnants for security-sensitive migrations.
+- [ ] Checked confidential legacy data in active tables, historical run previews, output/error/log fields, notification details, file-backed run logs and maintenance copies.
 - [ ] Delete, device, repository, backup and maintenance workflows use the new data model.
 - [ ] No unused modules, imports, routes or frontend handlers remain.
 
@@ -35,6 +36,7 @@ Complete this checklist for every release. Mark non-applicable items explicitly 
 - [ ] Manager backup includes all required security state and verifies decryptability.
 - [ ] Restore keeps related database and key states consistent.
 - [ ] Checked file permissions, temporary files and success/error/cancellation cleanup.
+- [ ] Persistent safety copies are created only after required secret scrubbing and do not reintroduce removed plaintext.
 - [ ] Checked role and API authorization for new functionality.
 - [ ] Verified source, pinned version, hash and license for every new dependency.
 

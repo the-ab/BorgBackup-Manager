@@ -13,6 +13,12 @@ from app.config import DATA_DIR, DATABASE_URL, SECURITY_DATABASE_PATH
 from app.database import engine
 from app.security_store import delete_orphan_host_ssh_actions, host_ssh_action_host_ids
 from app.host_ssh_actions import migrate_legacy_host_ssh_actions
+from app.ssh_history_cleanup import (
+    legacy_ssh_run_history_status,
+    purge_sensitive_maintenance_backups,
+    sanitize_legacy_ssh_run_history,
+    sensitive_maintenance_backup_paths,
+)
 from app.sqlite_maintenance import mark_manager_vacuum_pending, manager_vacuum_pending
 
 MAINTENANCE_BACKUP_DIR = DATA_DIR / "maintenance-backups"
@@ -61,6 +67,9 @@ def database_cleanup_preview() -> dict[str, Any]:
         "orphan_host_action_rows": 0,
         "legacy_host_action_table": False,
         "legacy_host_action_rows": 0,
+        "legacy_ssh_run_rows": 0,
+        "legacy_ssh_run_logs": 0,
+        "sensitive_maintenance_backups": 0,
         "vacuum_pending": manager_vacuum_pending(),
         "orphan_notification_deliveries": 0,
         "schedule_rows_with_invalid_targets": 0,
@@ -127,10 +136,16 @@ def database_cleanup_preview() -> dict[str, Any]:
         result["freelist_pages"] = int(connection.exec_driver_sql("PRAGMA freelist_count").scalar() or 0)
         result["page_count"] = int(connection.exec_driver_sql("PRAGMA page_count").scalar() or 0)
         result["page_size"] = int(connection.exec_driver_sql("PRAGMA page_size").scalar() or 0)
+    legacy_ssh_status = legacy_ssh_run_history_status(engine)
+    result["legacy_ssh_run_rows"] = int(legacy_ssh_status.get("rows") or 0)
+    result["legacy_ssh_run_logs"] = int(legacy_ssh_status.get("run_logs") or 0)
+    result["sensitive_maintenance_backups"] = len(sensitive_maintenance_backup_paths())
     result["reclaimable_bytes_estimate"] = result["freelist_pages"] * result["page_size"]
     result["changes_available"] = bool(result["legacy_host_action_table"]) or any(int(result[key]) > 0 for key in (
         "stale_active_runs", "stale_mount_rows", "orphan_repository_access_rows",
-        "orphan_host_action_rows", "legacy_host_action_rows", "orphan_notification_deliveries", "schedule_rows_with_invalid_targets",
+        "orphan_host_action_rows", "legacy_host_action_rows", "legacy_ssh_run_rows",
+        "legacy_ssh_run_logs", "sensitive_maintenance_backups", "orphan_notification_deliveries",
+        "schedule_rows_with_invalid_targets",
         "freelist_pages",
     ))
     return result
@@ -144,6 +159,11 @@ def _create_safety_copy() -> Path:
     target = sqlite3.connect(destination)
     try:
         source.backup(target)
+        # The live database may still contain deleted plaintext in freelist
+        # pages until the deferred startup rebuild. Compact the offline safety
+        # copy itself so retained rollback material never reintroduces it.
+        target.execute("PRAGMA secure_delete=ON")
+        target.execute("VACUUM")
         check = target.execute("PRAGMA quick_check").fetchone()
         if not check or str(check[0]).lower() != "ok":
             raise ValueError("Sicherheitskopie der Manager-Datenbank ist nicht konsistent")
@@ -184,8 +204,13 @@ def _create_security_safety_copy() -> Path:
 def cleanup_manager_database(*, create_safety_copy: bool = True, vacuum: bool = True) -> dict[str, Any]:
     if engine.dialect.name != "sqlite":
         raise ValueError("Datenbankbereinigung wird nur für SQLite unterstützt")
-    migration = migrate_legacy_host_ssh_actions(engine, sanitize=False)
     before = database_cleanup_preview()
+    migration = migrate_legacy_host_ssh_actions(engine, sanitize=False)
+    ssh_history_cleanup = sanitize_legacy_ssh_run_history(engine)
+    sensitive_backups_removed = purge_sensitive_maintenance_backups()
+    # The retained safety copy is created only after sensitive legacy SSH data
+    # has been removed. Keeping a rollback copy with credentials would defeat
+    # the purpose of the security cleanup.
     safety_copy = _create_safety_copy() if create_safety_copy else None
     security_safety_copy = (
         _create_security_safety_copy()
@@ -202,6 +227,9 @@ def cleanup_manager_database(*, create_safety_copy: bool = True, vacuum: bool = 
         "orphan_host_action_rows_removed": 0,
         "orphan_notification_deliveries_removed": 0,
         "schedule_rows_repaired": 0,
+        "legacy_ssh_run_rows_sanitized": int(ssh_history_cleanup.get("rows_sanitized") or 0),
+        "legacy_ssh_run_logs_removed": int(ssh_history_cleanup.get("run_logs_removed") or 0),
+        "sensitive_maintenance_backups_removed": int(sensitive_backups_removed),
     }
     with engine.begin() as connection:
         tables = _table_names(connection)
@@ -286,6 +314,7 @@ def cleanup_manager_database(*, create_safety_copy: bool = True, vacuum: bool = 
         "safety_copy": str(safety_copy) if safety_copy else None,
         "security_safety_copy": str(security_safety_copy) if security_safety_copy else None,
         "migration": migration,
+        "ssh_history_cleanup": ssh_history_cleanup,
         "vacuumed": vacuumed,
         "vacuum_deferred": vacuum_deferred,
         "restart_required": vacuum_deferred,

@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.3.4
+# Installation und Betrieb – BorgBackup Manager 1.3.5
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.3.4.zip
+BorgBackup-Manager-1.3.5.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.3.4.zip
+unzip /pfad/BorgBackup-Manager-1.3.5.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -75,7 +75,7 @@ Das Skript erzeugt `.env` und die persistenten Verzeichnisse. Beim ersten Contai
 
 Passwörter werden als scrypt-Prüfwerte gespeichert. Controller-, Repository-SSH- und TLS-Privatschlüssel, Repository-Passphrasen sowie Borg-Keyfiles werden verschlüsselt in `security.db` abgelegt. `master.key` ist der einzige externe Vertrauensanker und besitzt Modus `0600`. Laufzeitdateien werden ausschließlich unter `/run/bbm-secrets` materialisiert.
 
-Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.3.4` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
+Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.3.5` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
 
 ### Installation ausschließlich mit dem GHCR-Image
 
@@ -109,7 +109,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.3.4` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
+`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.3.5` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
 
 Beim ersten Start prüft der Entrypoint den Mount `/repositories` mit der konfigurierten `BBM_BORG_UID` und `BBM_BORG_GID`. Ist der Mount leer und nur wegen der automatischen Docker-Anlage `root` zugeordnet, wird ausschließlich das Stammverzeichnis auf die konfigurierte UID/GID gesetzt und für den Eigentümer lesbar, beschreibbar und betretbar gemacht. Es erfolgt ausdrücklich kein `chown -R`. Enthält das Verzeichnis bereits Daten, werden keine Eigentümer automatisch geändert. In diesem Fall müssen die Rechte oder ACLs auf dem Host passend korrigiert werden. Bei NFS mit `root_squash` ist die Berechtigung serverseitig beziehungsweise über passende numerische UID/GID zu setzen.
 
@@ -272,7 +272,7 @@ sudo -n mount /mnt/offline-backup
 sudo -n umount /mnt/offline-backup
 ```
 
-Die WebUI besitzt keine freie SSH-Konsole. Nur gespeicherte Aktionen können gestartet werden und jeder Start wird vorher bestätigt. Name, Befehl, Zielgerät, Aktivstatus und Zeitlimit werden mit dem vorhandenen Master-Key geschützt; der Befehlsinhalt liegt authentifiziert verschlüsselt in `/data/security/security.db`. Beim ersten Start von v1.3.4 werden vorhandene Klartexteinträge aus `manager.db` zunächst vollständig importiert und durch erneutes Entschlüsseln verifiziert. Erst danach wird die alte Tabelle entfernt. Auch eine leere oder nach einem früheren Abbruch verbliebene Alttabelle wird erkannt. Die Datenbank einschließlich WAL wird vor Freigabe der WebUI per Checkpoint und `VACUUM` bereinigt; danach kontrolliert BBM zusätzlich, dass kein migrierter Befehl mehr in `manager.db`, `manager.db-wal` oder `manager.db-shm` enthalten ist. Schlägt ein Schritt fehl, bleibt der Vorgang wiederholbar und der Manager startet nicht mit einer nur teilweise migrierten Aktion. Laufvorschau und normale Protokolle nennen nur Aktion und Zielgerät. Interaktive Passwortabfragen funktionieren weiterhin nicht; benötigte Root-Rechte sind über eine eng begrenzte sudoers-Regel und `sudo -n` bereitzustellen. Ausgabe und Fehler erscheinen als reguläres Ausführungsprotokoll und der Lauf kann über das Live-Log gestoppt werden.
+Die WebUI besitzt keine freie SSH-Konsole. Nur gespeicherte Aktionen können gestartet werden und jeder Start wird vorher bestätigt. Name, Befehl, Zielgerät, Aktivstatus und Zeitlimit werden mit dem vorhandenen Master-Key geschützt; der Befehlsinhalt liegt authentifiziert verschlüsselt in `/data/security/security.db`. Beim ersten Start von v1.3.5 werden vorhandene Klartexteinträge aus `manager.db` zunächst vollständig importiert und durch erneutes Entschlüsseln verifiziert. Erst danach wird die alte Tabelle entfernt. Auch eine leere oder nach einem früheren Abbruch verbliebene Alttabelle wird erkannt. Zusätzlich redigiert der Start alle historischen SSH-Aktionsläufe aus Versionen vor v1.3.3, deren vollständiger Befehl noch in `runs.command_preview` gespeichert wurde. Dabei bleiben Status, Zeitstempel und Bezeichnung erhalten; Vorschau, Ausgabe-, Fehler-, Log- und Warnungsfelder sowie das dateibasierte SSH-Laufprotokoll werden entfernt. Die Datenbank einschließlich WAL wird vor Freigabe der WebUI per Checkpoint und `VACUUM` bereinigt; danach kontrolliert BBM zusätzlich, dass kein migrierter Befehl mehr in `manager.db`, `manager.db-wal` oder `manager.db-shm` enthalten ist. Schlägt ein Schritt fehl, bleibt der Vorgang wiederholbar und der Manager startet nicht mit einer nur teilweise migrierten Aktion. Neue Laufvorschauen nennen nur Aktion und Zielgerät. Interaktive Passwortabfragen funktionieren weiterhin nicht; benötigte Root-Rechte sind über eine eng begrenzte sudoers-Regel und `sudo -n` bereitzustellen. Ausgabe und Fehler erscheinen bei neuen Läufen weiterhin als reguläres Ausführungsprotokoll und der Lauf kann über das Live-Log gestoppt werden.
 
 Warnstufen:
 
@@ -1071,4 +1071,4 @@ Das Access-Log enthält keine Passwörter, TOTP-/Wiederherstellungscodes oder Si
 
 ## Manager-Datenbank warten
 
-Unter **System → Systemdiagnose → Manager-Datenbank bereinigen** zuerst **Datenbank prüfen** ausführen. Die Vorschau nennt ausschließlich technisch veraltete oder verwaiste Einträge. **Sicher bereinigen** erstellt vor Änderungen eine geprüfte Kopie unter `/data/maintenance-backups`, korrigiert die angezeigten Zeilen und führt die SQLite-Optimierung durch. Während aktiver/wartender Läufe oder Manager-/Cache-Backups bleibt die Funktion gesperrt.
+Unter **System → Systemdiagnose → Manager-Datenbank bereinigen** zuerst **Datenbank prüfen** ausführen. Die Vorschau nennt technisch veraltete oder verwaiste Einträge und zeigt zusätzlich historische SSH-Aktionsläufe mit früher gespeicherten Klartextbefehlen sowie betroffene Wartungskopien an. **Sicher bereinigen** redigiert bei diesen Alt-Läufen Befehlsvorschau, Ausgabe, Fehler, Datenbank-Logfelder und dateibasierte SSH-Laufprotokolle. Unsichere ältere Wartungskopien werden entfernt; erst danach wird eine neue geprüfte Kopie unter `/data/maintenance-backups` erstellt. Der SQLite-Neuaufbau läuft beim nächsten Start vor Freigabe der WebUI. Während aktiver/wartender Läufe oder Manager-/Cache-Backups bleibt die Funktion gesperrt.

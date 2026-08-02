@@ -1,5 +1,24 @@
 # Release Notes
 
+## v1.3.5 – 02.08.2026
+
+### Historische SSH-Klartextdetails vollständig bereinigt
+
+- Versionen vor v1.3.3 speicherten den vollständigen Befehl einer gespeicherten SSH-Aktion in `runs.command_preview`. Diese aktiven historischen Laufzeilen wurden durch das Entfernen der alten `host_ssh_actions`-Tabelle und durch `VACUUM` nicht verändert.
+- BBM erkennt diese Alt-Läufe jetzt beim Start und in der Datenbankwartung. Status, Zeitstempel und Bezeichnung bleiben erhalten; Befehlsvorschau, Ausgabe-, Fehler-, Log- und Warnungsfelder werden aus Sicherheitsgründen geleert. Das zugehörige dateibasierte SSH-Laufprotokoll wird ebenfalls entfernt.
+- Bereits redigierte Alt-Läufe werden bei jedem Start erneut auf ein verbliebenes dateibasiertes Laufprotokoll geprüft, sodass auch ein zuvor unterbrochener Löschvorgang sicher nachgeholt wird.
+- Bereits redigierte historische Läufe werden bei jedem Start erneut auf verbliebene Laufprotokolle geprüft; dadurch heilt auch ein Abbruch zwischen Datenbankredaktion und Dateilöschung automatisch aus.
+- Verknüpfte Benachrichtigungsdetails werden redigiert. Normale Backup-Läufe und aktuelle SSH-Aktionsläufe mit bereits sicherer Vorschau bleiben unverändert.
+- Wartungskopien unter `/data/maintenance-backups`, die noch eine alte SSH-Klartexttabelle oder historische Klartextvorschauen enthalten, werden erkannt und gelöscht. Eine neue Sicherheitskopie wird bei der manuellen Bereinigung erst nach der vertraulichen Altbereinigung erstellt.
+- Manager-SQLite-Verbindungen verwenden zusätzlich `PRAGMA secure_delete=ON`. Ein vorgemerkter WAL-Checkpoint und `VACUUM` laufen vor Freigabe der WebUI und beseitigen wiederherstellbare Reste aus freien Seiten und WAL-Dateien.
+- Das bestehende Datenmodell und der Manager-Backup-/Restore-Ablauf bleiben unverändert. Geräte, Repositorys, Backup-Jobs, Zeitpläne, Quellenstatistiken, Sicherungsgrößen und reguläre Backup-Läufe werden von dieser Bereinigung nicht verändert.
+
+### Diagnose und Dokumentation erweitert
+
+- Die Vorschau **Manager-Datenbank bereinigen** zeigt jetzt getrennt historische SSH-Läufe mit Klartextdetails und unsichere Wartungskopien an.
+- WebUI-Hilfe, README, Installationsanleitungen, Sicherheitshinweise und deutsche/englische Texte beschreiben den vollständigen Bereinigungsumfang und den bewussten Verlust alter SSH-Ausgabeprotokolle.
+- Neue Regressionstests prüfen Datenbankfelder, Benachrichtigungsdetails, dateibasierte Laufprotokolle, Wartungskopien, `secure_delete` und die physische Entfernung eines Testgeheimnisses nach `VACUUM`.
+
 ## v1.3.4 – 02.08.2026
 
 ### Profil als eigene Seite

@@ -791,7 +791,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.3.4`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.3.5`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -5520,6 +5520,9 @@ function renderDatabaseMaintenance(data) {
     ['Verwaiste Repository-Zugänge', data.orphan_repository_access_rows],
     ['Verwaiste Geräteaktionen', data.orphan_host_action_rows],
     ['Alte SSH-Klartexttabelle', data.legacy_host_action_table ? data.legacy_host_action_rows : 0],
+    ['Historische SSH-Läufe mit Klartextdetails', data.legacy_ssh_run_rows],
+    ['Verbliebene historische SSH-Laufprotokolle', data.legacy_ssh_run_logs],
+    ['Unsichere Wartungskopien mit SSH-Klartext', data.sensitive_maintenance_backups],
     ['Verwaiste Benachrichtigungszustellungen', data.orphan_notification_deliveries],
     ['Zeitpläne mit ungültigen Zielen', data.schedule_rows_with_invalid_targets],
     ['Freie SQLite-Seiten', data.freelist_pages],

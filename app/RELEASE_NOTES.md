@@ -1,5 +1,22 @@
 # Release Notes
 
+## v1.3.5 – 02.08.2026
+
+### Historical SSH plaintext details fully scrubbed
+
+- Releases before v1.3.3 stored the complete saved SSH action command in `runs.command_preview`. Those active historical run rows were not changed by dropping the old `host_ssh_actions` table or by running `VACUUM`.
+- BBM now detects these legacy runs during startup and database maintenance. Status, timestamps and labels remain; command preview, output, error, log and warning fields are cleared for security. The related file-backed SSH run log is removed as well.
+- Already-redacted historical runs are checked again for remaining run logs on every startup, so an interruption between database redaction and file deletion heals automatically.
+- Linked notification details are redacted. Normal backup runs and current SSH action runs that already use a safe preview remain unchanged.
+- Maintenance copies below `/data/maintenance-backups` that still contain a legacy SSH plaintext table or historical plaintext previews are detected and deleted. Manual maintenance creates a new safety copy only after confidential legacy data has been scrubbed.
+- Manager SQLite connections additionally use `PRAGMA secure_delete=ON`. A pending WAL checkpoint and `VACUUM` run before the WebUI is exposed and remove recoverable remnants from free pages and WAL files.
+
+### Diagnostics and documentation extended
+
+- The **Clean manager database** preview now reports historical SSH runs with plaintext details and unsafe maintenance copies separately.
+- WebUI help, README, installation guides, security guidance and German/English text describe the complete scrub scope and the intentional loss of old SSH output logs.
+- New regression tests cover database fields, notification details, file-backed run logs, maintenance copies, `secure_delete`, and physical removal of a test secret after `VACUUM`.
+
 ## v1.3.4 – 2026-08-02
 
 ### Dedicated profile page

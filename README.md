@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.3.4
+# BorgBackup Manager 1.3.5
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -17,7 +17,7 @@ German documentation is available in [`README.de.md`](README.de.md). Installatio
 - Managed-repository service: integrated OpenSSH with restricted `borg serve`
 - Persistent application data: `/docker_data/borgbackup-manager/data` by default
 - Persistent managed repositories: `/docker_data/borgbackup-manager/repositories` by default
-- Published GHCR image: `ghcr.io/the-ab/borgbackup-manager:latest` or pinned `ghcr.io/the-ab/borgbackup-manager:v1.3.4`
+- Published GHCR image: `ghcr.io/the-ab/borgbackup-manager:latest` or pinned `ghcr.io/the-ab/borgbackup-manager:v1.3.5`
 - Local source build: `borgbackup-manager:latest`
 - Default timezone: `Europe/Berlin`
 - Container name: `borgbackup-manager`
@@ -40,7 +40,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.3.4.zip
+BorgBackup-Manager-1.3.5.zip
 ```
 
 The documentation naming convention is:
@@ -192,7 +192,7 @@ Disabling a device automatically disables all active backup jobs assigned to it.
 
 Administrators can define reusable, non-interactive shell commands under **Devices -> Saved SSH actions** and execute them on a selected device. Typical uses include mounting or unmounting a preconfigured NFS filesystem, controlled `systemctl` operations, or diagnostics. There is deliberately no ad-hoc web shell: only previously persisted action IDs can be executed. Every run requires confirmation and uses the same controller key, verified device host key, `BatchMode=yes`, and `StrictHostKeyChecking=yes` as other client operations.
 
-Each action has a name, device, command, enabled state, and a timeout from 5 to 3600 seconds. Execution is recorded as a regular run with live output, exit status, cancellation, and history, and counts against the global concurrency limit. The full command is authenticated-encrypted with the master key in `/data/security/security.db`; `manager.db` no longer contains a plaintext SSH-action table. Existing rows are imported, decrypted for verification, and only then removed on the first start. The startup migration also detects an empty or previously abandoned legacy table. An SQLite checkpoint followed by `VACUUM` removes recoverable plaintext remnants from the previous database and its WAL, and a final scan verifies that no migrated command remains in `manager.db`, `manager.db-wal`, or `manager.db-shm`. Run previews, diagnostics, and normal logs contain only the action name and target device, not command text. Commands must remain non-interactive. For `sudo`, configure an appropriate sudoers rule and use `sudo -n`.
+Each action has a name, device, command, enabled state, and a timeout from 5 to 3600 seconds. Execution is recorded as a regular run with live output, exit status, cancellation, and history, and counts against the global concurrency limit. The full command is authenticated-encrypted with the master key in `/data/security/security.db`; `manager.db` no longer contains a plaintext SSH-action table. Existing rows are imported, decrypted for verification, and only then removed on the first start. The startup migration also detects an empty or previously abandoned legacy table. Historical SSH runs created before v1.3.3 are detected as well because those releases stored the full command in `runs.command_preview`. For affected legacy runs, status, timestamps and labels remain, while preview, output, error, log and warning fields plus the file-backed SSH run log are removed. An SQLite checkpoint followed by `VACUUM` removes recoverable plaintext remnants from the previous database and its WAL, and a final scan verifies that no migrated command remains in `manager.db`, `manager.db-wal`, or `manager.db-shm`. New run previews contain only the action name and target device, not command text. Commands must remain non-interactive. For `sudo`, configure an appropriate sudoers rule and use `sudo -n`.
 
 ## Repositories
 
@@ -417,7 +417,7 @@ Two separate deployment paths are provided.
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.3.4.zip
+unzip /path/BorgBackup-Manager-1.3.5.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -475,7 +475,7 @@ Repository SSH:  SERVER:2222
 Data:            /docker_data/borgbackup-manager/data
 Repositories:    /docker_data/borgbackup-manager/repositories
 Local build:     borgbackup-manager:latest
-GHCR:            ghcr.io/the-ab/borgbackup-manager:latest or :v1.3.4
+GHCR:            ghcr.io/the-ab/borgbackup-manager:latest or :v1.3.5
 Container:       borgbackup-manager
 ```
 
@@ -565,7 +565,7 @@ Point the jail at the host-side log path and protect the actual published HTTPS 
 
 CrowdSec can acquire the file as a custom source. Its acquisition `type` must match the custom parser; the parser can extract JSON fields with `UnmarshalJSON` or `JsonExtract`, set `evt.Meta.source_ip` from `remote_address`, and assign a dedicated failed-authentication `log_type`. A leaky-bucket scenario can then operate on that `log_type`.
 
-**System → System diagnostics → Clean manager database** first previews and then conservatively repairs `manager.db`. It closes stale interrupted run states, removes orphaned assignments and repairs invalid schedule targets. A verified SQLite copy is written below `/data/maintenance-backups` before any change; normal devices, repositories, jobs and completed logs are never deleted wholesale.
+**System → System diagnostics → Clean manager database** first previews and then conservatively repairs `manager.db`. The preview also detects a remaining legacy SSH plaintext table, historical SSH runs whose full command preview was stored by older releases, and unsafe maintenance copies. For affected SSH runs, status, timestamps and the action label remain, while command preview, output, error and log fields plus the related file-backed SSH run log are removed for security. Maintenance copies still containing those plaintext details are deleted; only then is a new verified SQLite safety copy created below `/data/maintenance-backups`. The manager also closes stale interrupted run states, removes orphan assignments and repairs invalid schedule targets. Normal devices, repositories, jobs and regular backup logs are not deleted wholesale. A requested `VACUUM` rebuild is deferred to the next startup rather than running against the live WebUI. The same SSH legacy cleanup runs automatically before the WebUI is exposed; `PRAGMA secure_delete=ON`, WAL checkpointing and `VACUUM` then remove recoverable SQLite remnants.
 
 ## Diagnostics
 

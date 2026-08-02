@@ -33,6 +33,7 @@ if _is_sqlite:
                     if "locked" not in str(exc).casefold():
                         raise
             cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA secure_delete=ON")
         finally:
             cursor.close()
 

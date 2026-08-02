@@ -6,27 +6,27 @@
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
-<link href="/static/favicon.svg?v=1.3.4" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.3.4"></script>
-<link href="/static/style.css?v=1.3.4" rel="stylesheet"/>
+<link href="/static/favicon.svg?v=1.3.5" rel="icon" type="image/svg+xml"/>
+<script src="/static/theme-init.js?v=1.3.5"></script>
+<link href="/static/style.css?v=1.3.5" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
 <form class="login-card" id="login-form">
-<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.3.4"/>
+<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.3.5"/>
 <p class="eyebrow">BorgBackup Manager</p>
 <h1>Zentrale für deine Backups.</h1>
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <label class="hidden" id="login-second-factor-field">2FA-Code oder Wiederherstellungscode<input autocomplete="one-time-code" id="login-second-factor" maxlength="32" type="text"/><small>Authenticator-Code oder einmaligen Wiederherstellungscode eingeben.</small></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.3.4</b></p>
+<p class="login-version">Version <b id="login-version">v1.3.5</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
 <div class="app-shell hidden" id="app">
 <aside>
-<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.3.4"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
+<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.3.5"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
 <nav id="main-navigation">
 <span class="nav-label">Betrieb</span>
 <button class="active" data-view="dashboard">Übersicht</button>
@@ -503,7 +503,7 @@
 </section>
 <section class="view" id="view-diagnostics">
 <div class="panel diagnostics-panel"><div class="panel-head responsive-head"><div><h2>Systemdiagnose</h2><span>Borg-Version, Repository-Speicher, SSH-Dienst und Serverprotokolle zentral prüfen.</span></div><div class="table-actions"><button class="secondary" id="load-diagnostics" type="button">Diagnose laden</button><button class="secondary hidden" id="close-diagnostics" type="button">Diagnose schließen</button></div></div><div class="empty" id="system-diagnostics">Borg-Version, Repository-Speicher und Serverprotokoll bei Bedarf laden.</div></div>
-<div class="panel database-maintenance-panel"><div class="panel-head responsive-head"><div><h2>Manager-Datenbank bereinigen</h2><span>Verwaiste Zuordnungen, veraltete Laufzustände und nicht mehr aktive Mount-Einträge konservativ prüfen.</span></div><div class="table-actions"><button class="secondary" id="inspect-manager-database" type="button">Datenbank prüfen</button><button class="danger" disabled="" id="cleanup-manager-database" type="button">Sicher bereinigen</button></div></div><div class="persistent-info" id="database-maintenance-status">Noch nicht geprüft.</div><div id="database-maintenance-details"></div><p class="hint">Vor Änderungen wird eine SQLite-Sicherheitskopie unter <code>/data/maintenance-backups</code> erstellt. Geräte, Repositorys, Jobs und reguläre Ausführungsverläufe werden nicht pauschal gelöscht.</p></div>
+<div class="panel database-maintenance-panel"><div class="panel-head responsive-head"><div><h2>Manager-Datenbank bereinigen</h2><span>Verwaiste Zuordnungen, veraltete Laufzustände und vertrauliche Altinhalte konservativ prüfen.</span></div><div class="table-actions"><button class="secondary" id="inspect-manager-database" type="button">Datenbank prüfen</button><button class="danger" disabled="" id="cleanup-manager-database" type="button">Sicher bereinigen</button></div></div><div class="persistent-info" id="database-maintenance-status">Noch nicht geprüft.</div><div id="database-maintenance-details"></div><p class="hint">Vor Änderungen wird eine SQLite-Sicherheitskopie unter <code>/data/maintenance-backups</code> erstellt. Geräte, Repositorys, Jobs und reguläre Backup-Ausführungsverläufe werden nicht pauschal gelöscht. Historische SSH-Aktionsläufe mit früher gespeicherten Befehlsdetails werden aus Sicherheitsgründen redigiert; zugehörige SSH-Laufprotokolle und unsichere Wartungskopien werden entfernt.</p></div>
 </section>
 <section class="view" id="view-help"><div class="help-fragment-loading" id="help-container">Anleitung wird geladen …</div></section>
 <section class="view" id="view-releases"><div class="panel"><div class="panel-head"><h2>Release Notes</h2><span id="release-version"></span></div><pre id="release-content">Wird geladen …</pre></div></section>
@@ -575,6 +575,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.3.4"></script><script src="/static/app.js?v=1.3.4"></script>
+<script src="/static/i18n.js?v=1.3.5"></script><script src="/static/app.js?v=1.3.5"></script>
 </body>
 </html>

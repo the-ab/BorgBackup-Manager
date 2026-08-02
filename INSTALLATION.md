@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.3.4
+# Installation and Operations — BorgBackup Manager 1.3.5
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.3.4.zip
+BorgBackup-Manager-1.3.5.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.3.4.zip
+unzip /path/BorgBackup-Manager-1.3.5.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.3.4.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.3.5.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -119,7 +119,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.3.4` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
+`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.3.5` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
 
 During first start the entrypoint checks `/repositories` using `BBM_BORG_UID` and `BBM_BORG_GID`. If the mount is empty and is owned by `root` only because Docker created the host directory, only the mount root is assigned to the configured UID/GID and receives owner read/write/execute access. The entrypoint never runs recursive `chown` on repositories. Existing non-empty data therefore requires correct host ownership, group permissions or ACLs. NFS deployments with `root_squash` must configure matching numeric UID/GID or server-side permissions.
 
@@ -290,7 +290,7 @@ sudo -n mount /mnt/offline-backup
 sudo -n umount /mnt/offline-backup
 ```
 
-The WebUI does not expose an ad-hoc SSH console. Only saved actions can be started, and every start requires confirmation. Name, command, target device, enabled state, and timeout are protected with the existing master key; command text is authenticated-encrypted in `/data/security/security.db`. On the first v1.3.4 start, existing plaintext rows are fully imported and verified by decrypting them again before the old `manager.db` table is removed. An empty or previously abandoned legacy table is detected as well. Before the WebUI is made available, a checkpoint and `VACUUM` sanitize the database and WAL; a final scan then verifies that no migrated command remains in `manager.db`, `manager.db-wal`, or `manager.db-shm`. A failed step remains retryable and never leaves an accepted partially migrated action set. Run previews and normal logs expose only the action name and target device. Interactive password prompts remain unsupported; use a narrowly scoped sudoers rule with `sudo -n` when elevated privileges are required. Output and errors are recorded as regular runs and can be cancelled from the live log.
+The WebUI does not expose an ad-hoc SSH console. Only saved actions can be started, and every start requires confirmation. Name, command, target device, enabled state, and timeout are protected with the existing master key; command text is authenticated-encrypted in `/data/security/security.db`. On the first v1.3.5 start, existing plaintext rows are fully imported and verified by decrypting them again before the old `manager.db` table is removed. An empty or previously abandoned legacy table is detected as well. Startup also redacts every historical SSH action run created before v1.3.3 whose complete command was still stored in `runs.command_preview`. Status, timestamps and labels remain; preview, output, error, log and warning fields plus the file-backed SSH run log are removed. Before the WebUI is made available, a checkpoint and `VACUUM` sanitize the database and WAL; a final scan then verifies that no migrated command remains in `manager.db`, `manager.db-wal`, or `manager.db-shm`. A failed step remains retryable and never leaves an accepted partially migrated action set. New run previews expose only the action name and target device. Interactive password prompts remain unsupported; use a narrowly scoped sudoers rule with `sudo -n` when elevated privileges are required. Output and errors for new runs are recorded as regular runs and can be cancelled from the live log.
 
 ## 9. Create or attach a repository
 
@@ -770,4 +770,4 @@ The access log never contains passwords, TOTP/recovery codes or session tokens. 
 
 ## Maintaining the manager database
 
-Under **System → System diagnostics → Clean manager database**, run **Inspect database** first. The preview lists only stale or orphaned technical rows. **Clean safely** creates a verified copy below `/data/maintenance-backups`, applies the listed repairs and runs SQLite optimization. The action is blocked while runs or manager/cache backup tasks are active.
+Under **System → System diagnostics → Clean manager database**, run **Inspect database** first. In addition to stale or orphaned technical rows, the preview reports historical SSH action runs containing command plaintext saved by older releases and affected maintenance copies. **Clean safely** redacts command preview, output, error, database log fields and file-backed SSH run logs for those legacy runs. Unsafe older maintenance copies are removed; only then is a new verified copy created below `/data/maintenance-backups`. The SQLite rebuild runs at the next startup before the WebUI is exposed. The action is blocked while runs or manager/cache backup tasks are active.

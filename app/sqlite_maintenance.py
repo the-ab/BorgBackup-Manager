@@ -93,6 +93,7 @@ def sanitize_sqlite_database(target_engine: Engine, *, analyze: bool = True) -> 
         connection = sqlite3.connect(path, timeout=60, isolation_level=None)
         try:
             connection.execute("PRAGMA busy_timeout=60000")
+            connection.execute("PRAGMA secure_delete=ON")
             checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
             checkpointed = bool(checkpoint is not None and int(checkpoint[0]) == 0)
             connection.execute("VACUUM")
