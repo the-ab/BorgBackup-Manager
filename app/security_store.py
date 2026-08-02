@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -26,6 +27,10 @@ from app.config import (
     SESSION_TTL_SECONDS,
 )
 from app.secret_crypto import decrypt_value, encrypt_value
+from app.two_factor import (
+    generate_recovery_codes, generate_secret, hash_recovery_code, normalize_recovery_code,
+    provisioning_qr_data_uri, provisioning_uri, verify_totp,
+)
 
 PASSWORD_N = 2**15
 PASSWORD_R = 8
@@ -89,6 +94,7 @@ class AuthUser:
     must_change_password: bool
     language: str = "de"
     appearance: str = "auto"
+    two_factor_enabled: bool = False
 
 
 def _utcnow() -> datetime:
@@ -182,6 +188,19 @@ def initialize_security_store() -> dict[str, Any]:
                 PRIMARY KEY(scope, name)
             );
             CREATE INDEX IF NOT EXISTS ix_secrets_scope ON secrets(scope);
+            CREATE TABLE IF NOT EXISTS host_ssh_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                host_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                encrypted_command TEXT NOT NULL,
+                timeout_seconds INTEGER NOT NULL DEFAULT 300,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(host_id, name)
+            );
+            CREATE INDEX IF NOT EXISTS ix_security_host_ssh_actions_host_id
+              ON host_ssh_actions(host_id);
             """
         )
         user_columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(users)").fetchall()}
@@ -189,6 +208,14 @@ def initialize_security_store() -> dict[str, Any]:
             connection.execute("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'de'")
         if "appearance" not in user_columns:
             connection.execute("ALTER TABLE users ADD COLUMN appearance TEXT NOT NULL DEFAULT 'auto'")
+        if "two_factor_enabled" not in user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER NOT NULL DEFAULT 0")
+        if "two_factor_secret" not in user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN two_factor_secret TEXT")
+        if "two_factor_recovery_codes_json" not in user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN two_factor_recovery_codes_json TEXT NOT NULL DEFAULT '[]'")
+        if "two_factor_confirmed_at" not in user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN two_factor_confirmed_at TEXT")
         connection.execute("UPDATE users SET language='de' WHERE language NOT IN ('de','en') OR language IS NULL")
         connection.execute("UPDATE users SET appearance='auto' WHERE appearance NOT IN ('auto','light','dark') OR appearance IS NULL")
         count = int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
@@ -278,6 +305,7 @@ def _row_user(row: sqlite3.Row) -> AuthUser:
         id=int(row["id"]), username=str(row["username"]), role=str(row["role"]),
         enabled=bool(row["enabled"]), must_change_password=bool(row["must_change_password"]),
         language=str(row["language"] or "de"), appearance=str(row["appearance"] or "auto"),
+        two_factor_enabled=bool(row["two_factor_enabled"]) if "two_factor_enabled" in row.keys() else False,
     )
 
 
@@ -384,23 +412,147 @@ def _dummy_password_hash() -> str:
     return _DUMMY_PASSWORD_HASH
 
 
-def authenticate_user(username: str, password: str, remote_address: str | None = None) -> AuthUser | None:
+def verify_user_password(user_id: int, password: str) -> bool:
+    with _connect() as connection:
+        row = connection.execute("SELECT password_hash FROM users WHERE id=?", (int(user_id),)).fetchone()
+    return bool(row is not None and verify_password(password, str(row["password_hash"])))
+
+
+def _verify_second_factor_row(connection: sqlite3.Connection, row: sqlite3.Row, code: str) -> tuple[bool, bool]:
+    if not bool(row["two_factor_enabled"]):
+        return True, False
+    encrypted = str(row["two_factor_secret"] or "")
+    if not encrypted:
+        return False, False
+    try:
+        secret = decrypt_value(encrypted)
+    except ValueError:
+        return False, False
+    if verify_totp(secret, code):
+        return True, False
+    normalized = normalize_recovery_code(code)
+    if not normalized:
+        return False, False
+    hashes = json.loads(str(row["two_factor_recovery_codes_json"] or "[]"))
+    candidate = hash_recovery_code(normalized)
+    for index, stored in enumerate(hashes):
+        if hmac.compare_digest(str(stored), candidate):
+            hashes.pop(index)
+            connection.execute(
+                "UPDATE users SET two_factor_recovery_codes_json=?,updated_at=? WHERE id=?",
+                (json.dumps(hashes), _iso(), int(row["id"])),
+            )
+            return True, True
+    return False, False
+
+
+def begin_two_factor_setup(user_id: int, current_password: str) -> dict[str, Any]:
+    if not verify_user_password(user_id, current_password):
+        raise ValueError("Aktuelles Passwort ist falsch")
+    secret = generate_secret()
+    codes = generate_recovery_codes()
+    with _connect() as connection:
+        row = connection.execute("SELECT username,two_factor_enabled FROM users WHERE id=?", (int(user_id),)).fetchone()
+        if row is None:
+            raise KeyError(user_id)
+        if bool(row["two_factor_enabled"]):
+            raise ValueError("Zwei-Faktor-Authentifizierung ist bereits aktiviert")
+        connection.execute(
+            "UPDATE users SET two_factor_enabled=0,two_factor_secret=?,two_factor_recovery_codes_json=?,two_factor_confirmed_at=NULL,updated_at=? WHERE id=?",
+            (encrypt_value(secret), json.dumps([hash_recovery_code(code) for code in codes]), _iso(), int(user_id)),
+        )
+        connection.commit()
+        username = str(row["username"])
+    uri = provisioning_uri(secret, username)
+    record_event("two_factor_setup_started", user_id=user_id, username=username)
+    return {
+        "secret": secret,
+        "provisioning_uri": uri,
+        "qr_code_data_uri": provisioning_qr_data_uri(uri),
+        "recovery_codes": codes,
+    }
+
+
+def confirm_two_factor_setup(user_id: int, code: str) -> dict[str, Any]:
+    with _connect() as connection:
+        row = connection.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
+        if row is None:
+            raise KeyError(user_id)
+        encrypted = str(row["two_factor_secret"] or "")
+        if not encrypted or not verify_totp(decrypt_value(encrypted), code):
+            raise ValueError("Der 2FA-Code ist ungültig")
+        connection.execute("UPDATE users SET two_factor_enabled=1,two_factor_confirmed_at=?,updated_at=? WHERE id=?", (_iso(), _iso(), int(user_id)))
+        connection.commit()
+        username = str(row["username"])
+    revoke_user_sessions(user_id)
+    record_event("two_factor_enabled", user_id=user_id, username=username)
+    return get_user(user_id)
+
+
+def disable_two_factor(user_id: int, current_password: str) -> dict[str, Any]:
+    if not verify_user_password(user_id, current_password):
+        raise ValueError("Aktuelles Passwort ist falsch")
+    return reset_two_factor(user_id, event="two_factor_disabled")
+
+
+def reset_two_factor(user_id: int, *, event: str = "two_factor_reset") -> dict[str, Any]:
+    with _connect() as connection:
+        row = connection.execute("SELECT username FROM users WHERE id=?", (int(user_id),)).fetchone()
+        if row is None:
+            raise KeyError(user_id)
+        connection.execute("UPDATE users SET two_factor_enabled=0,two_factor_secret=NULL,two_factor_recovery_codes_json='[]',two_factor_confirmed_at=NULL,updated_at=? WHERE id=?", (_iso(), int(user_id)))
+        connection.commit()
+        username = str(row["username"])
+    revoke_user_sessions(user_id)
+    record_event(event, user_id=user_id, username=username)
+    return get_user(user_id)
+
+
+def regenerate_two_factor_recovery_codes(user_id: int, current_password: str, code: str) -> list[str]:
+    if not verify_user_password(user_id, current_password):
+        raise ValueError("Aktuelles Passwort ist falsch")
+    codes = generate_recovery_codes()
+    with _connect() as connection:
+        row = connection.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
+        if row is None:
+            raise KeyError(user_id)
+        valid, _used = _verify_second_factor_row(connection, row, code)
+        if not valid:
+            raise ValueError("Der 2FA-Code ist ungültig")
+        connection.execute("UPDATE users SET two_factor_recovery_codes_json=?,updated_at=? WHERE id=?", (json.dumps([hash_recovery_code(item) for item in codes]), _iso(), int(user_id)))
+        connection.commit()
+    record_event("two_factor_recovery_codes_regenerated", user_id=user_id, username=str(row["username"]))
+    return codes
+
+
+def authenticate_user(username: str, password: str, remote_address: str | None = None, second_factor: str | None = None, *, return_status: bool = False):
     normalized = username.strip()
     with _connect() as connection:
         row = connection.execute("SELECT * FROM users WHERE username=? COLLATE NOCASE", (normalized,)).fetchone()
         encoded = str(row["password_hash"]) if row is not None and bool(row["enabled"]) else _dummy_password_hash()
         valid = verify_password(password, encoded)
         if row is None or not bool(row["enabled"]) or not valid:
-            record_event("login_failed", username=normalized, remote_address=remote_address, detail="invalid")
-            return None
+            record_event("login_failed", username=normalized, remote_address=remote_address, detail="invalid_credentials")
+            return (None, "invalid_credentials") if return_status else None
+        if bool(row["two_factor_enabled"]):
+            if not second_factor:
+                return (None, "two_factor_required") if return_status else None
+            second_factor_valid, recovery_used = _verify_second_factor_row(connection, row, second_factor)
+            if not second_factor_valid:
+                record_event("login_failed", user_id=int(row["id"]), username=normalized, remote_address=remote_address, detail="invalid_second_factor")
+                connection.commit()
+                return (None, "invalid_second_factor") if return_status else None
+        else:
+            recovery_used = False
         connection.execute(
             "UPDATE users SET failed_attempts=0,locked_until=NULL,last_login_at=?,updated_at=? WHERE id=?",
             (_iso(), _iso(), int(row["id"])),
         )
         connection.commit()
         user = _row_user(row)
-    record_event("login_success", user_id=user.id, username=user.username, remote_address=remote_address)
-    return user
+    record_event("login_success", user_id=user.id, username=user.username, remote_address=remote_address, detail="recovery_code" if recovery_used else "")
+    status = "recovery_code" if recovery_used else "ok"
+    return (user, status) if return_status else user
 
 
 
@@ -565,9 +717,9 @@ def revoke_user_sessions(user_id: int) -> int:
 def list_users() -> list[dict[str, Any]]:
     with _connect() as connection:
         rows = connection.execute(
-            "SELECT id,username,role,enabled,must_change_password,language,appearance,created_at,updated_at,last_login_at,locked_until FROM users ORDER BY username COLLATE NOCASE"
+            "SELECT id,username,role,enabled,must_change_password,language,appearance,two_factor_enabled,two_factor_confirmed_at,created_at,updated_at,last_login_at,locked_until FROM users ORDER BY username COLLATE NOCASE"
         ).fetchall()
-    return [dict(row) | {"enabled": bool(row["enabled"]), "must_change_password": bool(row["must_change_password"])} for row in rows]
+    return [dict(row) | {"enabled": bool(row["enabled"]), "must_change_password": bool(row["must_change_password"]), "two_factor_enabled": bool(row["two_factor_enabled"])} for row in rows]
 
 
 def create_user(username: str, password: str, role: str = "user", must_change_password: bool = True) -> dict[str, Any]:
@@ -592,12 +744,12 @@ def create_user(username: str, password: str, role: str = "user", must_change_pa
 def get_user(user_id: int) -> dict[str, Any]:
     with _connect() as connection:
         row = connection.execute(
-            "SELECT id,username,role,enabled,must_change_password,language,appearance,created_at,updated_at,last_login_at,locked_until FROM users WHERE id=?",
+            "SELECT id,username,role,enabled,must_change_password,language,appearance,two_factor_enabled,two_factor_confirmed_at,created_at,updated_at,last_login_at,locked_until FROM users WHERE id=?",
             (user_id,),
         ).fetchone()
     if row is None:
         raise KeyError(user_id)
-    return dict(row) | {"enabled": bool(row["enabled"]), "must_change_password": bool(row["must_change_password"])}
+    return dict(row) | {"enabled": bool(row["enabled"]), "must_change_password": bool(row["must_change_password"]), "two_factor_enabled": bool(row["two_factor_enabled"])}
 
 
 def update_user(user_id: int, username: str, role: str, enabled: bool) -> dict[str, Any]:
@@ -766,12 +918,14 @@ def security_status() -> dict[str, Any]:
         administrators = int(connection.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0])
         active_administrators = int(connection.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND enabled=1").fetchone()[0])
         sessions = int(connection.execute("SELECT COUNT(*) FROM sessions WHERE expires_at >= ?", (_iso(),)).fetchone()[0])
+        two_factor_users = int(connection.execute("SELECT COUNT(*) FROM users WHERE two_factor_enabled=1").fetchone()[0])
     secret_status = security_secret_status()
     return {
         "users": users,
         "administrators": administrators,
         "active_administrators": active_administrators,
         "sessions": sessions,
+        "two_factor_users": two_factor_users,
         "database": str(SECURITY_DATABASE_PATH),
         "initial_credentials_pending": secret_exists("bootstrap", "initial_admin_password"),
         "encrypted_secrets": secret_status["total"],
@@ -864,3 +1018,184 @@ def security_secret_status() -> dict[str, Any]:
         total = int(connection.execute("SELECT COUNT(*) FROM secrets").fetchone()[0])
         rows = connection.execute("SELECT scope,COUNT(*) AS count FROM secrets GROUP BY scope ORDER BY scope").fetchall()
     return {"total": total, "scopes": {str(row["scope"]): int(row["count"]) for row in rows}}
+
+
+@dataclass(frozen=True)
+class HostSshActionRecord:
+    id: int
+    host_id: int
+    name: str
+    command: str
+    timeout_seconds: int
+    enabled: bool
+    created_at: str
+    updated_at: str
+
+
+def _host_ssh_action_from_row(row: sqlite3.Row) -> HostSshActionRecord:
+    return HostSshActionRecord(
+        id=int(row["id"]),
+        host_id=int(row["host_id"]),
+        name=str(row["name"]),
+        command=decrypt_value(str(row["encrypted_command"])),
+        timeout_seconds=int(row["timeout_seconds"]),
+        enabled=bool(row["enabled"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def list_host_ssh_actions() -> list[HostSshActionRecord]:
+    with _connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM host_ssh_actions ORDER BY host_id,name,id"
+        ).fetchall()
+    return [_host_ssh_action_from_row(row) for row in rows]
+
+
+def get_host_ssh_action(action_id: int) -> HostSshActionRecord | None:
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT * FROM host_ssh_actions WHERE id=?", (int(action_id),)
+        ).fetchone()
+    return _host_ssh_action_from_row(row) if row is not None else None
+
+
+def create_host_ssh_action(
+    *, host_id: int, name: str, command: str, timeout_seconds: int, enabled: bool,
+) -> HostSshActionRecord:
+    now = _iso()
+    encrypted_command = encrypt_value(command)
+    with _connect() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO host_ssh_actions(
+              host_id,name,encrypted_command,timeout_seconds,enabled,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?)
+            """,
+            (int(host_id), str(name), encrypted_command, int(timeout_seconds), int(bool(enabled)), now, now),
+        )
+        action_id = int(cursor.lastrowid)
+        connection.commit()
+    action = get_host_ssh_action(action_id)
+    if action is None:
+        raise RuntimeError("Gespeicherte SSH-Aktion konnte nicht erneut gelesen werden")
+    return action
+
+
+def update_host_ssh_action(
+    action_id: int, *, host_id: int, name: str, command: str,
+    timeout_seconds: int, enabled: bool,
+) -> HostSshActionRecord | None:
+    now = _iso()
+    encrypted_command = encrypt_value(command)
+    with _connect() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE host_ssh_actions
+               SET host_id=?,name=?,encrypted_command=?,timeout_seconds=?,enabled=?,updated_at=?
+             WHERE id=?
+            """,
+            (
+                int(host_id), str(name), encrypted_command, int(timeout_seconds),
+                int(bool(enabled)), now, int(action_id),
+            ),
+        )
+        connection.commit()
+    if not cursor.rowcount:
+        return None
+    return get_host_ssh_action(action_id)
+
+
+def delete_host_ssh_action(action_id: int) -> bool:
+    with _connect() as connection:
+        cursor = connection.execute("DELETE FROM host_ssh_actions WHERE id=?", (int(action_id),))
+        connection.commit()
+    return bool(cursor.rowcount)
+
+
+def delete_host_ssh_actions_for_host(host_id: int) -> int:
+    with _connect() as connection:
+        cursor = connection.execute("DELETE FROM host_ssh_actions WHERE host_id=?", (int(host_id),))
+        connection.commit()
+    return int(cursor.rowcount or 0)
+
+
+def host_ssh_action_host_ids() -> list[int]:
+    with _connect() as connection:
+        rows = connection.execute("SELECT DISTINCT host_id FROM host_ssh_actions ORDER BY host_id").fetchall()
+    return [int(row["host_id"]) for row in rows]
+
+
+def delete_orphan_host_ssh_actions(valid_host_ids: set[int]) -> int:
+    normalized = {int(value) for value in valid_host_ids}
+    with _connect() as connection:
+        rows = connection.execute("SELECT id,host_id FROM host_ssh_actions").fetchall()
+        orphan_ids = [int(row["id"]) for row in rows if int(row["host_id"]) not in normalized]
+        if not orphan_ids:
+            return 0
+        placeholders = ",".join("?" for _ in orphan_ids)
+        cursor = connection.execute(
+            f"DELETE FROM host_ssh_actions WHERE id IN ({placeholders})", orphan_ids
+        )
+        connection.commit()
+    return int(cursor.rowcount or 0)
+
+
+def import_legacy_host_ssh_actions(rows: list[dict[str, Any]]) -> int:
+    """Import manager.db SSH actions without deleting the legacy source.
+
+    The caller may remove the old table only after this transaction succeeds.
+    Repeated imports are idempotent and verify that an existing destination row
+    represents exactly the same action before accepting it.
+    """
+    if not rows:
+        return 0
+    prepared: list[tuple[Any, ...]] = []
+    for row in rows:
+        prepared.append((
+            int(row["id"]), int(row["host_id"]), str(row["name"]),
+            encrypt_value(str(row["command"])), int(row.get("timeout_seconds") or 300),
+            int(bool(row.get("enabled", True))), str(row.get("created_at") or _iso()),
+            str(row.get("updated_at") or row.get("created_at") or _iso()),
+        ))
+    with _connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for source, values in zip(rows, prepared, strict=True):
+                existing = connection.execute(
+                    "SELECT * FROM host_ssh_actions WHERE id=?", (values[0],)
+                ).fetchone()
+                if existing is None:
+                    connection.execute(
+                        """
+                        INSERT INTO host_ssh_actions(
+                          id,host_id,name,encrypted_command,timeout_seconds,enabled,created_at,updated_at
+                        ) VALUES(?,?,?,?,?,?,?,?)
+                        """,
+                        values,
+                    )
+                else:
+                    existing_command = decrypt_value(str(existing["encrypted_command"]))
+                    expected = (values[1], values[2], values[4], bool(values[5]), values[6], values[7])
+                    actual = (
+                        int(existing["host_id"]), str(existing["name"]), int(existing["timeout_seconds"]),
+                        bool(existing["enabled"]), str(existing["created_at"]), str(existing["updated_at"]),
+                    )
+                    if existing_command != str(source["command"]) or actual != expected:
+                        raise ValueError(f"Konflikt bei migrierter SSH-Aktion #{values[0]}")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+    # Verify every source row can be decrypted and matches after commit.
+    for source in rows:
+        action = get_host_ssh_action(int(source["id"]))
+        if action is None or (
+            action.host_id != int(source["host_id"]) or action.name != str(source["name"])
+            or action.command != str(source["command"])
+            or action.timeout_seconds != int(source.get("timeout_seconds") or 300)
+            or action.enabled != bool(source.get("enabled", True))
+        ):
+            raise ValueError(f"SSH-Aktion #{source['id']} wurde nicht vollständig migriert")
+    return len(rows)

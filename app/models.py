@@ -30,20 +30,6 @@ class Host(Base):
 
 
 
-class HostSshAction(Base):
-    __tablename__ = "host_ssh_actions"
-    __table_args__ = (UniqueConstraint("host_id", "name", name="uq_host_ssh_action_name"),)
-    id: Mapped[int] = mapped_column(primary_key=True)
-    host_id: Mapped[int] = mapped_column(ForeignKey("hosts.id", ondelete="CASCADE"))
-    name: Mapped[str] = mapped_column(String(100))
-    command: Mapped[str] = mapped_column(Text)
-    timeout_seconds: Mapped[int] = mapped_column(Integer, default=300)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-    host: Mapped[Host] = relationship()
-
-
 class Repository(Base):
     __tablename__ = "repositories"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -166,6 +152,10 @@ class Run(Base):
     backup_source_file_count_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backup_network_download_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backup_network_upload_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    restore_total_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    restore_processed_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    restore_total_file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    restore_processed_file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

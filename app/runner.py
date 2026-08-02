@@ -1846,7 +1846,7 @@ def host_ssh_action_command(host: Host, shell_command: str, timeout_seconds: int
     if not text or "\x00" in text:
         raise ValueError("SSH command must not be empty")
     command = _ssh_argv(host, ["sh", "-lc", text], {}, supervised=False)
-    command.preview = f"ssh -i [temporärer Controller-Schlüssel] {host.username}@{host.address} -- sh -lc {shlex.quote(text)}"
+    command.preview = f"Gespeicherte SSH-Aktion auf Gerät {host.name}"
     command.timeout_seconds = max(5, min(3600, int(timeout_seconds)))
     return command
 
@@ -2337,7 +2337,45 @@ def restore_command(
             raise ValueError("Restore target must be a safe absolute path")
         effective_target = target
 
-    extract = [*_borg_base("extract"), "--list"]
+    baseline = [
+        *_borg_base("list"),
+        "--json-lines",
+        "--format", "{path}{type}{size}",
+        f"::{archive}",
+        *paths,
+    ]
+    baseline_program = '''
+import json
+import subprocess
+import sys
+
+process = subprocess.Popen(
+    sys.argv[1:], stdout=subprocess.PIPE, text=True,
+    encoding="utf-8", errors="replace",
+)
+count = 0
+total_size = 0
+assert process.stdout is not None
+for line in process.stdout:
+    try:
+        item = json.loads(line)
+    except (TypeError, ValueError):
+        continue
+    if not isinstance(item, dict):
+        continue
+    count += 1
+    try:
+        total_size += max(0, int(item.get("size") or 0))
+    except (TypeError, ValueError, OverflowError):
+        pass
+return_code = process.wait()
+if return_code in (0, 1):
+    print(f"\\x1eBBMRESTORE\\tBASELINE\\t{count}\\t{total_size}", file=sys.stderr, flush=True)
+sys.exit(return_code)
+'''.strip()
+    baseline_runner = ["python3", "-S", "-c", baseline_program, *baseline]
+
+    extract = ["borg", "--lock-wait", "600", "--log-json", "extract", "--progress", "--list"]
     if dry_run:
         extract.append("--dry-run")
     if restore_mode == "target" and target_layout == "selection-root" and paths:
@@ -2347,7 +2385,7 @@ def restore_command(
     extract.extend([f"::{archive}", *paths])
 
     script = rf'''
-set -eu
+set -u
 target="$1"
 dry_run="$2"
 restore_mode="$3"
@@ -2357,6 +2395,13 @@ printf 'RESTORE-MODUS: %s\n' "$restore_mode"
 printf 'ZIEL:           %s\n' "$target"
 printf 'PFADLAYOUT:     %s\n' "$layout"
 printf '%s\n' '------------------------------------------------------------------------------'
+printf '\036BBMRESTORE\tPREPARING\n' >&2
+{shlex.join(baseline_runner)}
+bbm_baseline_rc=$?
+if [ "$bbm_baseline_rc" -gt 1 ]; then
+  printf 'FEHLER: Restore-Basisdaten konnten nicht ermittelt werden (RC %s).\n' "$bbm_baseline_rc" >&2
+  exit "$bbm_baseline_rc"
+fi
 if [ "$restore_mode" = "original" ]; then
   cd -- /
 elif [ "$dry_run" = "1" ]; then
@@ -2377,12 +2422,17 @@ else
   fi
   cd -- "$target"
 fi
-exec {shlex.join(extract)}
+printf '\036BBMRESTORE\tRESTORING\n' >&2
+{shlex.join(extract)}
+bbm_restore_rc=$?
+printf '\036BBMRESTORE\tFINISHED\t%s\n' "$bbm_restore_rc" >&2
+exit "$bbm_restore_rc"
 '''.strip()
     return _ssh_argv(
         job.host,
         ["sh", "-c", script, "--", effective_target, "1" if dry_run else "0", restore_mode, target_layout],
         _remote_env(job.repository),
+        supervised=True,
     )
 
 

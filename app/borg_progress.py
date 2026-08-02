@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import asdict, dataclass
@@ -180,6 +181,240 @@ def get_run_progress(run_id: int) -> dict | None:
 def clear_run_progress(run_id: int) -> None:
     with _progress_lock:
         _live_progress.pop(int(run_id), None)
+
+
+_RESTORE_CONTROL_PREFIX = b"\x1eBBMRESTORE\t"
+
+
+@dataclass(frozen=True)
+class BorgRestoreProgress:
+    phase: str = "preparing"
+    processed_bytes: int = 0
+    total_bytes: int = 0
+    processed_files: int = 0
+    total_files: int = 0
+    path: str = ""
+    bytes_per_second: float = 0.0
+    eta_seconds: int | None = None
+    percent: float | None = None
+
+
+class BorgRestoreProgressStreamFilter:
+    """Parse Borg extract JSON progress while keeping the run log readable.
+
+    Restore commands run with ``--log-json --progress --list``. Borg therefore
+    emits both byte progress and one ``borg.output.list`` log record per archive
+    item on stderr. The filter removes the JSON transport, exposes a compact
+    process-local progress snapshot and writes only human-readable paths and
+    actual warnings/errors to the permanent run log.
+
+    A small BBM control record announces the pre-scan totals. Records are
+    newline-delimited and chunk-boundary safe; arbitrary non-JSON stderr stays
+    untouched so Borg diagnostics are never hidden.
+    """
+
+    _MAX_CARRY = 256 * 1024
+
+    def __init__(self) -> None:
+        self.latest = BorgRestoreProgress()
+        self._carry = b""
+        self._restore_started_at: float | None = None
+        self._processed_files = 0
+        self._total_files = 0
+        self._baseline_total_bytes = 0
+
+    def _snapshot(
+        self,
+        *,
+        phase: str | None = None,
+        processed_bytes: int | None = None,
+        total_bytes: int | None = None,
+        path: str | None = None,
+        finished: bool = False,
+    ) -> BorgRestoreProgress:
+        now = time.monotonic()
+        effective_phase = phase or self.latest.phase
+        current = max(0, int(self.latest.processed_bytes if processed_bytes is None else processed_bytes))
+        total = max(
+            0,
+            int(
+                self.latest.total_bytes
+                if total_bytes is None
+                else total_bytes
+            ),
+        )
+        if not total:
+            total = max(0, int(self._baseline_total_bytes))
+        if effective_phase == "restoring" and self._restore_started_at is None:
+            self._restore_started_at = now
+        elapsed = (
+            max(0.0, now - self._restore_started_at)
+            if self._restore_started_at is not None
+            else 0.0
+        )
+        rate = (current / elapsed) if current > 0 and elapsed >= 0.25 else 0.0
+        remaining = max(0, total - current) if total else 0
+        eta = int(round(remaining / rate)) if rate > 0 and total else None
+        percent = min(100.0, max(0.0, current / total * 100.0)) if total else None
+        if finished and total:
+            current = total
+            percent = 100.0
+            eta = 0
+        self.latest = BorgRestoreProgress(
+            phase=effective_phase,
+            processed_bytes=current,
+            total_bytes=total,
+            processed_files=max(0, int(self._processed_files)),
+            total_files=max(0, int(self._total_files)),
+            path=self.latest.path if path is None else str(path),
+            bytes_per_second=max(0.0, float(rate)),
+            eta_seconds=eta,
+            percent=percent,
+        )
+        return self.latest
+
+    @staticmethod
+    def _human_line(message: str) -> bytes:
+        text = str(message or "").rstrip("\r\n")
+        return (text + "\n").encode("utf-8", errors="replace") if text else b""
+
+    def _control_record(self, record: bytes) -> tuple[bytes, BorgRestoreProgress | None]:
+        fields = record.split(b"\t")
+        command = fields[1].decode("ascii", errors="ignore").upper() if len(fields) > 1 else ""
+        if command == "PREPARING":
+            return self._human_line("RESTORE-VORBEREITUNG: Archivmetadaten werden ausgewertet."), self._snapshot(phase="preparing")
+        if command == "BASELINE" and len(fields) >= 4:
+            try:
+                self._total_files = max(0, int(fields[2]))
+                self._baseline_total_bytes = max(0, int(fields[3]))
+            except (TypeError, ValueError, OverflowError):
+                return self._human_line("WARNUNG: Restore-Basisdaten konnten nicht gelesen werden."), None
+            progress = self._snapshot(
+                phase="preparing",
+                total_bytes=self._baseline_total_bytes,
+            )
+            return self._human_line(
+                f"RESTORE-BASIS: {self._total_files} Dateien/Objekte · {self._baseline_total_bytes} Byte."
+            ), progress
+        if command == "RESTORING":
+            return self._human_line("RESTORE: Daten werden verarbeitet."), self._snapshot(phase="restoring")
+        if command == "FINISHED":
+            try:
+                return_code = int(fields[2]) if len(fields) > 2 else 0
+            except (TypeError, ValueError, OverflowError):
+                return_code = 2
+            if return_code in {0, 1}:
+                self._processed_files = max(self._processed_files, self._total_files)
+                return b"", self._snapshot(phase="finished", finished=True)
+            return b"", self._snapshot(phase="failed")
+        return record + b"\n", None
+
+    def _json_record(self, record: bytes) -> tuple[bytes, BorgRestoreProgress | None]:
+        try:
+            payload = json.loads(record.decode("utf-8", errors="strict"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return record + b"\n", None
+        if not isinstance(payload, dict):
+            return record + b"\n", None
+
+        kind = str(payload.get("type") or "")
+        msgid = str(payload.get("msgid") or "")
+        if kind == "progress_percent" and msgid == "extract":
+            if payload.get("finished"):
+                return b"", self._snapshot(phase="permissions", finished=True)
+            try:
+                current = max(0, int(payload.get("current") or 0))
+                total = max(0, int(payload.get("total") or 0))
+            except (TypeError, ValueError, OverflowError):
+                return b"", None
+            info = payload.get("info")
+            path = ""
+            if isinstance(info, list) and info:
+                path = str(info[0] or "")
+            return b"", self._snapshot(
+                phase="restoring",
+                processed_bytes=current,
+                total_bytes=total,
+                path=path,
+            )
+        if kind == "progress_percent" and msgid == "extract.permissions":
+            if payload.get("finished"):
+                return b"", self._snapshot(phase="finished", finished=True)
+            return b"", self._snapshot(phase="permissions")
+        if kind == "progress_message":
+            message = str(payload.get("message") or "")
+            return self._human_line(message), None
+        if kind == "log_message":
+            message = str(payload.get("message") or "")
+            if str(payload.get("name") or "") == "borg.output.list":
+                self._processed_files += 1
+                progress = self._snapshot(phase="restoring", path=message)
+                return self._human_line(message), progress
+            return self._human_line(message), None
+        if kind == "question_prompt":
+            return self._human_line(str(payload.get("message") or "")), None
+        return b"", None
+
+    def _consume_record(self, record: bytes) -> tuple[bytes, BorgRestoreProgress | None]:
+        if record.startswith(_RESTORE_CONTROL_PREFIX):
+            return self._control_record(record)
+        stripped = record.strip()
+        if stripped.startswith(b"{") and stripped.endswith(b"}"):
+            return self._json_record(stripped)
+        return record + b"\n", None
+
+    def feed(self, data: bytes) -> tuple[bytes, BorgRestoreProgress | None]:
+        if not data:
+            return data, None
+        payload = self._carry + data
+        self._carry = b""
+        output = bytearray()
+        newest: BorgRestoreProgress | None = None
+        start = 0
+        while True:
+            newline = payload.find(b"\n", start)
+            if newline < 0:
+                break
+            record = payload[start:newline].rstrip(b"\r")
+            filtered, progress = self._consume_record(record)
+            output.extend(filtered)
+            if progress is not None:
+                newest = progress
+            start = newline + 1
+        trailing = payload[start:]
+        if trailing:
+            if len(trailing) > self._MAX_CARRY:
+                output.extend(trailing)
+            else:
+                self._carry = trailing
+        return bytes(output), newest
+
+    def finalize(self) -> tuple[bytes, BorgRestoreProgress | None]:
+        if not self._carry:
+            return b"", None
+        record = self._carry.rstrip(b"\r")
+        self._carry = b""
+        return self._consume_record(record)
+
+
+_restore_progress_lock = Lock()
+_live_restore_progress: dict[int, BorgRestoreProgress] = {}
+
+
+def set_run_restore_progress(run_id: int, progress: BorgRestoreProgress) -> None:
+    with _restore_progress_lock:
+        _live_restore_progress[int(run_id)] = progress
+
+
+def get_run_restore_progress(run_id: int) -> dict | None:
+    with _restore_progress_lock:
+        progress = _live_restore_progress.get(int(run_id))
+        return asdict(progress) if progress is not None else None
+
+
+def clear_run_restore_progress(run_id: int) -> None:
+    with _restore_progress_lock:
+        _live_restore_progress.pop(int(run_id), None)
 
 
 _ITEM_ACTIVITY_RE = re.compile(

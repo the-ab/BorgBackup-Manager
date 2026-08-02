@@ -6,26 +6,27 @@
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
-<link href="/static/favicon.svg?v=1.2.10" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.2.10"></script>
-<link href="/static/style.css?v=1.2.10" rel="stylesheet"/>
+<link href="/static/favicon.svg?v=1.3.4" rel="icon" type="image/svg+xml"/>
+<script src="/static/theme-init.js?v=1.3.4"></script>
+<link href="/static/style.css?v=1.3.4" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
 <form class="login-card" id="login-form">
-<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.2.10"/>
+<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.3.4"/>
 <p class="eyebrow">BorgBackup Manager</p>
 <h1>Zentrale für deine Backups.</h1>
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
+<label class="hidden" id="login-second-factor-field">2FA-Code oder Wiederherstellungscode<input autocomplete="one-time-code" id="login-second-factor" maxlength="32" type="text"/><small>Authenticator-Code oder einmaligen Wiederherstellungscode eingeben.</small></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.2.10</b></p>
+<p class="login-version">Version <b id="login-version">v1.3.4</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
 <div class="app-shell hidden" id="app">
 <aside>
-<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.2.10"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
+<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.3.4"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
 <nav id="main-navigation">
 <span class="nav-label">Betrieb</span>
 <button class="active" data-view="dashboard">Übersicht</button>
@@ -43,7 +44,7 @@
 <button data-view="help">Anleitung</button>
 <button data-view="releases">Release Notes</button>
 </nav>
-<div class="aside-foot"><button aria-live="polite" class="service-status-row status-pending link" id="service-status" type="button"><span class="status-dot" aria-hidden="true"></span><span class="service-status-label">Systemstatus wird geprüft …</span></button><a aria-disabled="true" class="link update-status-link" id="update-status-link">Updateprüfung …</a><button class="link" data-target-view="releases" id="version-link">v…</button><span class="current-user" id="current-user"></span><button class="link" id="user-preferences">Darstellung &amp; Sprache</button><button class="link" id="change-password">Passwort ändern</button><button class="link" id="logout">Abmelden</button></div>
+<div class="aside-foot"><button aria-live="polite" class="service-status-row status-pending link" id="service-status" type="button"><span class="status-dot" aria-hidden="true"></span><span class="service-status-label">Systemstatus wird geprüft …</span></button><a aria-disabled="true" class="link update-status-link" id="update-status-link">Updateprüfung …</a><button class="link" data-target-view="releases" id="version-link">v…</button><div class="aside-account"><span class="current-user" id="current-user"></span><button class="link profile-link" data-view="profile" id="profile-settings" type="button">Profil</button><button class="link logout-link" id="logout" type="button">Abmelden</button></div></div>
 </aside>
 <main>
 <header class="main-header"><div class="main-header-row"><div><p class="eyebrow">Kontrollzentrum</p><h1 id="page-title">Übersicht</h1></div><div class="header-actions"><div class="header-network-monitor hidden" id="header-network-monitor" aria-live="polite" title="Permanente Interface-Anzeige"></div><div class="task-status" id="task-status"><button aria-live="polite" class="sync-state idle" id="sync-state" type="button"><span aria-hidden="true" class="sync-indicator"></span><span>Aktuell</span></button></div><button aria-label="Farbschema wechseln" class="secondary" id="theme-toggle" type="button">Dunkel</button><button class="secondary" id="refresh">Aktualisieren</button></div></div>
@@ -59,6 +60,39 @@
 <div class="panel"><div class="panel-head responsive-head"><h2>Backup-Jobs</h2><div class="list-controls"><label>Sortierung<select id="dashboard-job-sort"><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="host-asc">Gerät A–Z</option><option value="repository-asc">Repository A–Z</option><option value="status-active">Aktive zuerst</option><option value="last-newest">Letzter Lauf – neueste zuerst</option><option value="last-oldest">Letzter Lauf – älteste zuerst</option><option value="size-desc">Sicherungsgröße absteigend</option></select></label><button class="section-link" data-target-view="jobs" type="button">Alle Backup-Jobs</button></div></div><div class="bounded-list" id="dashboard-jobs"></div></div>
 <div class="panel"><div class="panel-head"><h2>Letzte Aktivitäten</h2><button class="section-link" data-target-view="runs" type="button">Alle Protokolle</button></div><div class="bounded-list" id="recent-runs"></div></div>
 
+</section>
+<section class="view" id="view-profile">
+<div class="profile-page">
+<section class="panel profile-overview-panel">
+<div class="panel-head"><div><h2>Profil</h2><span>Persönliche Kontoeinstellungen auf einer eigenen Seite verwalten.</span></div></div>
+<div class="profile-summary"><div><span>Benutzerkonto</span><strong id="profile-username">–</strong></div><div><span>Rolle</span><strong id="profile-role">–</strong></div><div><span>Zwei-Faktor-Authentifizierung</span><strong id="profile-two-factor-status">Status wird geladen …</strong></div></div>
+</section>
+<div class="profile-settings-grid">
+<form class="panel profile-settings-card" id="profile-preferences-form">
+<div class="panel-head"><div><h2>Darstellung &amp; Sprache</h2><span>Diese Auswahl gilt nur für das aktuell angemeldete Benutzerkonto.</span></div></div>
+<label>Sprache<select name="language"><option value="de">Deutsch</option><option value="en">English</option></select></label>
+<label>Farbschema<select name="appearance"><option value="auto">Automatisch</option><option value="light">Hell</option><option value="dark">Dunkel</option></select></label>
+<p class="hint">Sprache und Farbschema werden benutzerbezogen gespeichert und verändern keine systemweite Einstellung.</p>
+<p class="error" id="profile-preferences-error"></p>
+<div class="form-actions"><button type="submit">Persönliche Einstellungen speichern</button></div>
+</form>
+<form class="panel profile-settings-card" id="profile-password-form">
+<div class="panel-head"><div><h2>Passwort ändern</h2><span>Nach dem Wechsel werden alle Sitzungen beendet und eine erneute Anmeldung ist erforderlich.</span></div></div>
+<label>Aktuelles Passwort<input autocomplete="current-password" name="current_password" required="" type="password"/></label>
+<label>Neues Passwort<input autocomplete="new-password" minlength="12" name="new_password" required="" type="password"/></label>
+<label>Neues Passwort wiederholen<input autocomplete="new-password" minlength="12" name="new_password_confirm" required="" type="password"/></label>
+<p class="hint">Mindestens 12 Zeichen und mindestens drei Gruppen aus Groß-/Kleinbuchstaben, Zahlen und Sonderzeichen.</p>
+<p class="error" id="profile-password-error"></p>
+<div class="form-actions"><button type="submit">Passwort ändern</button></div>
+</form>
+<section class="panel profile-settings-card profile-two-factor-card">
+<div class="panel-head"><div><h2>Zwei-Faktor-Authentifizierung</h2><span>Authenticator, QR-Code und Wiederherstellungscodes verwalten.</span></div></div>
+<div class="profile-two-factor-state"><span>Status</span><strong id="profile-two-factor-detail">Status wird geladen …</strong></div>
+<p class="hint">Die eigentliche Einrichtung und Verwaltung öffnet einen geschützten Dialog, damit QR-Code und einmalig angezeigte Wiederherstellungscodes ausreichend Platz erhalten.</p>
+<div class="form-actions"><button id="profile-open-two-factor" type="button">Zwei-Faktor-Authentifizierung verwalten</button></div>
+</section>
+</div>
+</div>
 </section>
 <section class="view" id="view-hosts">
 <div class="hosts-stack"><template id="host-form-anchor"></template><form class="panel host-form" id="host-form"><h2 id="host-form-title">Gerät hinzufügen</h2>
@@ -89,7 +123,7 @@
 <label class="check ssh-action-enabled"><input name="enabled" type="checkbox" checked=""/> Aktion aktivieren</label>
 </div>
 <label>SSH-Befehl<textarea name="command" rows="3" maxlength="4000" placeholder="sudo -n mount /mnt/backup" required=""></textarea></label>
-<p class="hint warning-text">Nur nicht-interaktive Befehle verwenden. Befehle werden in manager.db gespeichert; keine Passwörter, API-Tokens oder andere Geheimnisse eintragen. Für sudo nach Möglichkeit <code>sudo -n</code> verwenden.</p>
+<p class="hint warning-text">Nur nicht-interaktive Befehle verwenden. Befehle werden mit dem BBM-Master-Key verschlüsselt in <code>security.db</code> gespeichert. Passwörter, API-Tokens und andere Geheimnisse sollten trotzdem nicht direkt in Shell-Befehlen stehen. Für sudo nach Möglichkeit <code>sudo -n</code> verwenden.</p>
 <div class="form-actions"><button id="host-ssh-action-submit" type="submit">SSH-Aktion speichern</button><button class="secondary hidden" id="cancel-host-ssh-action-edit" type="button">Abbrechen</button></div>
 </form>
 <div class="bounded-list" id="host-ssh-action-list"></div>
@@ -281,7 +315,8 @@
 <section class="view" id="view-backups">
 <div class="notice warning"><strong>Sensibler Inhalt:</strong> Ein Manager-Backup enthält Manager-Datenbank, Sicherheitsdatenbank, Master-Key sowie SSH-, TLS- und Borg-Schlüssel. Sicher verwahren. Repository-Nutzdaten sind nicht enthalten.</div>
 <div class="backup-manager-grid">
-<form class="panel" id="backup-form"><div class="panel-head"><div><h2>Manager-Backup erstellen</h2><span>Nur BBM-Daten: Datenbank, Einstellungen und Sicherheitsdaten – ohne Borg-Caches.</span></div></div>
+<div class="backup-manager-column">
+<form class="panel compact-backup-panel" id="backup-form"><div class="panel-head"><div><h2>Manager-Backup erstellen</h2><span>Nur BBM-Daten: Datenbank, Einstellungen und Sicherheitsdaten – ohne Borg-Caches.</span></div></div>
 <label>Bezeichnung <span>(optional)</span><input maxlength="48" name="label" placeholder="z. B. vor-update"/></label>
 <label>Kompression<select name="compression"><option value="fast">Schnell – Deflate 1</option><option selected="" value="standard">Standard – Deflate 6</option><option value="maximum">Maximum – Deflate 9</option><option value="none">Keine Kompression</option></select></label>
 <div class="notice success"><strong>Verschlüsselung ist verpflichtend:</strong> Manager-Backups enthalten Master-Key und sicherheitsrelevante BBM-Daten und werden ausschließlich als verschlüsselte <code>.bbm</code>-Dateien erstellt.</div>
@@ -295,6 +330,13 @@
 </div>
 <p class="hint">Borg-Caches werden bewusst nicht mehr in diese Datei aufgenommen. Dadurch bleibt das eigentliche BBM-Backup klein und schnell wiederherstellbar.</p>
 </form>
+<form class="panel" id="backup-upload-form"><div class="panel-head"><div><h2>Backup hochladen</h2><span>Vorhandenes Manager- oder Cache-Backup sicher übernehmen.</span></div></div>
+<label>Backup-Datei<input accept=".bbm,.zip,application/zip,application/octet-stream" name="backup_file" required="" type="file"/></label>
+<div class="persistent-info hidden" id="backup-upload-status"></div>
+<div class="form-actions"><button type="submit">Backup hochladen</button></div>
+<p class="hint">Manager- und Cache-Backup-Typ, Dateiname, Größe und Format werden serverseitig geprüft. Vorhandene Dateien werden niemals überschrieben. Verschlüsselte Backups werden erst bei der Wiederherstellung vollständig mit der Passphrase authentifiziert.</p>
+</form>
+</div>
 <form class="panel" id="cache-backup-form"><div class="panel-head"><div><h2>Cache-Backup erstellen</h2><span>Manager-Borg-Cache und ausgewählte Geräte als getrennte, einzeln wiederherstellbare Cache-Archive sichern.</span></div></div>
 <label>Bezeichnung <span>(optional)</span><input maxlength="48" name="label" placeholder="z. B. cache-vor-neuinstallation"/></label>
 <label>Kompression<select name="compression"><option value="fast">Schnell – Deflate 1</option><option selected="" value="standard">Standard – Deflate 6</option><option value="maximum">Maximum – Deflate 9</option><option value="none">Keine Kompression</option></select></label>
@@ -312,25 +354,19 @@
 </div>
 <p class="hint">Der BBM-Cache und jedes ausgewählte Gerät werden in eigene Dateien geschrieben. Ein Gerätearchiv enthält alle zugeordneten Repository-Caches des Geräts und wird mit dem Gerätenamen benannt. Nicht ausgewählte Geräte werden nicht kontaktiert. Nicht erreichbare Geräte erzeugen nur eine Warnung; die übrigen Archive werden weiter erstellt. Cache-Backups sind nur ohne laufende oder wartende Ausführungen möglich.</p>
 </form>
-<form class="panel" id="backup-upload-form"><div class="panel-head"><div><h2>Backup hochladen</h2><span>Vorhandenes Manager- oder Cache-Backup sicher übernehmen.</span></div></div>
-<label>Backup-Datei<input accept=".bbm,.zip,application/zip,application/octet-stream" name="backup_file" required="" type="file"/></label>
-<div class="persistent-info hidden" id="backup-upload-status"></div>
-<div class="form-actions"><button type="submit">Backup hochladen</button></div>
-<p class="hint">Dateiname, Größe und Format werden serverseitig geprüft. Vorhandene Dateien werden niemals überschrieben. Manager- und Cache-Backup-Typ, Dateiname, Größe und Format werden serverseitig geprüft. Vorhandene Dateien werden niemals überschrieben. Verschlüsselte Backups werden erst bei der Wiederherstellung vollständig mit der Passphrase authentifiziert.</p>
-</form>
+
 <div class="panel backup-cache-panel"><div class="panel-head responsive-head"><div><h2>Borg-Cache verwalten</h2><span>Manager- und Client-Caches ausschließlich auf Knopfdruck prüfen und gezielt bereinigen.</span></div></div>
 <h3>Manager-Cache und Borg-Sicherheitsstatus</h3><div class="form-actions"><button class="secondary" id="scan-borg-cache" type="button">Manager-Zustand prüfen</button><button class="danger" disabled="" id="cleanup-borg-cache" type="button">Ausgewählte Manager-Daten bereinigen</button></div><div class="persistent-info" id="borg-cache-status">Noch nicht geprüft.</div><div id="borg-cache-orphans"></div><p class="hint">Geprüft werden <code>/data/borg-cache</code> und <code>/data/borg-security</code>. Beim Borg-Sicherheitsstatus werden Standort und <code>manifest-timestamp</code> berücksichtigt. Aktive Einträge bleiben geschützt; eindeutig ältere Duplikate können gezielt ausgewählt werden.</p>
 <hr/><h3>Client-Caches und Borg-Sicherheitsstatus</h3><div class="form-grid compact-grid"><label>Prüfumfang<select id="client-cache-scan-mode"><option value="all">Alle Geräte</option><option value="selected">Ausgewählte Geräte</option></select></label><label id="client-cache-scan-hosts-wrap">Geräte<select id="client-cache-scan-hosts" multiple="" size="5"></select><small>Mehrfachauswahl mit Strg/⌘ oder Umschalt.</small></label></div><div class="form-actions"><button class="secondary" id="scan-client-borg-cache" type="button">Client-Zustand prüfen</button><button class="danger" disabled="" id="cleanup-client-borg-cache" type="button">Verwaiste BBM-Client-Caches bereinigen</button><button class="danger ghost" disabled="" id="reset-client-borg-cache" type="button">BBM-Client-Cache zurücksetzen</button><button class="danger" disabled="" id="cleanup-client-user-borg-cache" type="button">Legacy-Borg-Cache bereinigen</button><button class="danger" disabled="" id="cleanup-client-borg-security" type="button">Ausgewählten Borg-Sicherheitsstatus bereinigen</button><button class="danger ghost" disabled="" id="cleanup-client-cache-rollbacks" type="button">Rückfall-Sicherungen bereinigen</button></div><div class="persistent-info" id="client-borg-cache-status">Noch nicht geprüft.</div><div id="client-borg-cache-items"></div><p class="hint">Geprüft werden der <b>BBM-Client-Cache</b> <code>$HOME/.cache/borgbackup-manager/</code> und getrennt davon der <b>Legacy-Borg-Cache</b> <code>$HOME/.cache/borg/</code>. Ein Legacy-Borg-Cache kann derselben Repository-ID wie ein aktiver BBM-Client-Cache zugeordnet sein, wird vom BBM aber nicht verwendet und kann deshalb bewusst manuell gelöscht werden. Aktive BBM-Client-Caches lassen sich separat zurücksetzen; dabei bleiben Repository-Daten und Borg-Sicherheitsstatus erhalten, der nächste Backup-Lauf kann wegen des Cache-Neuaufbaus jedoch deutlich länger dauern. Das Zurücksetzen ist während laufender/wartender Jobs oder eines Manager-/Cache-Backups gesperrt. Zusätzlich werden abweichende frühere Cache-Basen aus <code>BORG_CACHE_DIR</code>, <code>XDG_CACHE_HOME</code> und dem Home-Verzeichnis des SSH-Benutzers berücksichtigt und Borgs Sicherheitsstatus unter <code>$HOME/.config/borg/security/</code> beziehungsweise <code>BORG_SECURITY_DIR</code>. Unbekannte Legacy-Borg-Caches und unbekannte reguläre Security-Verzeichnisse sind manuell löschbar, werden aber nie vorausgewählt. Rückfall-Sicherungen bleiben eine eigene Bereinigungskategorie.</p></div>
-<form class="panel backup-restore-panel" id="backup-restore-form"><div class="panel-head"><div><h2>Manager-Backup wiederherstellen</h2><span>Stellt Manager-Daten wieder her und startet den Container automatisch neu.</span></div></div>
+<form class="panel backup-restore-panel compact-backup-panel" id="backup-restore-form"><div class="panel-head"><div><h2>Manager-Backup wiederherstellen</h2><span>Stellt Manager-Daten wieder her und startet den Container automatisch neu.</span></div></div>
 <label>Backup<select name="name" required=""><option value="">Backup auswählen</option></select></label>
-<label>Backup-Passphrase <span>(nur für das ausgewählte verschlüsselte Backup)</span><input autocomplete="current-password" name="passphrase" type="password"/></label>
-<div class="row"><label>Passphrase für Sicherheitsbackup<input autocomplete="new-password" minlength="12" name="safety_passphrase" required="" type="password"/></label><label>Sicherheits-Passphrase wiederholen<input autocomplete="new-password" minlength="12" name="safety_passphrase_confirm" required="" type="password"/></label></div>
+<label>Backup-Passphrase<input autocomplete="current-password" minlength="12" name="passphrase" required="" type="password"/></label>
 <label class="check"><input name="confirm" required="" type="checkbox"/> Aktuelle Manager-Daten werden ersetzt; laufende Jobs sind vorher zu beenden.</label>
 <div class="persistent-info hidden" id="backup-restore-status"></div>
 <div class="form-actions"><button class="danger" type="submit">Wiederherstellung starten</button></div>
-<p class="hint">Vorher wird automatisch ein lokal gespeichertes und mit der gesonderten Sicherheits-Passphrase verschlüsseltes Backup erstellt. Nach dem Einspielen werden Benutzerkonten, Sitzungen und der zum Backup gehörende Master-Key übernommen; bestehende Browser-Sitzungen müssen sich anschließend neu anmelden.</p>
+<p class="hint">Dieselbe Passphrase authentifiziert das ausgewählte Backup und verschlüsselt die automatisch erzeugte Sicherheitskopie des aktuellen Manager-Zustands. Bestehende Browser-Sitzungen müssen sich anschließend neu anmelden.</p>
 </form>
-<form class="panel backup-client-cache-restore-panel" id="client-cache-restore-form"><div class="panel-head"><div><h2>Cache-Backup wiederherstellen</h2><span>Manager-Cache oder einzelne Geräte-Caches gezielt wiederherstellen und bei Bedarf auf ein anderes, demselben Repository zugeordnetes Gerät übertragen.</span></div></div>
+<form class="panel backup-client-cache-restore-panel compact-backup-panel" id="client-cache-restore-form"><div class="panel-head"><div><h2>Cache-Backup wiederherstellen</h2><span>Manager-Cache oder einzelne Geräte-Caches gezielt wiederherstellen und bei Bedarf auf ein anderes, demselben Repository zugeordnetes Gerät übertragen.</span></div></div>
 <label>Cache-Backup<select name="name" required=""><option value="">Cache-Backup auswählen</option></select></label>
 <label>Backup-Passphrase <span>(nur bei verschlüsseltem Cache-Backup)</span><input autocomplete="current-password" name="passphrase" type="password"/></label>
 <div class="form-actions"><button class="secondary" disabled="" id="manager-cache-restore-submit" type="button">Manager-Cache wiederherstellen</button><button type="submit">Client-Caches anzeigen</button></div>
@@ -467,20 +503,12 @@
 </section>
 <section class="view" id="view-diagnostics">
 <div class="panel diagnostics-panel"><div class="panel-head responsive-head"><div><h2>Systemdiagnose</h2><span>Borg-Version, Repository-Speicher, SSH-Dienst und Serverprotokolle zentral prüfen.</span></div><div class="table-actions"><button class="secondary" id="load-diagnostics" type="button">Diagnose laden</button><button class="secondary hidden" id="close-diagnostics" type="button">Diagnose schließen</button></div></div><div class="empty" id="system-diagnostics">Borg-Version, Repository-Speicher und Serverprotokoll bei Bedarf laden.</div></div>
+<div class="panel database-maintenance-panel"><div class="panel-head responsive-head"><div><h2>Manager-Datenbank bereinigen</h2><span>Verwaiste Zuordnungen, veraltete Laufzustände und nicht mehr aktive Mount-Einträge konservativ prüfen.</span></div><div class="table-actions"><button class="secondary" id="inspect-manager-database" type="button">Datenbank prüfen</button><button class="danger" disabled="" id="cleanup-manager-database" type="button">Sicher bereinigen</button></div></div><div class="persistent-info" id="database-maintenance-status">Noch nicht geprüft.</div><div id="database-maintenance-details"></div><p class="hint">Vor Änderungen wird eine SQLite-Sicherheitskopie unter <code>/data/maintenance-backups</code> erstellt. Geräte, Repositorys, Jobs und reguläre Ausführungsverläufe werden nicht pauschal gelöscht.</p></div>
 </section>
 <section class="view" id="view-help"><div class="help-fragment-loading" id="help-container">Anleitung wird geladen …</div></section>
 <section class="view" id="view-releases"><div class="panel"><div class="panel-head"><h2>Release Notes</h2><span id="release-version"></span></div><pre id="release-content">Wird geladen …</pre></div></section>
 <div id="toast"></div>
-<dialog class="password-dialog preferences-dialog" id="preferences-dialog">
-<form class="panel" id="preferences-form" method="dialog">
-<div class="panel-head"><div><h2>Darstellung &amp; Sprache</h2><span>Diese Auswahl gilt nur für das aktuell angemeldete Benutzerkonto.</span></div><button class="secondary" id="close-preferences-dialog" type="button">Schließen</button></div>
-<label>Sprache<select name="language"><option value="de">Deutsch</option><option value="en">English</option></select></label>
-<label>Farbschema<select name="appearance"><option value="auto">Automatisch</option><option value="light">Hell</option><option value="dark">Dunkel</option></select></label>
-<p class="hint">Sprache und Farbschema werden benutzerbezogen gespeichert und verändern keine systemweite Einstellung.</p>
-<p class="error" id="preferences-error"></p>
-<button type="submit">Persönliche Einstellungen speichern</button>
-</form>
-</dialog><dialog class="password-dialog" id="password-dialog">
+<dialog class="password-dialog" id="password-dialog">
 <form class="panel" id="password-form" method="dialog">
 <div class="panel-head"><div><h2>Eigenes Passwort ändern</h2><span id="password-dialog-note">Nach dem Wechsel ist eine erneute Anmeldung erforderlich.</span></div><button class="secondary" id="close-password-dialog" type="button">Schließen</button></div>
 <label>Aktuelles Passwort<input autocomplete="current-password" name="current_password" required="" type="password"/></label>
@@ -501,6 +529,22 @@
 <p class="hint">Mindestens 12 Zeichen und mindestens drei Gruppen aus Groß-/Kleinbuchstaben, Zahlen und Sonderzeichen. Bestehende Sitzungen des Benutzers werden beendet.</p>
 <p class="error" id="user-password-error"></p>
 <button type="submit">Passwort setzen</button>
+</form>
+</dialog>
+<dialog class="password-dialog two-factor-dialog" id="two-factor-dialog">
+<form class="panel" id="two-factor-form" method="dialog">
+<div class="panel-head"><div><h2>Zwei-Faktor-Authentifizierung</h2><span id="two-factor-dialog-status">Status wird geladen …</span></div><button class="secondary" id="close-two-factor-dialog" type="button">Schließen</button></div>
+<div id="two-factor-disabled-actions"><label>Aktuelles Passwort<input autocomplete="current-password" name="current_password" type="password"/></label><button type="button" id="start-two-factor-setup">2FA einrichten</button></div>
+<div class="hidden" id="two-factor-setup-details">
+<div class="two-factor-setup-grid">
+<section class="two-factor-qr-card" aria-labelledby="two-factor-qr-heading"><h3 id="two-factor-qr-heading">Authenticator-App verbinden</h3><p class="hint">Den QR-Code mit der Authenticator-App scannen. Der QR-Code wird lokal von BorgBackup Manager erzeugt und nicht an einen externen Dienst übertragen.</p><img alt="QR-Code für die Zwei-Faktor-Authentifizierung" class="two-factor-qr-code" id="two-factor-qr-code"/></section>
+<section class="two-factor-manual-card" aria-labelledby="two-factor-manual-heading"><h3 id="two-factor-manual-heading">Manuelle Einrichtung</h3><label>Authenticator-Schlüssel<input id="two-factor-secret" readonly="" type="text"/></label><div class="form-actions compact-actions"><button class="secondary" id="copy-two-factor-secret" type="button">Schlüssel kopieren</button></div><label>Provisioning-URI<textarea id="two-factor-uri" readonly="" rows="3"></textarea></label></section>
+</div>
+<section class="two-factor-recovery-section" aria-labelledby="two-factor-recovery-heading"><div class="notice warning"><strong>Wiederherstellungscodes jetzt sicher speichern:</strong> Diese Codes werden nur bei dieser Einrichtung vollständig angezeigt. Jeder Code kann nur einmal verwendet werden.</div><div class="section-title-row"><div><h3 id="two-factor-recovery-heading">Wiederherstellungscodes</h3><p class="hint">Für die Anmeldung verwenden, falls kein Zugriff auf die Authenticator-App möglich ist.</p></div><button class="secondary" id="copy-two-factor-recovery-codes" type="button">Codes kopieren</button></div><pre aria-label="Wiederherstellungscodes" class="key-box recovery-code-box" id="two-factor-recovery-codes"></pre></section>
+<label>Aktueller 6-stelliger Authenticator-Code<input autocomplete="one-time-code" id="two-factor-confirm-code" inputmode="numeric" maxlength="6" type="text"/></label><button type="button" id="confirm-two-factor-setup">2FA aktivieren</button>
+</div>
+<div class="hidden" id="two-factor-enabled-actions"><div class="notice success"><strong>2FA ist aktiv.</strong> Bei jeder Anmeldung ist zusätzlich ein Authenticator- oder Wiederherstellungscode erforderlich.</div><label>Aktuelles Passwort<input autocomplete="current-password" id="two-factor-disable-password" type="password"/></label><label>Aktueller Authenticator- oder Wiederherstellungscode<input autocomplete="one-time-code" id="two-factor-regenerate-code" type="text"/></label><div class="actions"><button class="secondary" type="button" id="regenerate-two-factor-codes">Neue Wiederherstellungscodes</button><button class="danger" type="button" id="disable-two-factor">2FA deaktivieren</button></div><section class="hidden two-factor-recovery-section" id="two-factor-regenerated" aria-labelledby="two-factor-new-recovery-heading"><div class="notice warning"><strong>Neue Wiederherstellungscodes:</strong> Die bisherigen Codes sind ab sofort ungültig. Diese Codes werden nur jetzt vollständig angezeigt.</div><div class="section-title-row"><div><h3 id="two-factor-new-recovery-heading">Neue Wiederherstellungscodes</h3><p class="hint">Die Liste jetzt sicher speichern. Jeder Code kann nur einmal verwendet werden.</p></div><button class="secondary" id="copy-two-factor-new-recovery-codes" type="button">Codes kopieren</button></div><pre aria-label="Neue Wiederherstellungscodes" class="key-box recovery-code-box" id="two-factor-new-recovery-codes"></pre></section></div>
+<p class="error" id="two-factor-error"></p>
 </form>
 </dialog>
 <dialog class="password-dialog" id="controller-key-dialog">
@@ -531,6 +575,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.2.10"></script><script src="/static/app.js?v=1.2.10"></script>
+<script src="/static/i18n.js?v=1.3.4"></script><script src="/static/app.js?v=1.3.4"></script>
 </body>
 </html>

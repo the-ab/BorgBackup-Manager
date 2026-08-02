@@ -25,6 +25,7 @@ projects, Python distributions or Debian packages.
 | APScheduler | MIT |
 | Pydantic | MIT |
 | cryptography | Apache-2.0 OR BSD-3-Clause |
+| qrcode | BSD |
 
 The fully resolved dependency set is pinned in `requirements.txt`. Transitive
 Python packages retain their own licenses and notices. Installed package metadata

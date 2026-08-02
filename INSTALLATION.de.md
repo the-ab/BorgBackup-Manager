@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.2.10
+# Installation und Betrieb – BorgBackup Manager 1.3.4
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.2.10.zip
+BorgBackup-Manager-1.3.4.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.2.10.zip
+unzip /pfad/BorgBackup-Manager-1.3.4.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -75,7 +75,7 @@ Das Skript erzeugt `.env` und die persistenten Verzeichnisse. Beim ersten Contai
 
 Passwörter werden als scrypt-Prüfwerte gespeichert. Controller-, Repository-SSH- und TLS-Privatschlüssel, Repository-Passphrasen sowie Borg-Keyfiles werden verschlüsselt in `security.db` abgelegt. `master.key` ist der einzige externe Vertrauensanker und besitzt Modus `0600`. Laufzeitdateien werden ausschließlich unter `/run/bbm-secrets` materialisiert.
 
-Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.2.10` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
+Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.3.4` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
 
 ### Installation ausschließlich mit dem GHCR-Image
 
@@ -109,7 +109,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.2.10` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
+`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.3.4` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
 
 Beim ersten Start prüft der Entrypoint den Mount `/repositories` mit der konfigurierten `BBM_BORG_UID` und `BBM_BORG_GID`. Ist der Mount leer und nur wegen der automatischen Docker-Anlage `root` zugeordnet, wird ausschließlich das Stammverzeichnis auf die konfigurierte UID/GID gesetzt und für den Eigentümer lesbar, beschreibbar und betretbar gemacht. Es erfolgt ausdrücklich kein `chown -R`. Enthält das Verzeichnis bereits Daten, werden keine Eigentümer automatisch geändert. In diesem Fall müssen die Rechte oder ACLs auf dem Host passend korrigiert werden. Bei NFS mit `root_squash` ist die Berechtigung serverseitig beziehungsweise über passende numerische UID/GID zu setzen.
 
@@ -190,7 +190,7 @@ BBM_LOG_ROTATIONS=5
 
 Bei einem Update ab v1.1.0 baut `update.sh` die vorhandene `.env` anhand der aktuellen Vorlage neu auf. Unterstützte eigene Werte bleiben erhalten, fehlende aktuelle Werte werden ergänzt und obsolete Einträge wie `COMPOSE_FILE`, alte Token-/Secret-Variablen, interne Archiv-Mount-Schalter, `BBM_DEBUG_LOG_LEVEL`, `BBM_HTTP_PORT` und alte TLS-Dateipfade werden entfernt. Die Datei bleibt mit Modus `0600` geschützt.
 
-`BBM_APPEARANCE` ist der Startwert für Konten ohne persönliche Darstellung. Danach gilt das benutzerbezogene Farbschema aus **Darstellung & Sprache**. `BBM_REPOSITORY_SIZE_AFTER_RUN` bestimmt den Anfangswert der systemweiten Größenaktualisierung, solange noch keine `settings.json` vorhanden ist.
+`BBM_APPEARANCE` ist der Startwert für Konten ohne persönliche Darstellung. Danach gilt das benutzerbezogene Farbschema aus **Profil → Darstellung & Sprache**. `BBM_REPOSITORY_SIZE_AFTER_RUN` bestimmt den Anfangswert der systemweiten Größenaktualisierung, solange noch keine `settings.json` vorhanden ist.
 
 Daten- und Repository-Pfad dürfen nicht identisch sein. Die neuen Standardpfade liegen als getrennte Geschwisterverzeichnisse unter `/docker_data/borgbackup-manager`: Managerdaten unter `data`, Repositories unter `repositories`. Abweichende Bestandsinstallationen bleiben unterstützt; liegt das Repository-Verzeichnis innerhalb des Datenpfads, schließt der Updater es bei der Managersicherung gezielt aus. Host-Port und Hostpfade werden zusätzlich als reine Metadaten in den Container übergeben, damit ein Manager-Backup sie vollständig in `migration.env` aufnehmen kann; die tatsächlichen Mounts bleiben unverändert durch Compose definiert.
 
@@ -272,7 +272,7 @@ sudo -n mount /mnt/offline-backup
 sudo -n umount /mnt/offline-backup
 ```
 
-Die WebUI besitzt keine freie SSH-Konsole. Nur gespeicherte Aktionen können gestartet werden und jeder Start wird vorher bestätigt. Name, Befehl, Zielgerät, Aktivstatus und Zeitlimit werden in `manager.db` gespeichert. **Keine Zugangsdaten oder Tokens in Befehle eintragen**, da dieser Befehlsinhalt nicht verschlüsselt wird. Interaktive Passwortabfragen funktionieren nicht; benötigte Root-Rechte sind über eine eng begrenzte sudoers-Regel und `sudo -n` bereitzustellen. Ausgabe und Fehler erscheinen als reguläres Ausführungsprotokoll und der Lauf kann über das Live-Log gestoppt werden.
+Die WebUI besitzt keine freie SSH-Konsole. Nur gespeicherte Aktionen können gestartet werden und jeder Start wird vorher bestätigt. Name, Befehl, Zielgerät, Aktivstatus und Zeitlimit werden mit dem vorhandenen Master-Key geschützt; der Befehlsinhalt liegt authentifiziert verschlüsselt in `/data/security/security.db`. Beim ersten Start von v1.3.4 werden vorhandene Klartexteinträge aus `manager.db` zunächst vollständig importiert und durch erneutes Entschlüsseln verifiziert. Erst danach wird die alte Tabelle entfernt. Auch eine leere oder nach einem früheren Abbruch verbliebene Alttabelle wird erkannt. Die Datenbank einschließlich WAL wird vor Freigabe der WebUI per Checkpoint und `VACUUM` bereinigt; danach kontrolliert BBM zusätzlich, dass kein migrierter Befehl mehr in `manager.db`, `manager.db-wal` oder `manager.db-shm` enthalten ist. Schlägt ein Schritt fehl, bleibt der Vorgang wiederholbar und der Manager startet nicht mit einer nur teilweise migrierten Aktion. Laufvorschau und normale Protokolle nennen nur Aktion und Zielgerät. Interaktive Passwortabfragen funktionieren weiterhin nicht; benötigte Root-Rechte sind über eine eng begrenzte sudoers-Regel und `sudo -n` bereitzustellen. Ausgabe und Fehler erscheinen als reguläres Ausführungsprotokoll und der Lauf kann über das Live-Log gestoppt werden.
 
 Warnstufen:
 
@@ -624,6 +624,10 @@ Beim Aushängen verwendet der Manager zuerst `fusermount3`, danach Borg und als 
 
 Prüft den Vorgang, schreibt aber keine Dateien.
 
+### Live-Fortschritt
+
+BBM zählt vor dem Restore die ausgewählten Archivobjekte und summiert deren Originalgröße in einem gestreamten Borg-Listenlauf. Der anschließende Live-Dialog zeigt Gesamt-/Restdateien beziehungsweise Objekte, Gesamt-/Restgröße, Prozent, aktuelle Rate, Restzeit und aktuellen Pfad. Bei einem Dry-Run wird derselbe Fortschritt für die Prüfung angezeigt. Die Vorbereitung benötigt bei großen Auswahlen einen zusätzlichen Metadatenlauf, überträgt aber keine vollständige Dateiliste an den Manager.
+
 ### Originalpfad
 
 Stellt markierte Pfade direkt an ihrem ursprünglichen Ort wieder her. Ein produktiver Lauf benötigt eine Überschreibbestätigung.
@@ -708,7 +712,7 @@ Seit v1.0.77 sind Managerdaten und Borg-Caches zwei getrennte Sicherungstypen. N
 
 ### Manager-Backup erstellen
 
-Das Manager-Backup enthält Manager-Datenbank, Sicherheitsdatenbank, Master-Key, Einstellungen, Controller-/Repository-SSH-Schlüssel, Borg-Keyfiles und TLS-Dateien. Repository-Nutzdaten, vollständige Dateien aus `/data/run-logs`, `/data/borg-cache`, `/data/borg-security` und Client-Borg-Caches sind in einem neu erstellten Manager-Backup nicht enthalten.
+Das Manager-Backup enthält Manager-Datenbank, Sicherheitsdatenbank, Master-Key, Einstellungen, Benachrichtigungskonfiguration und `migration.env`. Controller-Schlüssel, Repository-SSH-Hostschlüssel, Borg-Keyfiles/Passphrasen, TLS-Material und Benachrichtigungsgeheimnisse sind verschlüsselt in der Sicherheitsdatenbank gespeichert; der Master-Key ist der zwingende Entschlüsselungsanker. `authorized_keys` und die Klartextdateien unter `/run/bbm-secrets` werden nach dem Restore aus den Datenbanken neu erzeugt. Vor dem Speichern prüft BBM beide SQLite-Datenbanken, die Vollständigkeit der Security-Tabellen, den Master-Key und die Entschlüsselbarkeit sämtlicher gespeicherter Geheimnisse. Fehlt ein Bestandteil oder passt der Master-Key nicht zur Sicherheitsdatenbank, wird kein erfolgreiches Backup erzeugt. Repository-Nutzdaten, vorhandene Backup-Artefakte, Exporte, vollständige Lauf-/Debug-Protokolle, `/data/borg-cache`, `/data/borg-security` und Client-Borg-Caches sind nicht enthalten.
 
 Neue Manager-Backups werden ausschließlich als AES-256-GCM-verschlüsselte `.bbm`-Dateien erzeugt. Die eigene Passphrase muss mindestens zwölf Zeichen lang sein und wird nicht gespeichert. Die Kompression ist wählbar zwischen keine, Deflate 1, Deflate 6 (Standard) und Deflate 9. Import und Wiederherstellung setzen eine Metadatenversion v1.1.0 oder neuer voraus.
 
@@ -716,7 +720,7 @@ Während der Erstellung zeigt die WebUI Phase, Fortschrittsbalken und ein Live-P
 
 ### Getrennte Cache-Artefakte erstellen
 
-Ab v1.2.10 erzeugt ein Cache-Backup-Lauf keine große Sammeldatei mehr. Stattdessen entstehen unabhängig voneinander:
+Ab v1.3.0 erzeugt ein Cache-Backup-Lauf keine große Sammeldatei mehr. Stattdessen entstehen unabhängig voneinander:
 
 - `borgbackup-manager-cache-manager-v...` für `/data/borg-cache` und `/data/borg-security`
 - `borgbackup-manager-cache-client-<Gerätename>-h<ID>-v...` für jedes ausgewählte Gerät
@@ -734,7 +738,7 @@ Unter **Borg-Cache verwalten** können Manager- und Client-Zustände weiterhin u
 ### Backup hochladen
 
 1. **System → Manager-Backup** öffnen.
-2. Unter **Backup hochladen** ein BBM-Manager- oder Cache-Backup auswählen.
+2. Direkt unter **Manager-Backup erstellen** im kompakten Bereich **Backup hochladen** ein BBM-Manager- oder Cache-Backup auswählen.
 3. **Backup hochladen** wählen.
 4. Nach erfolgreicher Prüfung erscheint die Datei in der passenden Liste **Manager-Backups** oder **Cache-Backups**.
 
@@ -828,7 +832,7 @@ Rollen:
 
 ### Persönliche Sprache und Darstellung
 
-Jeder Administrator und jeder normale Benutzer kann über **Darstellung & Sprache** eigene Werte speichern:
+Jeder Administrator und jeder normale Benutzer öffnet in der Seitenleiste direkt unter dem Benutzernamen **Profil**. Der Eintrag führt auf eine eigene Profilseite mit Kontoübersicht, direkt bearbeitbaren Einstellungen für **Darstellung & Sprache**, einem Passwortformular und der Verwaltung der **Zwei-Faktor-Authentifizierung**. Unter **Darstellung & Sprache** können eigene Werte gespeichert werden:
 
 - Sprache: Deutsch oder Englisch
 - Farbschema: Automatisch, Hell oder Dunkel
@@ -1014,3 +1018,57 @@ Anschließend unter **Archive → Archive anzeigen** prüfen, ob je Archiv Dauer
 ## Quellenstatistik und Archivbrowser
 
 Die Quellenstatistik eines Backup-Jobs wird nach abgeschlossenen Backups aus Borgs Abschlusswerten aktualisiert. Eine manuelle Aktualisierung führt einen repositoryunabhängigen Live-Scan auf dem Quellgerät aus. Der bevorzugte Scanner berücksichtigt die Job-Ausschlussmuster sowie Cache-Tags, `nodump` und die konfigurierte Dateisystemgrenze; er erzeugt kein Archiv. Pfadbasierte Ausschlüsse werden vor `stat()` geprüft, sodass ausgeschlossene Dateien und Verzeichnisbäume möglichst ohne unnötige Metadatenabfragen übersprungen werden. Normale erfolgreiche Scans zeigen nur Herkunft und Zeitpunkt. Nicht sicher nachbildbare Sondermuster oder Lesefehler werden ausschließlich mit einer konkreten Einschränkungsursache angezeigt. Bei deaktivierter Option **Nur jeweiliges Quelldateisystem** werden auch eingehängte Unterverzeichnisse durchlaufen. Ist die Option aktiviert, werden erkannte Unter-Mounts wie bei Borg übersprungen und im Ausführungsprotokoll ausdrücklich aufgeführt. Nach einem abgeschlossenen Backup ersetzen Borgs exakte Abschlusswerte nach Anwendung der Ausschlüsse die Scanwerte. Der Archivbrowser liest Metadaten direkt über `borg list --json-lines`, zeigt Größe, Typ, Rechte, Besitzer/Gruppe und Änderungszeit und benötigt kein FUSE.
+
+## Zwei-Faktor-Authentifizierung, Zugriffslog und externe Sperrwerkzeuge
+
+Jeder Benutzer kann in der Seitenleiste unter **Profil → Zwei-Faktor-Authentifizierung** eine TOTP-Einrichtung starten. Das aktuelle Passwort wird erneut geprüft. BBM erzeugt lokal aus derselben `otpauth://`-URI einen QR-Code, der direkt mit einer Authenticator-App gescannt werden kann; alternativ bleiben Base32-Schlüssel und URI für die manuelle Einrichtung verfügbar. Es wird kein externer QR-Dienst kontaktiert. Anschließend bestätigt ein aktueller sechsstelliger Code die Aktivierung. Die zehn Codes erscheinen in einem ausdrücklich als **Wiederherstellungscodes** beschrifteten Bereich mit Hinweis, dass sie nur bei dieser Einrichtung vollständig sichtbar und jeweils einmal gültig sind. Sie müssen außerhalb des Managers sicher gespeichert werden.
+
+Das persistente Zugriffslog liegt auf dem Host unter:
+
+```text
+${BBM_DATA_PATH}/logs/access.log
+```
+
+Bei Standardwerten:
+
+```text
+/docker_data/borgbackup-manager/data/logs/access.log
+```
+
+Ein Fail2ban-Filter unter `/etc/fail2ban/filter.d/borgbackup-manager.conf` kann so aussehen:
+
+```ini
+[Definition]
+failregex = ^\{.*"event":"login_(?:failed|blocked)".*"remote_address":"<HOST>".*\}$
+ignoreregex =
+```
+
+Beispiel für `/etc/fail2ban/jail.d/borgbackup-manager.local`:
+
+```ini
+[borgbackup-manager]
+enabled = true
+filter = borgbackup-manager
+logpath = /docker_data/borgbackup-manager/data/logs/access.log
+backend = auto
+port = 8443
+findtime = 5m
+maxretry = 5
+bantime = 15m
+```
+
+`port` und `logpath` müssen zur eigenen Installation passen. Vor dem Aktivieren testen:
+
+```bash
+sudo fail2ban-regex \
+  /docker_data/borgbackup-manager/data/logs/access.log \
+  /etc/fail2ban/filter.d/borgbackup-manager.conf
+```
+
+Für CrowdSec wird dieselbe Datei als benutzerdefinierte File-Acquisition eingebunden. Der benutzerdefinierte Parser muss die JSON-Felder auslesen, `remote_address` als `evt.Meta.source_ip` setzen und für `login_failed`/`login_blocked` einen eigenen `evt.Meta.log_type` vergeben. Das zugehörige Szenario kann diesen Logtyp mit einem `leaky`-Bucket auswerten. Die exakten Pfade und YAML-Schemata hängen von der installierten CrowdSec-Version ab; Parser und Szenario deshalb mit `cscli explain` und der CrowdSec-Konfigurationsprüfung testen, bevor ein Bouncer Firewall-Entscheidungen umsetzt.
+
+Das Access-Log enthält keine Passwörter, TOTP-/Wiederherstellungscodes oder Sitzungstoken. Bei Reverse-Proxy-Betrieb muss `BBM_TRUSTED_PROXY_CIDRS` korrekt gesetzt sein, damit ausschließlich vertrauenswürdige Proxy-Adressen die tatsächliche Client-IP übermitteln dürfen.
+
+## Manager-Datenbank warten
+
+Unter **System → Systemdiagnose → Manager-Datenbank bereinigen** zuerst **Datenbank prüfen** ausführen. Die Vorschau nennt ausschließlich technisch veraltete oder verwaiste Einträge. **Sicher bereinigen** erstellt vor Änderungen eine geprüfte Kopie unter `/data/maintenance-backups`, korrigiert die angezeigten Zeilen und führt die SQLite-Optimierung durch. Während aktiver/wartender Läufe oder Manager-/Cache-Backups bleibt die Funktion gesperrt.

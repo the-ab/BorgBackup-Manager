@@ -256,6 +256,10 @@ def test_restore_dry_run_does_not_create_target(job):
     )
     remote = command.argv[-1]
     assert "--dry-run" in remote
+    assert "--log-json" in remote
+    assert "extract --progress --list" in remote
+    assert "list --json-lines --format" in remote
+    assert "BBMRESTORE" in remote
     assert 'dry_run="$2"' in remote
     assert 'if [ "$dry_run" = "1" ]' in remote
     assert remote.endswith("-- /srv/restore 1 target archive-paths")
@@ -1017,3 +1021,23 @@ def test_execute_can_be_aborted_by_safety_monitor():
     code, _output, error = asyncio.run(scenario())
     assert code == 75
     assert error == "storage threshold reached"
+
+
+def test_restore_baseline_helper_is_valid_python_and_emits_control_record(job, monkeypatch):
+    captured = {}
+
+    def fake_ssh(host, remote_parts, env, *, supervised=False):
+        captured["remote_parts"] = list(remote_parts)
+        captured["supervised"] = supervised
+        return Command(argv=["captured"], preview="captured")
+
+    monkeypatch.setattr("app.runner._ssh_argv", fake_ssh)
+    restore_command(job, "bbm-job-42-host-2026", ["home/user/file"], "/srv/restore", True)
+    script = captured["remote_parts"][2]
+    baseline_start = script.index("python3 -S -c ")
+    baseline_end = script.index("\nbbm_baseline_rc=$?", baseline_start)
+    argv = shlex.split(script[baseline_start:baseline_end])
+    assert argv[:3] == ["python3", "-S", "-c"]
+    compile(argv[3], "<bbm-restore-baseline>", "exec")
+    assert r"\x1eBBMRESTORE\tBASELINE" in argv[3]
+    assert captured["supervised"] is True

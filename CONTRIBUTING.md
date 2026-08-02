@@ -24,7 +24,7 @@ python -m pip install pytest==9.0.2 httpx==0.28.1 pytest-asyncio==1.4.0
 python -m pytest -q
 ```
 
-Also run the repository checks:
+Also complete `RELEASE_CHECKLIST.md` (or the equivalent German `RELEASE_CHECKLIST.de.md`) and run the repository checks:
 
 ```bash
 bash scripts/release-check.sh

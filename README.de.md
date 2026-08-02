@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.2.10
+# BorgBackup Manager 1.3.4
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -17,7 +17,7 @@ Die englische Standarddokumentation befindet sich in `README.md`. Die deutschen 
 - Repository-Dienst: integrierter OpenSSH-Dienst mit eingeschränktem `borg serve`
 - Persistente Daten: standardmäßig `/docker_data/borgbackup-manager/data`
 - Persistente Repositories: standardmäßig `/docker_data/borgbackup-manager/repositories`
-- Veröffentlichtes GHCR-Image: `ghcr.io/the-ab/borgbackup-manager:latest` oder versionsfest `ghcr.io/the-ab/borgbackup-manager:v1.2.10`
+- Veröffentlichtes GHCR-Image: `ghcr.io/the-ab/borgbackup-manager:latest` oder versionsfest `ghcr.io/the-ab/borgbackup-manager:v1.3.4`
 - Lokaler Quellcode-Build: `borgbackup-manager:latest`
 - Zeitzone für WebUI, Cron-Zeitpläne und Borg-Läufe: `Europe/Berlin`
 - Containername: `borgbackup-manager`
@@ -41,7 +41,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.2.10.zip
+BorgBackup-Manager-1.3.4.zip
 ```
 
 ## Sicherheit und Härtung
@@ -55,6 +55,9 @@ BorgBackup-Manager-1.2.10.zip
 - Restore-Pakete werden auf Pfadausbruch, symbolische Links, doppelte Einträge, Dateianzahl, Gesamtgröße und Kompressionsverhältnis geprüft.
 - Die Web-API läuft als Benutzer `borg`, während nur der überwachte Startprozess und `sshd` Root-Rechte behalten. Der Container nutzt `no-new-privileges`, und OpenSSH prüft Dateieigentümer mit `StrictModes yes`.
 - Sicherheitsereignisse besitzen eine zeit- und mengenbezogene Aufbewahrungsgrenze.
+- TOTP-basierte Zwei-Faktor-Authentifizierung kann pro Benutzer aktiviert werden. Authenticator-Geheimnisse liegen verschlüsselt in `security.db`; Wiederherstellungscodes werden ausschließlich gehasht gespeichert und sind jeweils einmal verwendbar.
+- Das separate JSON-Lines-Zugriffslog `/data/logs/access.log` enthält unter anderem fehlgeschlagene Anmeldungen und Rate-Limit-Sperren, aber niemals Passwörter, 2FA-Codes, Sitzungstoken oder andere Geheimnisse. Es kann von Fail2ban oder CrowdSec ausgewertet werden.
+- Die konservative Wartungsfunktion für `manager.db` zeigt Änderungen vorab an, erstellt eine geprüfte Sicherheitskopie und entfernt ausschließlich nachweisbar verwaiste oder veraltete technische Einträge.
 
 ## Architektur
 
@@ -127,6 +130,9 @@ Nach der ersten Anmeldung muss das Passwort geändert werden. Danach wird das ve
 - zusätzlich erhält nur der aktuelle Browser-Tab einen serverseitig gehashten, an Sitzung und User-Agent gebundenen Reload-Schlüssel im `sessionStorage`; er wird nur verwendet, wenn der HttpOnly-Cookie beim Reload fehlt, und verschwindet beim Schließen des Tabs
 - die WebUI meldet nur bei einem echten HTTP-401 ab, nicht anhand zufälliger Wörter in einer Fehlermeldung
 - erzwungenen Passwortwechsel für neue oder zurückgesetzte Konten
+- optionale TOTP-Zwei-Faktor-Authentifizierung mit üblichen Authenticator-Apps
+- zehn einmalig verwendbare Wiederherstellungscodes je Einrichtung; neue Codes machen die bisherigen sofort ungültig
+- administratives Zurücksetzen von 2FA für andere Benutzer; bestehende Sitzungen werden beendet
 
 Administratoren können Benutzer anlegen, bearbeiten, deaktivieren, löschen und Passwörter zurücksetzen. Das eigene Konto und der letzte Administrator können nicht gelöscht werden; der letzte aktive Administrator kann außerdem weder deaktiviert noch herabgestuft werden. Normale Benutzer besitzen eine reine Beobachterrolle: Sie dürfen Dashboard, Listen und zusammengefasste Laufstatus lesen sowie ihre persönliche Sprache und Darstellung ändern. Manuelle Ausführungen, vollständige Logs, Archive, Restore/Export/Mount, Geräte-, Repository-, Job-, Zeitplan-, Manager-Backup-, Einstellungs- und Benutzeränderungen bleiben Administratoren vorbehalten.
 
@@ -213,7 +219,7 @@ Controller-Schlüssel und Geräte-Hostschlüssel erfüllen unterschiedliche Aufg
 
 Administratoren können unter **Geräte → Gespeicherte SSH-Aktionen** wiederkehrende, nicht-interaktive Shell-Befehle je Gerät speichern und gezielt ausführen. Typische Beispiele sind das Ein- und Aushängen eines bereits auf dem Host konfigurierten NFS-Mounts, `systemctl`-Aktionen oder Diagnosebefehle. Eine freie Einmal-Konsole existiert bewusst nicht: Ausführbar sind nur vorher gespeicherte Aktions-IDs. Jeder Start verlangt eine Bestätigung und verwendet denselben Controller-Schlüssel, den bestätigten Geräte-Hostschlüssel, `BatchMode=yes` und `StrictHostKeyChecking=yes` wie die übrigen Clientzugriffe.
 
-Jede Aktion besitzt Name, Gerät, Befehl, Aktivstatus und ein Zeitlimit von 5 bis 3600 Sekunden. Die Ausführung erscheint als regulärer Lauf mit Live-Log, Exit-Status, Stoppen-Funktion und Historie und zählt gegen die globale Parallelitätsgrenze. Die Befehle selbst liegen in `manager.db` und sind **nicht verschlüsselt**; Passwörter, API-Tokens oder andere Geheimnisse dürfen deshalb nicht in einer Aktion hinterlegt werden. Befehle müssen ohne interaktive Eingabe funktionieren; für `sudo` ist eine passende sudoers-Regel zusammen mit `sudo -n` vorgesehen.
+Jede Aktion besitzt Name, Gerät, Befehl, Aktivstatus und ein Zeitlimit von 5 bis 3600 Sekunden. Die Ausführung erscheint als regulärer Lauf mit Live-Log, Exit-Status, Stoppen-Funktion und Historie und zählt gegen die globale Parallelitätsgrenze. Der vollständige Befehl wird mit dem Master-Key authentifiziert verschlüsselt in `/data/security/security.db` gespeichert; `manager.db` enthält keine Klartexttabelle für SSH-Aktionen mehr. Bestehende Einträge werden beim ersten Start vollständig migriert, entschlüsselt gegengeprüft und erst danach aus `manager.db` entfernt. Die Startmigration erkennt auch eine leere oder nach einem früheren Abbruch zurückgebliebene Alttabelle. Ein SQLite-Checkpoint mit anschließendem `VACUUM` beseitigt verwertbare Klartextreste aus der bisherigen Datenbank und ihrem WAL; anschließend wird zusätzlich geprüft, dass keiner der migrierten Befehle mehr in `manager.db`, `manager.db-wal` oder `manager.db-shm` vorkommt. Laufvorschau, Diagnose und normale Protokolle enthalten nur Aktionsname und Zielgerät, nicht den Befehlsinhalt. Befehle müssen weiterhin ohne interaktive Eingabe funktionieren; für `sudo` ist eine passende sudoers-Regel zusammen mit `sudo -n` vorgesehen.
 
 ### Repositories
 
@@ -534,7 +540,7 @@ Unter **System → Einstellungen → Ausführungs- und Benachrichtigungsprotokol
 - sofortige Bereinigung abgelaufener Ausführungsprotokolle und Benachrichtigungszustellungen
 - vollständiges Löschen aller Protokolle
 
-Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin. Aktive und wartende Läufe werden niemals entfernt. Für jeden noch vorhandenen Backup-Job bleibt unabhängig von der Frist ausschließlich der neueste erfolgreiche beziehungsweise mit Warnung abgeschlossene Backup-Lauf als belastbarer letzter Sicherungsstand erhalten. Fehlgeschlagene oder abgebrochene Backup-Läufe werden nicht als „Letzter Stand geschützt“ markiert und unterliegen der normalen Aufbewahrungsfrist beziehungsweise können einzeln gelöscht werden. Die Quellenstatistik liegt direkt am vorhandenen Job und wird von der Fristbereinigung ebenfalls nicht entfernt. Wird ein Job gelöscht, entfällt dieser Schutz für dessen historische Läufe. Die Zustellungsprotokolle der Benachrichtigungen verwenden dieselbe Aufbewahrungsdauer. Nur **Alle Protokolle löschen** entfernt auch die geschützten letzten Backup-Stände, alle Benachrichtigungszustellungen und setzt die gespeicherten Quellenstatistiken vorhandener Jobs zurück. Bei manueller Bereinigung wird SQLite zusätzlich mit `VACUUM` komprimiert. Alte Läufe aus Versionen vor 0.8.7 bleiben weiterhin lesbar: vollständige Altinhalte werden beim ersten Start in Logdateien migriert, SQLite behält nur die begrenzten Vorschauen. Anschließend gilt dieselbe Aufbewahrungsregel.
+Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin. Aktive und wartende Läufe werden niemals entfernt. Für jeden noch vorhandenen Backup-Job bleibt unabhängig von der Frist ausschließlich der neueste erfolgreiche beziehungsweise mit Warnung abgeschlossene Backup-Lauf als belastbarer letzter Sicherungsstand erhalten. Fehlgeschlagene oder abgebrochene Backup-Läufe werden nicht als „Letzter Stand geschützt“ markiert und unterliegen der normalen Aufbewahrungsfrist beziehungsweise können einzeln gelöscht werden. Die Quellenstatistik liegt direkt am vorhandenen Job und wird von der Fristbereinigung ebenfalls nicht entfernt. Wird ein Job gelöscht, entfällt dieser Schutz für dessen historische Läufe. Die Zustellungsprotokolle der Benachrichtigungen verwenden dieselbe Aufbewahrungsdauer. Nur **Alle Protokolle löschen** entfernt auch die geschützten letzten Backup-Stände, alle Benachrichtigungszustellungen und setzt die gespeicherten Quellenstatistiken vorhandener Jobs zurück. Bei manueller Bereinigung werden die logischen Änderungen sofort abgeschlossen. Ein angeforderter SQLite-Neuaufbau mit `VACUUM` wird aus Sicherheitsgründen für den nächsten Manager-Start vorgemerkt und vor Freigabe der WebUI ausgeführt; dadurch blockiert keine exklusive SQLite-Sperre die laufenden API-Abfragen. Alte Läufe aus Versionen vor 0.8.7 bleiben weiterhin lesbar: vollständige Altinhalte werden beim ersten Start in Logdateien migriert, SQLite behält nur die begrenzten Vorschauen. Anschließend gilt dieselbe Aufbewahrungsregel.
 
 Passphrasenfehler werden erst nach Abschluss eines fehlgeschlagenen Borg-Laufs diagnostiziert. Vorläufige Live-Fragmente können daher keine kurzzeitig eingeblendete falsche Meldung „Passphrase abgelehnt“ mehr erzeugen.
 
@@ -605,6 +611,10 @@ Pfade können manuell eingetragen oder aus dem Archivbrowser übernommen werden.
 
 Ein Testlauf prüft die Auswahl und den Borg-Befehl, schreibt aber keine Dateien. Der Lauf wird tatsächlich gestartet und direkt im Live-Protokoll geöffnet.
 
+#### Live-Fortschritt
+
+Vor dem eigentlichen Restore ermittelt BBM die Anzahl und Gesamtgröße der ausgewählten Archivobjekte in einem gestreamten Metadatenlauf. Im Live-Protokoll werden anschließend Dateien/Objekte, verarbeitete und verbleibende Größe, Prozent, aktuelle Rate, Restzeit und der aktuell bearbeitete Pfad angezeigt. Die Werte bleiben nach Laufende als Abschlussstatistik erhalten. Der vorgeschaltete Scan lädt keine vollständige Dateiliste in den Manager, verursacht bei großen Auswahlen aber einen zusätzlichen Archiv-Metadatenlauf.
+
 #### Originalpfad
 
 Ausgewählte Dateien und Ordner werden auf dem Client an ihren ursprünglichen absoluten Pfad zurückgeschrieben. Ein produktiver Lauf erfordert eine ausdrückliche Bestätigung, weil bestehende Dateien überschrieben werden können.
@@ -620,7 +630,7 @@ Zwei Layouts stehen zur Verfügung:
 
 Der BorgBackup Manager behandelt ab v1.0.77 zwei getrennte Sicherungstypen. Dadurch bleibt die eigentliche Managersicherung klein, während große Borg-Caches unabhängig davon gesichert und wiederhergestellt werden können.
 
-**Manager-Backup** (`borgbackup-manager-backup-v...bbm`) enthält:
+**Manager-Backup** (`borgbackup-manager-backup-v...bbm`) enthält nach einer verpflichtenden Integritätsprüfung:
 
 - Manager-Datenbank und Einstellungen
 - separate Sicherheitsdatenbank mit Benutzern und Sitzungshashes
@@ -630,7 +640,7 @@ Der BorgBackup Manager behandelt ab v1.0.77 zwei getrennte Sicherungstypen. Dadu
 - TLS-Zertifikate
 - relevante nicht geheime Migrationswerte
 
-Repository-Nutzdaten, vollständige Laufprotokolle und Borg-Caches sind nicht Bestandteil neuer Manager-Backups. Neue Manager-Backups werden immer als AES-256-GCM-verschlüsselte `.bbm`-Dateien mit einer mindestens zwölf Zeichen langen, nicht gespeicherten Passphrase erzeugt. Import und Wiederherstellung setzen ein Backup mit Metadatenversion v1.1.0 oder neuer voraus; ältere Formate werden abgelehnt.
+Controller-Schlüssel, Repository-SSH-Hostschlüssel, Borg-Keyfiles/Passphrasen, TLS-Material und Benachrichtigungsgeheimnisse liegen verschlüsselt in der gesicherten `security.db`; der ebenfalls gesicherte `master.key` ist der zwingende Entschlüsselungsanker. `authorized_keys` und Klartextdateien unter `/run/bbm-secrets` werden aus den Datenbanken neu erzeugt. Fehlt die Security-Datenbank, der Master-Key oder passt beides nicht zusammen, wird kein Manager-Backup als erfolgreich gespeichert. Repository-Nutzdaten, vorhandene Backup-Artefakte, Exporte, vollständige Lauf-/Debug-Protokolle und Borg-/Archiv-Caches sind nicht Bestandteil neuer Manager-Backups. Neue Manager-Backups werden immer als AES-256-GCM-verschlüsselte `.bbm`-Dateien mit einer mindestens zwölf Zeichen langen, nicht gespeicherten Passphrase erzeugt. Import und Wiederherstellung setzen ein Backup mit Metadatenversion v1.1.0 oder neuer voraus; ältere Formate werden abgelehnt.
 
 **Cache-Backups** werden ab v1.2.10 als mehrere unabhängige Artefakte erzeugt:
 
@@ -649,7 +659,7 @@ Die Kompression ist je Backup wählbar: keine, Deflate 1 (schnell), Deflate 6 (S
 
 Unter **System → Manager-Backup → Borg-Cache verwalten** werden Manager-Cache und Manager-Borg-Security sowie Client-Zustände ausschließlich auf Knopfdruck geprüft. Für Client-Prüfungen kann zwischen **allen Geräten** und einer **Mehrfachauswahl bestimmter Geräte** gewählt werden. Pro ausgewähltem Client untersucht BBM den privaten **BBM-Client-Cache** `$HOME/.cache/borgbackup-manager/`, den **Legacy-Borg-Cache** `$HOME/.cache/borg/` beziehungsweise `BORG_CACHE_DIR` und den Borg-Sicherheitsstatus unter `$HOME/.config/borg/security/` beziehungsweise `BORG_SECURITY_DIR`. Ein Legacy-Borg-Cache mit derselben Borg-Repository-ID wie ein aktuelles BBM-Repository gilt nur als zugeordnet und wird vom BBM nicht verwendet; er kann bewusst manuell gelöscht werden. Aktive BBM-Client-Caches können separat **zurückgesetzt** werden. Dabei bleiben Repository-Daten und Borg-Sicherheitsstatus erhalten, der nächste Backup-Lauf kann wegen des Cache-Neuaufbaus jedoch deutlich länger dauern. Ein Reset ist bei laufenden/wartenden Ausführungen oder während eines Manager-/Cache-Backups gesperrt. Security-Einträge zeigen zusätzlich `location` und `manifest-timestamp`; mehrere Security-Verzeichnisse für denselben gespeicherten Repository-Standort werden anhand vergleichbarer `manifest-timestamp`-Werte als neuerer beziehungsweise eindeutig älterer Stand gekennzeichnet. Verwaiste Einträge und eindeutig ältere Duplikate können vorausgewählt werden; unbekannte reguläre Borg-Caches und Security-Verzeichnisse sind manuell löschbar, werden aber nie automatisch ausgewählt. Restore-Rückfall-Sicherungen `repository-<ID>.pre-bbm-restore-<Zeit>` bleiben eine eigene Kategorie. Vor jeder destruktiven Bereinigung wird der betroffene Client-Zustand erneut geprüft. Managerseitig werden `/data/borg-cache` und `/data/borg-security` nach denselben konservativen Zuordnungs- und `manifest-timestamp`-Regeln geprüft und nur explizit ausgewählte Einträge entfernt.
 
-Unter **Backup hochladen** können Manager- und Cache-Backups im vom BBM erzeugten `.bbm`-/`.zip`-Format übernommen werden. Typ, Dateiname, Größenlimit und Struktur werden geprüft; vorhandene Dateien werden nicht überschrieben und erhalten Modus `0600`.
+Der kompakte Bereich **Backup hochladen** steht direkt unter **Manager-Backup erstellen**. Dort können Manager- und Cache-Backups im vom BBM erzeugten `.bbm`-/`.zip`-Format übernommen werden. Typ, Dateiname, Größenlimit und Struktur werden geprüft; vorhandene Dateien werden nicht überschrieben und erhalten Modus `0600`.
 
 Ein **Manager-Backup** wird über **Manager-Backup wiederherstellen** vollständig eingespielt. Vorher erzeugt BBM ein separates verschlüsseltes Sicherheitsbackup. Cache-Backups können dort nicht ausgewählt beziehungsweise nicht als Managerzustand eingespielt werden. Unterstützt werden ausschließlich Manager-Backups mit Metadatenversion v1.1.0 oder neuer.
 
@@ -684,7 +694,7 @@ Nach Speichern, Löschen, Prüfen oder Starten einer Borg-Aktion bestätigt die 
 
 ### Persönliche Darstellung und Sprache
 
-Jeder Benutzer kann über **Darstellung & Sprache** seine Oberfläche unabhängig einstellen:
+Jeder Benutzer öffnet in der Seitenleiste unter seinem Benutzernamen den Eintrag **Profil**. Dieser führt auf eine eigene Profilseite mit Kontoübersicht, direkt bearbeitbaren Einstellungen für **Darstellung & Sprache**, einem eigenen Formular für **Passwort ändern** und dem geschützten Verwaltungsdialog für **Zwei-Faktor-Authentifizierung**. Unter **Darstellung & Sprache** lässt sich die Oberfläche unabhängig einstellen:
 
 - Sprache: Deutsch oder Englisch
 - Farbschema: Automatisch, Hell oder Dunkel
@@ -721,7 +731,7 @@ Es stehen zwei getrennte Installationswege zur Verfügung.
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.2.10.zip
+unzip /pfad/BorgBackup-Manager-1.3.4.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -793,7 +803,7 @@ Repository-SSH: SERVER:2222
 Daten:          /docker_data/borgbackup-manager/data
 Repositories:   /docker_data/borgbackup-manager/repositories
 Lokaler Build:  borgbackup-manager:latest
-GHCR:           ghcr.io/the-ab/borgbackup-manager:latest oder :v1.2.10
+GHCR:           ghcr.io/the-ab/borgbackup-manager:latest oder :v1.3.4
 Container:      borgbackup-manager
 ```
 
@@ -826,6 +836,30 @@ bash update.sh \
 ```
 
 `update.sh` sichert den aktuellen Projekt- und Managerzustand, prüft das Release, bereinigt die vorhandene `.env` anhand der aktuellen Vorlage, baut das Image neu und führt bei einem fehlgeschlagenen Start soweit möglich ein Rollback aus. Unterstützte eigene ENV-Werte bleiben erhalten; obsolete vor-v1.1.0- und Override-Einträge werden entfernt.
+
+## Zugriffslog, Fail2ban/CrowdSec und Datenbankwartung
+
+Das maschinenlesbare Zugriffs- und Authentifizierungslog liegt standardmäßig hier:
+
+```text
+/docker_data/borgbackup-manager/data/logs/access.log
+```
+
+Im Container entspricht dies `/data/logs/access.log`. Jede Zeile ist ein eigenständiges JSON-Objekt. Für Brute-Force-Erkennung sind besonders die Ereignisse `login_failed` und `login_blocked` relevant. Die Quelladresse steht in `remote_address`. Bei Reverse-Proxy-Betrieb wird sie nur dann aus Forwarded-Headern übernommen, wenn das Proxy-Netz in `BBM_TRUSTED_PROXY_CIDRS` eingetragen ist.
+
+Ein minimaler Fail2ban-Filter kann beispielsweise auf folgende Zeile prüfen:
+
+```ini
+[Definition]
+failregex = ^\{.*"event":"login_(?:failed|blocked)".*"remote_address":"<HOST>".*\}$
+ignoreregex =
+```
+
+Die dazugehörige Jail verweist auf den Hostpfad des Logs und sollte den tatsächlich veröffentlichten HTTPS-Port schützen. Konfigurationen werden unter Fail2ban üblicherweise als eigene Dateien in `filter.d/` und `jail.d/` abgelegt, statt die ausgelieferte `jail.conf` zu ändern.
+
+CrowdSec kann die Datei als benutzerdefinierte Quelle einlesen. Der Acquisition-`type` muss zum eigenen Parser passen; der Parser kann die JSON-Felder mit `UnmarshalJSON` oder `JsonExtract` übernehmen und `evt.Meta.source_ip` aus `remote_address` sowie einen eigenen `log_type` für fehlgeschlagene BBM-Anmeldungen setzen. Ein leaky-bucket-Szenario kann anschließend auf diesem `log_type` arbeiten.
+
+Unter **System → Systemdiagnose → Manager-Datenbank bereinigen** kann `manager.db` zunächst nur geprüft und anschließend kontrolliert bereinigt werden. Die Vorschau erkennt zusätzlich eine noch vorhandene alte SSH-Klartexttabelle. Der Manager schließt alte unterbrochene Laufzustände, entfernt verwaiste Zuordnungen und repariert ungültige Zeitplanziele. Vor Änderungen entsteht eine geprüfte SQLite-Kopie unter `/data/maintenance-backups`; reguläre Geräte, Repositorys, Jobs und abgeschlossene Protokolle werden nicht pauschal gelöscht. Ein angeforderter `VACUUM`-Neuaufbau wird nicht im laufenden Webbetrieb ausgeführt, sondern für den nächsten Start vorgemerkt.
 
 ## Sicherheitshinweise
 

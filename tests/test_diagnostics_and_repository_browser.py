@@ -133,5 +133,8 @@ def test_ui_contains_diagnostic_log_tabs_and_repository_browser():
     assert 'data-diagnostic-log="sshd"' in javascript
     assert 'data-diagnostic-log="borg"' in javascript
     assert 'data-diagnostic-log="debug"' in javascript
+    assert 'data-diagnostic-log="access"' in javascript
+    assert "['sshd', 'borg', 'debug', 'access'].includes(name)" in javascript
+    assert "access: 'Noch kein Zugriffs- oder Authentifizierungsereignis protokolliert.'" in javascript
     assert "/data/logs/debug.log" in entrypoint
     assert "rotate_log /data/logs/debug.log" in entrypoint

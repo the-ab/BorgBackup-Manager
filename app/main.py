@@ -10,9 +10,11 @@ import re
 import secrets
 import shutil
 import socket
+import sqlite3
 import subprocess
 import tarfile
 import threading
+import time
 import unicodedata
 import zipfile
 from contextlib import asynccontextmanager
@@ -33,6 +35,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 
 from app.archive_cache import invalidate_archive_cache, load_archive_cache
+from app.access_logging import configure_access_logging, write_access_event
 from app.archive_mounts import (
     archive_mount_capability, archive_mount_host_path, archive_mount_is_active,
     archive_mount_path, cleanup_archive_mount_path, prepare_archive_mount_path,
@@ -40,7 +43,7 @@ from app.archive_mounts import (
 )
 from app.archive_metadata import annotate_archive_devices, infer_archive_device, sort_archives_newest_first
 from app.borg_compat import classify_borg_version, parse_borg_version, version_tuple
-from app.borg_progress import get_run_item_activity, get_run_network_activity, get_run_progress
+from app.borg_progress import get_run_item_activity, get_run_network_activity, get_run_progress, get_run_restore_progress
 from app.backup_eta import estimate_fixed_baseline_remaining, source_stats_limitations
 from app.manager_backup_progress import begin_task as begin_manager_backup_task, current_task as current_manager_backup_task, fail_task as fail_manager_backup_task, finish_task as finish_manager_backup_task, get_task as get_manager_backup_task, update_task as update_manager_backup_task
 from app.borg_warnings import (
@@ -59,6 +62,7 @@ from app.config import (
     EXPORT_DIR,
     RUN_LOG_DIR,
     DEBUG_LOG_PATH,
+    ACCESS_LOG_PATH,
     REPOSITORY_PUBLIC_HOST,
     REPOSITORY_ROOT,
     REPOSITORY_SSH_PORT,
@@ -78,9 +82,10 @@ from app.backups import (
     prepare_full_backup_restore,
     restore_client_borg_cache_from_backup,
     restore_manager_borg_cache_from_backup,
-    store_uploaded_backup,
+    store_uploaded_backup, cleanup_stale_security_snapshots,
 )
 from app.database import Base, SessionLocal, engine, migrate_schema
+from app.database_maintenance import cleanup_manager_database, database_cleanup_preview
 from app.external_repository import (
     external_filesystem_parallel_identity, fingerprint_known_hosts, generate_ed25519_keypair, normalize_known_hosts,
     public_key_from_private, repository_location_uses_ssh, scan_repository_host_key,
@@ -102,7 +107,9 @@ from app.notifications import (
 from app.repository_state import managed_repository_present
 from app.release import APP_RELEASE_DATE
 from app.log_filter import extract_error_output
-from app.models import BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, JobIdReservation, ManagerArchiveMount, NotificationDelivery, Repository, Run
+from app.models import BackupSchedule, Host, HostRepositoryAccess, Job, JobIdReservation, ManagerArchiveMount, NotificationDelivery, Repository, Run
+from app.host_ssh_actions import migrate_legacy_host_ssh_actions
+from app.sqlite_maintenance import run_pending_manager_vacuum
 from app.runner import (
     archive_export_command,
     archive_info_command,
@@ -161,6 +168,7 @@ from app.schemas import (
     UserPasswordResetIn,
     UserPreferencesIn,
     UserUpdateIn,
+    TwoFactorSetupIn, TwoFactorConfirmIn, TwoFactorDisableIn, TwoFactorRecoveryRegenerateIn, DatabaseCleanupIn,
 )
 from app.repository_sizes import (
     managed_repository_filesystem_size, repository_statistics_from_borg_info,
@@ -184,6 +192,12 @@ from app.security_store import (
     AuthUser, authenticate_user, change_own_password, consume_login_attempt, create_session, create_session_reload_token, create_user,
     delete_user as delete_security_user, get_session_user, get_session_user_by_reload_token, initialize_security_store,
     list_users, reset_login_rate_limit, revoke_session, revoke_session_by_reload_token, security_status, authentication_readiness, set_user_password, update_user, update_user_preferences,
+    begin_two_factor_setup, confirm_two_factor_setup, disable_two_factor, regenerate_two_factor_recovery_codes, reset_two_factor,
+    create_host_ssh_action as create_security_host_ssh_action,
+    delete_host_ssh_action as delete_security_host_ssh_action,
+    delete_host_ssh_actions_for_host,
+    list_host_ssh_actions as list_security_host_ssh_actions,
+    update_host_ssh_action as update_security_host_ssh_action,
 )
 from app.vault import (
     delete_repository_secrets, get_repository_secret, repository_secret_exists,
@@ -1056,6 +1070,7 @@ async def system_health_watch_loop() -> None:
 async def lifespan(_: FastAPI):
     global scheduler
     configure_debug_logging()
+    configure_access_logging()
     loop = asyncio.get_running_loop()
     previous_exception_handler = install_asyncio_exception_handler(loop)
     # AsyncIOScheduler binds itself to the current event loop when started.
@@ -1067,6 +1082,9 @@ async def lifespan(_: FastAPI):
     migrate_schema()
     reconcile_manager_archive_mounts()
     initialize_security_store()
+    migrate_legacy_host_ssh_actions()
+    run_pending_manager_vacuum(engine)
+    cleanup_stale_security_snapshots()
     # The container entrypoint materializes runtime TLS and SSH material as root
     # before dropping privileges.  Do not repeat that privileged operation in
     # the unprivileged Web API process.  Direct development/test starts still
@@ -1153,6 +1171,7 @@ admin_protected = [Depends(require_admin_access)]
 
 @app.middleware("http")
 async def browser_security_headers(request: Request, call_next):
+    access_started = time.monotonic()
     if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path.startswith("/api/"):
         if request.headers.get("x-bbm-request", "") != "1":
             return JSONResponse({"detail": "Missing anti-CSRF request header"}, status_code=403)
@@ -1206,35 +1225,59 @@ async def browser_security_headers(request: Request, call_next):
     elif path == "/" or path.startswith("/api/") or path.endswith("/index.html"):
         response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["Pragma"] = "no-cache"
+    write_access_event(
+        "http_access", remote_address=client_address(request), method=request.method, path=request.url.path,
+        http_status=response.status_code, user_agent=request.headers.get("user-agent"),
+        duration_ms=(time.monotonic() - access_started) * 1000.0,
+    )
     return response
 
 
 @app.post("/api/auth/login")
-def login(data: LoginIn, request: Request, response: Response) -> dict:
+def login(data: LoginIn, request: Request, response: Response):
     remote_address = client_address(request)
+    user_agent = request.headers.get("user-agent")
     allowed, retry_after = consume_login_attempt(data.username, remote_address)
     if not allowed:
+        write_access_event("login_blocked", remote_address=remote_address, username=data.username, status="blocked", user_agent=user_agent, detail="rate_limit")
         raise HTTPException(
             429,
             "Zu viele Anmeldeversuche von dieser Quelle. Bitte später erneut versuchen.",
             headers={"Retry-After": str(retry_after)},
         )
-    user = authenticate_user(
-        data.username, data.password.get_secret_value(), remote_address,
+    second_factor = data.second_factor.get_secret_value() if data.second_factor else None
+    authentication = authenticate_user(
+        data.username, data.password.get_secret_value(), remote_address, second_factor,
+        return_status=True,
     )
+    if isinstance(authentication, tuple):
+        user, auth_status = authentication
+    else:
+        # Test doubles and integrations written against the pre-2FA helper may
+        # still return only the user object.
+        user, auth_status = authentication, "ok" if authentication is not None else "invalid_credentials"
+    if auth_status == "two_factor_required":
+        write_access_event("login_two_factor_required", remote_address=remote_address, username=data.username, status="challenge", user_agent=user_agent)
+        return JSONResponse({"status": "two-factor-required", "detail": "Zwei-Faktor-Code erforderlich"}, status_code=202)
     if user is None:
-        raise HTTPException(401, "Benutzername oder Passwort ist falsch")
+        reason = "invalid_second_factor" if auth_status == "invalid_second_factor" else "invalid_credentials"
+        write_access_event("login_failed", remote_address=remote_address, username=data.username, status="failed", user_agent=user_agent, detail=reason)
+        detail = "Der Zwei-Faktor-Code oder Wiederherstellungscode ist ungültig" if reason == "invalid_second_factor" else "Benutzername oder Passwort ist falsch"
+        raise HTTPException(401, detail)
     reset_login_rate_limit(data.username, remote_address)
     token = create_session(
         user, SESSION_TTL_SECONDS, remote_address,
-        request.headers.get("user-agent"),
+        user_agent,
     )
     _set_session_cookie(response, request, token)
-    reload_token = create_session_reload_token(token, SESSION_TTL_SECONDS, request.headers.get("user-agent"))
+    reload_token = create_session_reload_token(token, SESSION_TTL_SECONDS, user_agent)
+    write_access_event("login_success", remote_address=remote_address, username=user.username, status="success", user_agent=user_agent, detail=auth_status)
     return {
         "status": "ok", "username": user.username, "role": user.role,
         "must_change_password": user.must_change_password,
         "language": user.language, "appearance": user.appearance,
+        "two_factor_enabled": user.two_factor_enabled,
+        "recovery_code_used": auth_status == "recovery_code",
         "reload_token": reload_token,
     }
 
@@ -1251,6 +1294,7 @@ def auth_logout(
     if authorization and authorization.startswith("BBM-Reload "):
         revoke_session_by_reload_token(authorization[len("BBM-Reload "):])
     _delete_session_cookie(response, request)
+    write_access_event("logout", remote_address=client_address(request), status="success", user_agent=request.headers.get("user-agent"))
     return {"status": "logged-out"}
 
 
@@ -1327,6 +1371,52 @@ def auth_change_password(
     return {"status": "password-changed", "reauthentication_required": True}
 
 
+@app.get("/api/auth/2fa/status")
+def auth_two_factor_status(user: AuthUser = Depends(require_authenticated_user)) -> dict:
+    current = next((item for item in list_users() if int(item["id"]) == int(user.id)), None)
+    return {
+        "enabled": bool(current and current.get("two_factor_enabled")),
+        "confirmed_at": current.get("two_factor_confirmed_at") if current else None,
+    }
+
+
+@app.post("/api/auth/2fa/setup")
+def auth_two_factor_setup(data: TwoFactorSetupIn, user: AuthUser = Depends(require_authenticated_user)) -> dict:
+    try:
+        return begin_two_factor_setup(user.id, data.current_password.get_secret_value())
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/auth/2fa/confirm")
+def auth_two_factor_confirm(data: TwoFactorConfirmIn, user: AuthUser = Depends(require_authenticated_user)) -> dict:
+    try:
+        confirm_two_factor_setup(user.id, data.code.get_secret_value())
+        return {"status": "enabled", "reauthentication_required": True}
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/auth/2fa/disable")
+def auth_two_factor_disable(data: TwoFactorDisableIn, user: AuthUser = Depends(require_authenticated_user)) -> dict:
+    try:
+        disable_two_factor(user.id, data.current_password.get_secret_value())
+        return {"status": "disabled", "reauthentication_required": True}
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/auth/2fa/recovery-codes")
+def auth_two_factor_recovery_codes(data: TwoFactorRecoveryRegenerateIn, user: AuthUser = Depends(require_authenticated_user)) -> dict:
+    try:
+        codes = regenerate_two_factor_recovery_codes(
+            user.id, data.current_password.get_secret_value(), data.code.get_secret_value(),
+        )
+        return {"status": "regenerated", "recovery_codes": codes}
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/api/users", dependencies=admin_protected)
 def users_list() -> list[dict]:
     return list_users()
@@ -1383,6 +1473,15 @@ def users_reset_password(user_id: int, data: UserPasswordResetIn) -> dict:
         raise HTTPException(404, "Benutzer nicht gefunden") from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/users/{user_id}/2fa/reset", dependencies=admin_protected)
+def users_reset_two_factor(user_id: int) -> dict:
+    try:
+        user = reset_two_factor(user_id, event="two_factor_admin_reset")
+        return {"status": "reset", "user": user}
+    except KeyError as exc:
+        raise HTTPException(404, "Benutzer nicht gefunden") from exc
 
 
 @app.delete("/api/users/{user_id}", status_code=204)
@@ -1497,6 +1596,23 @@ def detailed_system_health():
     """Administrator-only component health details."""
     payload, strict_healthy = component_health_payload()
     return payload if strict_healthy else JSONResponse(payload, status_code=503)
+
+
+@app.get("/api/system/database-maintenance", dependencies=admin_protected)
+def database_maintenance_status() -> dict:
+    return database_cleanup_preview()
+
+
+@app.post("/api/system/database-maintenance", dependencies=admin_protected)
+def database_maintenance_run(data: DatabaseCleanupIn) -> dict:
+    with SessionLocal() as db:
+        active = int(db.scalar(select(func.count()).select_from(Run).where(Run.status.in_(["queued", "running"]))) or 0)
+    if active or current_manager_backup_task(include_last=False):
+        raise HTTPException(409, "Datenbankbereinigung ist nur ohne laufende oder wartende Ausführungen und ohne Manager-/Cache-Backup möglich")
+    try:
+        return cleanup_manager_database(create_safety_copy=data.create_safety_copy, vacuum=data.vacuum)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/dashboard", dependencies=protected)
@@ -1987,6 +2103,7 @@ async def system_diagnostics() -> dict:
     server_log = read_diagnostic_log(borg_log_path)
     sshd_log = read_diagnostic_log(sshd_log_path)
     debug_log = read_diagnostic_log(DEBUG_LOG_PATH, 40_000)
+    access_log = read_diagnostic_log(ACCESS_LOG_PATH, 40_000)
     checks = {}
     # The production API already runs as the unprivileged ``borg`` user.
     # Only a root caller may use runuser; manager_borg_argv therefore executes
@@ -2042,7 +2159,7 @@ async def system_diagnostics() -> dict:
         "source_stats_parallel_limit": int(settings.source_stats_parallel_limit or 1),
         "repository_storage_filesystems": filesystems,
         "repository_server_checks": checks, "borg_serve_log": server_log,
-        "sshd_log": sshd_log, "debug_log": debug_log,
+        "sshd_log": sshd_log, "debug_log": debug_log, "access_log": access_log,
     }
 
 
@@ -2158,18 +2275,17 @@ def delete_host(row_id: int):
         if db.scalar(select(func.count()).select_from(Job).where(Job.host_id == row_id)):
             raise HTTPException(409, "Host is still used by jobs")
         db.execute(delete(HostRepositoryAccess).where(HostRepositoryAccess.host_id == row_id))
-        db.execute(delete(HostSshAction).where(HostSshAction.host_id == row_id))
         _drop_host_schedule_references(db, row_id)
         db.delete(row)
         db.commit()
+    delete_host_ssh_actions_for_host(row_id)
     sync_repository_access_assignments(); sync_schedules()
     return Response(status_code=204)
 
 
 @app.get("/api/host-ssh-actions", response_model=list[HostSshActionOut], dependencies=admin_protected)
 def list_host_ssh_actions():
-    with SessionLocal() as db:
-        return list(db.scalars(select(HostSshAction).order_by(HostSshAction.host_id, HostSshAction.name)))
+    return list_security_host_ssh_actions()
 
 
 @app.post("/api/host-ssh-actions", response_model=HostSshActionOut, status_code=201, dependencies=admin_protected)
@@ -2178,42 +2294,30 @@ def create_host_ssh_action(data: HostSshActionIn):
         host = db.get(Host, data.host_id)
         if not host:
             raise HTTPException(404, "Host not found")
-        row = HostSshAction(**data.model_dump())
-        db.add(row)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            raise HTTPException(409, "Für dieses Gerät existiert bereits eine SSH-Aktion mit diesem Namen") from exc
-        db.refresh(row)
-        return row
+    try:
+        return create_security_host_ssh_action(**data.model_dump())
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(409, "Für dieses Gerät existiert bereits eine SSH-Aktion mit diesem Namen") from exc
 
 
 @app.put("/api/host-ssh-actions/{action_id}", response_model=HostSshActionOut, dependencies=admin_protected)
 def update_host_ssh_action(action_id: int, data: HostSshActionIn):
     with SessionLocal() as db:
-        row = db.get(HostSshAction, action_id)
-        if not row:
-            raise HTTPException(404, "SSH action not found")
         if not db.get(Host, data.host_id):
             raise HTTPException(404, "Host not found")
-        for key, value in data.model_dump().items():
-            setattr(row, key, value)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            raise HTTPException(409, "Für dieses Gerät existiert bereits eine SSH-Aktion mit diesem Namen") from exc
-        db.refresh(row)
-        return row
+    try:
+        row = update_security_host_ssh_action(action_id, **data.model_dump())
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(409, "Für dieses Gerät existiert bereits eine SSH-Aktion mit diesem Namen") from exc
+    if row is None:
+        raise HTTPException(404, "SSH action not found")
+    return row
 
 
 @app.delete("/api/host-ssh-actions/{action_id}", status_code=204, dependencies=admin_protected)
 def delete_host_ssh_action(action_id: int):
-    with SessionLocal() as db:
-        row = db.get(HostSshAction, action_id)
-        if not row:
-            raise HTTPException(404, "SSH action not found")
-        db.delete(row)
-        db.commit()
+    if not delete_security_host_ssh_action(action_id):
+        raise HTTPException(404, "SSH action not found")
     return Response(status_code=204)
 
 
@@ -3960,6 +4064,7 @@ def run_json(
     if not display_error and row.status in {"failed", "warning"}:
         display_error = extract_error_output(diagnostic_text)
     backup_progress = None
+    restore_progress = None
     backup_item_activity = None
     backup_network = None
     if row.action == "backup":
@@ -4019,6 +4124,37 @@ def run_json(
                 }
             backup_progress = {**progress, **eta}
 
+    if row.action == "restore":
+        if active:
+            restore_progress = get_run_restore_progress(row.id)
+        if restore_progress is None and any(value is not None for value in (
+            row.restore_total_size_bytes, row.restore_processed_size_bytes,
+            row.restore_total_file_count, row.restore_processed_file_count,
+        )):
+            total_bytes = int(row.restore_total_size_bytes or 0)
+            processed_bytes = int(row.restore_processed_size_bytes or 0)
+            total_files = int(row.restore_total_file_count or 0)
+            processed_files = int(row.restore_processed_file_count or 0)
+            percent = (min(100.0, max(0.0, processed_bytes / total_bytes * 100.0)) if total_bytes else None)
+            phase = (
+                "finished" if row.status in {"success", "warning"}
+                else "cancelled" if row.status == "cancelled"
+                else "failed" if row.status == "failed"
+                else "preparing"
+            )
+            average_rate = (processed_bytes / duration) if processed_bytes > 0 and duration and duration > 0 else 0.0
+            restore_progress = {
+                "phase": phase,
+                "processed_bytes": processed_bytes,
+                "total_bytes": total_bytes,
+                "processed_files": processed_files,
+                "total_files": total_files,
+                "path": "",
+                "bytes_per_second": average_rate,
+                "eta_seconds": 0 if phase == "finished" else None,
+                "percent": 100.0 if phase == "finished" and total_bytes else percent,
+            }
+
     bbm_network = sample_manager_network() if active and log_offset is not None else None
 
     backup_statistics = {}
@@ -4064,6 +4200,11 @@ def run_json(
         "backup_deduplicated_size_bytes": row.backup_deduplicated_size_bytes if row.backup_deduplicated_size_bytes is not None else backup_statistics.get("deduplicated_size_bytes"),
         "backup_file_count": row.backup_file_count if row.backup_file_count is not None else backup_statistics.get("file_count"),
         "backup_progress": backup_progress,
+        "restore_progress": restore_progress,
+        "restore_total_size_bytes": row.restore_total_size_bytes,
+        "restore_processed_size_bytes": row.restore_processed_size_bytes,
+        "restore_total_file_count": row.restore_total_file_count,
+        "restore_processed_file_count": row.restore_processed_file_count,
         "backup_item_activity": backup_item_activity,
         "backup_network": backup_network,
         "bbm_network": bbm_network,
@@ -4591,14 +4732,13 @@ def restore_manager_backup(name: str, data: ManagerBackupRestoreIn):
         raise HTTPException(409, "Manager-Backup kann während laufender oder wartender Ausführungen nicht wiederhergestellt werden")
     try:
         source = backup_path(name)
-        passphrase = data.passphrase.get_secret_value() if data.passphrase else None
-        safety_passphrase = data.safety_passphrase.get_secret_value()
+        passphrase = data.passphrase.get_secret_value()
         staging, manifest = prepare_full_backup_restore(source, passphrase)
         try:
             # The pre-restore snapshot contains the current master key and SSH
             # credentials and is therefore always encrypted with a separately
             # confirmed passphrase supplied for this restore operation.
-            safety = create_full_backup(APP_VERSION, "vor-wiederherstellung", safety_passphrase)
+            safety = create_full_backup(APP_VERSION, "vor-wiederherstellung", passphrase)
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
             raise

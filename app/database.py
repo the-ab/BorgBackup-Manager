@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import create_engine, inspect, text
+import sqlite3
+
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -8,11 +10,33 @@ from app.config import DATABASE_URL, ensure_data_dir
 
 
 ensure_data_dir()
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine_options = {"connect_args": connect_args}
-if DATABASE_URL in {"sqlite://", "sqlite:///:memory:"}:
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+_is_memory_sqlite = DATABASE_URL in {"sqlite://", "sqlite:///:memory:"}
+connect_args = {"check_same_thread": False, "timeout": 30} if _is_sqlite else {}
+engine_options = {"connect_args": connect_args, "pool_pre_ping": True}
+if _is_memory_sqlite:
     engine_options["poolclass"] = StaticPool
 engine = create_engine(DATABASE_URL, **engine_options)
+
+
+if _is_sqlite:
+    @event.listens_for(engine, "connect")
+    def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            if not _is_memory_sqlite:
+                try:
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).casefold():
+                        raise
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cursor.close()
+
+
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
@@ -89,6 +113,10 @@ def migrate_schema(target_engine=engine) -> None:
             "backup_source_file_count_snapshot": "INTEGER",
             "backup_network_download_bytes": "INTEGER",
             "backup_network_upload_bytes": "INTEGER",
+            "restore_total_size_bytes": "INTEGER",
+            "restore_processed_size_bytes": "INTEGER",
+            "restore_total_file_count": "INTEGER",
+            "restore_processed_file_count": "INTEGER",
         },
     }
     with target_engine.begin() as connection:

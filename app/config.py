@@ -13,6 +13,9 @@ _ARCHIVE_MOUNT_HOST_PATH = os.getenv("BBM_ARCHIVE_MOUNT_HOST_PATH", "").strip()
 ARCHIVE_MOUNT_HOST_PATH = Path(_ARCHIVE_MOUNT_HOST_PATH) if _ARCHIVE_MOUNT_HOST_PATH else None
 RUN_LOG_DIR = DATA_DIR / "run-logs"
 DEBUG_LOG_PATH = Path(os.getenv("BBM_DEBUG_LOG_PATH", str(DATA_DIR / "logs" / "debug.log")))
+ACCESS_LOG_PATH = Path(os.getenv("BBM_ACCESS_LOG_PATH", str(DATA_DIR / "logs" / "access.log")))
+LOG_MAX_BYTES = int(os.getenv("BBM_LOG_MAX_BYTES", "10485760"))
+LOG_ROTATIONS = int(os.getenv("BBM_LOG_ROTATIONS", "5"))
 ARCHIVE_CACHE_DIR = Path(os.getenv("BBM_ARCHIVE_CACHE_DIR", str(DATA_DIR / "archive-cache")))
 SETTINGS_PATH = DATA_DIR / "settings.json"
 NOTIFICATION_SETTINGS_PATH = DATA_DIR / "notifications.json"
@@ -82,6 +85,8 @@ for _name, _value in {
     "BBM_BACKUP_CACHE_MAX_UNCOMPRESSED_BYTES": BACKUP_CACHE_MAX_UNCOMPRESSED_BYTES,
     "BBM_BACKUP_CACHE_MAX_ENTRIES": BACKUP_CACHE_MAX_ENTRIES,
     "BBM_BACKUP_CACHE_MAX_COMPRESSION_RATIO": BACKUP_CACHE_MAX_COMPRESSION_RATIO,
+    "BBM_LOG_MAX_BYTES": LOG_MAX_BYTES,
+    "BBM_LOG_ROTATIONS": LOG_ROTATIONS,
 }.items():
     if _value <= 0:
         raise ValueError(f"{_name} must be greater than zero")

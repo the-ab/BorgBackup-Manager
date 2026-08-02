@@ -37,7 +37,7 @@ export BBM_RESTORE_BACKUP_PASSPHRASE="$backup_passphrase"
 
 python3 - "$BACKUP_FILE" "$TMP_DIR" <<'PY'
 from pathlib import Path, PurePosixPath
-import base64, io, json, os, stat, struct, sys, zipfile
+import base64, io, json, os, sqlite3, stat, struct, sys, zipfile
 
 source, destination = Path(sys.argv[1]), Path(sys.argv[2])
 magic = b"BBM-BACKUP-1\n"
@@ -51,6 +51,11 @@ max_compression_ratio = int(os.environ.get("BBM_BACKUP_MAX_COMPRESSION_RATIO", "
 max_cache_compression_ratio = int(os.environ.get("BBM_BACKUP_CACHE_MAX_COMPRESSION_RATIO", "5000"))
 
 minimum_supported_version = (1, 1, 0)
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except ImportError as exc:
+    raise SystemExit("python3-cryptography fehlt") from exc
 
 def version_tuple(value):
     import re
@@ -227,7 +232,60 @@ if not (destination / "migration.env").is_file():
     raise SystemExit("Backup enthält keine migration.env")
 if not (destination / "data").is_dir():
     raise SystemExit("Backup enthält kein Manager-Datenverzeichnis")
-print(f"Backup v{manifest.get('app_version', '?')} vom {manifest.get('created_at', '?')} geprüft.")
+
+def sqlite_quick_check(path: Path, label: str):
+    if not path.is_file():
+        raise SystemExit(f"{label} fehlt im Manager-Backup")
+    try:
+        with sqlite3.connect(path, timeout=60) as connection:
+            result = connection.execute("PRAGMA quick_check").fetchone()
+    except sqlite3.Error as exc:
+        raise SystemExit(f"{label} kann nicht gelesen werden") from exc
+    if not result or str(result[0]).casefold() != "ok":
+        raise SystemExit(f"{label} ist beschädigt")
+
+manager_database = destination / "data" / "manager.db"
+security_database = destination / "data" / "security" / "security.db"
+master_key_path = destination / "data" / "security" / "master.key"
+sqlite_quick_check(manager_database, "Manager-Datenbank")
+sqlite_quick_check(security_database, "Security-Datenbank")
+if not master_key_path.is_file():
+    raise SystemExit("Master-Key fehlt im Manager-Backup")
+try:
+    cipher = Fernet(master_key_path.read_bytes().strip())
+except (OSError, ValueError, TypeError) as exc:
+    raise SystemExit("Master-Key im Manager-Backup ist ungültig") from exc
+try:
+    with sqlite3.connect(security_database, timeout=60) as connection:
+        tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if {"users", "secrets"} - tables:
+            raise SystemExit("Security-Datenbank im Manager-Backup ist unvollständig")
+        if int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]) < 1:
+            raise SystemExit("Security-Datenbank im Manager-Backup enthält kein Benutzerkonto")
+        secret_rows = connection.execute("SELECT scope,name,encrypted_value FROM secrets").fetchall()
+except sqlite3.Error as exc:
+    raise SystemExit("Security-Datenbank im Manager-Backup konnte nicht vollständig geprüft werden") from exc
+system_names = set()
+for scope, name, encrypted_value in secret_rows:
+    value = str(encrypted_value or "")
+    if not value.startswith("v2:"):
+        raise SystemExit(f"Geheimnis {scope}/{name} verwendet ein nicht unterstütztes Format")
+    try:
+        cipher.decrypt(value[3:].encode("ascii"))
+    except (InvalidToken, UnicodeEncodeError, ValueError) as exc:
+        raise SystemExit(f"Geheimnis {scope}/{name} kann mit dem gesicherten Master-Key nicht entschlüsselt werden") from exc
+    if str(scope) == "system":
+        system_names.add(str(name))
+required_identity = {
+    "controller_private_key", "controller_public_key",
+    "repository_ssh_host_private_key", "repository_ssh_host_public_key",
+    "tls_certificate", "tls_private_key",
+}
+if int(manifest.get("format_version") or 0) >= 7:
+    missing_identity = required_identity - system_names
+    if missing_identity:
+        raise SystemExit("Manager-Backup enthält nicht alle SSH-/TLS-Identitäten: " + ", ".join(sorted(missing_identity)))
+print(f"Backup v{manifest.get('app_version', '?')} vom {manifest.get('created_at', '?')} vollständig geprüft.")
 if manifest.get("client_borg_cache_included"):
     saved = int(manifest.get("client_borg_cache_saved_count") or 0)
     print(

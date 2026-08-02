@@ -19,8 +19,9 @@ from app.borg_stats import merge_archive_statistics, parse_archive_listing, pars
 from app.archive_metadata import sort_archives_newest_first
 from app.borg_progress import (
     BorgItemActivityStreamFilter, BorgNetworkStreamFilter, BorgProgressStreamFilter,
-    clear_run_live_activity, clear_run_progress, get_run_network_activity, set_run_item_activity,
-    set_run_network_activity, set_run_progress,
+    BorgRestoreProgressStreamFilter, clear_run_live_activity, clear_run_progress,
+    clear_run_restore_progress, get_run_network_activity, get_run_restore_progress,
+    set_run_item_activity, set_run_network_activity, set_run_progress, set_run_restore_progress,
 )
 from app.backup_stats import parse_backup_statistics, parse_source_scan_statistics
 from app.borg_warnings import BorgWarningCollector, unresolved_warning_summary
@@ -35,7 +36,8 @@ from app.database import SessionLocal
 from app.debug_logging import (
     detail_requires_debug_log, log_unexpected_exception, public_error_message,
 )
-from app.models import BackupSchedule, Host, HostRepositoryAccess, HostSshAction, Job, ManagerArchiveMount, Repository, Run
+from app.models import BackupSchedule, Host, HostRepositoryAccess, Job, ManagerArchiveMount, Repository, Run
+from app.security_store import get_host_ssh_action
 from app.repository_sizes import (
     managed_repository_filesystem_size, repository_statistics_from_borg_info,
     store_repository_statistics,
@@ -1230,6 +1232,7 @@ async def _execute_run_inner(
     backup_preview_filter = _BackupSqlitePreviewFilter() if action == "backup" else None
     warning_collector = BorgWarningCollector(max_items=100) if action == "backup" else None
     progress_filter = BorgProgressStreamFilter() if action == "backup" else None
+    restore_progress_filter = BorgRestoreProgressStreamFilter() if action == "restore" else None
     item_activity_filter = (
         BorgItemActivityStreamFilter(strip_added_modified=not full_file_list)
         if action == "backup" else None
@@ -1301,6 +1304,10 @@ async def _execute_run_inner(
                 persisted, item_activity = item_activity_filter.feed(persisted)
                 if item_activity is not None:
                     set_run_item_activity(run_id, item_activity)
+        elif restore_progress_filter is not None and stream == "stderr":
+            persisted, restore_progress = restore_progress_filter.feed(data)
+            if restore_progress is not None:
+                set_run_restore_progress(run_id, restore_progress)
 
         # The normal production path stays binary: millions of file names are
         # written without UTF-8 decoding, line splitting or SQLite mirroring.
@@ -1500,6 +1507,13 @@ async def _execute_run_inner(
                 error += trailing.decode("utf-8", errors="replace")
                 if warning_collector:
                     warning_collector.feed_bytes(trailing, stream="stderr")
+        if restore_progress_filter is not None:
+            restore_trailing, restore_progress = restore_progress_filter.finalize()
+            if restore_progress is not None:
+                set_run_restore_progress(run_id, restore_progress)
+            if restore_trailing:
+                log_writer.append_bytes(restore_trailing)
+                error += restore_trailing.decode("utf-8", errors="replace")
         if warning_collector and warning_collector.finalize():
             pending_warning_summary_json = json.dumps(
                 warning_collector.summary(), ensure_ascii=False, separators=(",", ":"),
@@ -1641,6 +1655,13 @@ async def _execute_run_inner(
                 if network_snapshot is not None:
                     run.backup_network_download_bytes = int(network_snapshot.get("download_bytes") or 0)
                     run.backup_network_upload_bytes = int(network_snapshot.get("upload_bytes") or 0)
+            elif action == "restore":
+                restore_snapshot = get_run_restore_progress(run_id)
+                if restore_snapshot is not None:
+                    run.restore_total_size_bytes = int(restore_snapshot.get("total_bytes") or 0)
+                    run.restore_processed_size_bytes = int(restore_snapshot.get("processed_bytes") or 0)
+                    run.restore_total_file_count = int(restore_snapshot.get("total_files") or 0)
+                    run.restore_processed_file_count = int(restore_snapshot.get("processed_files") or 0)
 
             if action in {"backup", "source-stats"} and status in {"success", "warning"}:
                 statistics = (
@@ -1704,6 +1725,7 @@ async def execute_run(
     for every exit path, including cancellation before command execution.
     """
     clear_run_progress(run_id)
+    clear_run_restore_progress(run_id)
     clear_run_live_activity(run_id)
     with _active_run_lock:
         _executing_run_ids.add(run_id)
@@ -1713,6 +1735,7 @@ async def execute_run(
         )
     finally:
         clear_run_progress(run_id)
+        clear_run_restore_progress(run_id)
         clear_run_live_activity(run_id)
         with _active_run_lock:
             _executing_run_ids.discard(run_id)
@@ -1981,22 +2004,22 @@ async def execute_repository_validation(run_id: int, repository_id: int, command
 
 def queue_host_ssh_action(action_id: int) -> int:
     """Queue one saved SSH action and persist its output as a normal run."""
+    action = get_host_ssh_action(action_id)
+    if not action:
+        raise LookupError("SSH action not found")
     with SessionLocal() as db:
-        action = db.scalar(
-            select(HostSshAction).options(joinedload(HostSshAction.host)).where(HostSshAction.id == action_id)
-        )
-        if not action:
-            raise LookupError("SSH action not found")
+        host = db.get(Host, action.host_id)
         if not action.enabled:
             raise ValueError("SSH-Aktion ist deaktiviert")
-        if not action.host or not action.host.enabled:
+        if not host or not host.enabled:
             raise ValueError("Gerät ist deaktiviert")
-        if not action.host.host_key:
+        if not host.host_key:
             raise ValueError("SSH-Fingerprint des Geräts ist nicht bestätigt")
-        command = host_ssh_action_command(action.host, action.command, action.timeout_seconds)
+        command = host_ssh_action_command(host, action.command, action.timeout_seconds)
+        command.preview = f"Gespeicherte SSH-Aktion: {action.name} · Gerät: {host.name}"
         run = Run(
             job_id=None,
-            job_name_snapshot=f"{action.host.name} · {action.name}"[:100],
+            job_name_snapshot=f"{host.name} · {action.name}"[:100],
             repository_id=None,
             action="ssh-command",
             status="queued",

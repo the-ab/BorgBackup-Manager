@@ -1,5 +1,132 @@
 # Release Notes
 
+## v1.3.4 – 2026-08-02
+
+### Dedicated profile page
+
+- **Profile** now opens a full dedicated view instead of a small overview dialog.
+- The profile link is placed directly below the username in the sidebar and no longer widens the account row.
+- Appearance and language can be saved directly on the profile page. The current user also gets an inline password form; the larger 2FA workflow remains in a protected dialog with enough room for the QR code and recovery codes.
+
+### Self-healing SSH action migration
+
+- Any remaining plaintext `host_ssh_actions` table in `manager.db` is detected on every start, fully migrated into `security.db`, and removed only after successful decryption verification.
+- Empty or previously abandoned legacy tables are removed as well. Database maintenance now reports such a table and its row count explicitly.
+- After checkpoint and `VACUUM`, BBM additionally scans `manager.db`, `manager.db-wal`, and `manager.db-shm` byte-for-byte for migrated command contents. A detected plaintext remnant fails the migration explicitly instead of accepting an unsafe state.
+- The migration retries transient SQLite locks and keeps its persistent cleanup marker until the complete process has succeeded.
+
+### Database lock cause removed
+
+- **Clean manager database** previously ran `VACUUM` while the WebUI was live. Because SQLite requires an exclusive lock for this operation, concurrent dashboard, device, repository, schedule, and run requests could fail with `database is locked`.
+- Logical cleanup still completes immediately. The exclusive SQLite rebuild is now scheduled for the next manager start and finishes before the WebUI is made available.
+- Manager database connections also use WAL mode, a 30-second busy timeout, enforced foreign keys, and `synchronous=NORMAL` for more robust normal concurrent reads and writes.
+
+### Documentation and regression coverage
+
+- German and English manuals, installation documents, security notes, and integrated WebUI help now describe the dedicated profile page, SSH migration, and deferred SQLite rebuild.
+- New tests cover profile navigation, sidebar placement, empty and interrupted SSH legacy tables, deferred VACUUM execution, and WAL, busy-timeout, and foreign-key configuration.
+
+## v1.3.3 – 2026-08-02
+
+### Consolidated profile area
+
+- The separate **Appearance & Language**, **Change password**, and **Two-factor authentication** sidebar entries have been replaced by one central **Profile** entry.
+- The profile area shows account, role, and 2FA status and opens the three personal functions through clearly separated action cards. Administration of other users remains in user management.
+
+### Improved two-factor setup
+
+- TOTP setup now displays a directly scannable QR code. It is generated locally from the same `otpauth://` URI; no external QR service receives the TOTP secret.
+- The Base32 secret and provisioning URI remain available for manual setup.
+- Codes shown in full only once are now placed in an explicitly labelled **Recovery codes** section with one-time-display and one-time-use guidance. Regenerated codes are also clearly labelled and copyable.
+
+### Encrypted saved SSH actions
+
+- Full saved SSH action commands are no longer plaintext in `manager.db`; they are authenticated-encrypted with the existing master key in `/data/security/security.db`.
+- On first start, existing actions are fully imported and verified by decryption. The legacy table is removed only after successful verification. SQLite WAL checkpointing and `VACUUM` then remove recoverable plaintext remnants from the previous database file and WAL.
+- An interrupted or failed sanitization step remains retryable through a persistent migration marker. Conflicts or incomplete migrations never cause silent data loss.
+- Run previews, diagnostics, and normal execution logs contain only action name and target device, never command text. Device deletion, database maintenance, manager backup, and completeness verification use the new security store.
+
+### More compact backup area
+
+- **Upload backup** now sits directly below **Create manager backup**, removing unnecessary vertical whitespace without mixing manager and cache restore workflows.
+- The two restore blocks remain side by side on wide layouts and stack on narrow layouts.
+
+### Correct access log in diagnostics
+
+- The **Access/authentication log** tab now displays `/data/logs/access.log`.
+- The cause was an incomplete frontend allow-list: the API log type `access` existed, but the renderer treated it as unknown and fell back to `sshd`. A regression test now covers this mapping.
+
+### Repeatable release verification
+
+- `RELEASE_CHECKLIST.de.md` and `RELEASE_CHECKLIST.md` define the mandatory process for version metadata, migrations, security, UI, translations, documentation, tests, package cleanup, verification from the final ZIP, and SHA-256 generation.
+- The existing release check now requires both checklists in the package.
+
+## v1.3.2 – 2026-08-01
+
+### Two-factor authentication
+
+- Users can enable TOTP-based two-factor authentication in their personal settings. Standard authenticator apps are supported through an `otpauth://` URI and the displayed Base32 secret.
+- Setup must be confirmed with a current six-digit code. Subsequent sign-ins require either a TOTP code or a one-time recovery code in addition to the password.
+- Ten recovery codes are created per setup and stored only as hashes. New codes require the password and a current second factor; all previous codes become invalid immediately.
+- Administrators can reset another user's 2FA configuration. Enabling, disabling or resetting 2FA revokes existing sessions for the affected account.
+- TOTP secrets are encrypted in `security.db`; the encrypted manager backup therefore includes 2FA state and recovery-code hashes.
+
+### Access and authentication log
+
+- BBM writes a dedicated JSON Lines log to `/data/logs/access.log`. It records HTTP access, successful and failed sign-ins, 2FA challenges, rate-limit blocks and sign-outs with UTC timestamp, source address, status, path and user agent.
+- Passwords, TOTP codes, recovery codes, session tokens and other secrets are never logged.
+- The file rotates with `BBM_LOG_MAX_BYTES` and `BBM_LOG_ROTATIONS`, has its own diagnostics tab and can be consumed by Fail2ban or CrowdSec.
+- Access-log write failures can never block authentication or API responses.
+
+### Safe manager-database cleanup
+
+- **System → System diagnostics** now provides preview and cleanup actions for `manager.db`.
+- It detects queued/running executions stale for at least 24 hours, inactive archive-mount rows, orphaned device/repository assignments, orphaned SSH actions, old notification rows without a run and invalid schedule targets.
+- Normal devices, repositories, jobs and completed execution history are never deleted wholesale.
+- Before any change BBM creates a `PRAGMA quick_check`-verified SQLite safety copy below `/data/maintenance-backups`. It then runs `PRAGMA optimize`, optional `VACUUM` and `ANALYZE`, retaining at most five maintenance copies.
+- Cleanup is blocked while executions are active/queued or while manager/cache backup tasks are running.
+
+### Complete temporary security-snapshot cleanup
+
+- Manager backups now remove the complete temporary SQLite family after success or failure: `bbm-security-*.sqlite3`, `-wal` and `-shm`.
+- Container startup additionally removes abandoned temporary security snapshots left by older interrupted backup runs. Active `manager.db-*` and `security.db-*` WAL files are never touched.
+
+### Simplified manager restore and backup layout
+
+- Manager-backup restore now asks for one backup passphrase. The same passphrase protects the automatic pre-restore safety backup, replacing the former two additional safety-passphrase fields.
+- The **Create manager backup** panel now uses only its required height.
+- **Restore manager backup** and **Restore cache backup** appear side by side on wide screens and stack again on narrow screens.
+
+## v1.3.1 – 2026-08-01
+
+### Update rollback backup limited to required manager state
+
+- `update.sh` no longer includes existing manager/cache backup artifacts below `/data/backups` in the update rollback archive. This prevents the target archive from recursively packing its own or other multi-GiB backup files.
+- `/data/exports`, `/data/restore-staging`, `/data/run-logs`, `/data/logs`, `/data/archive-cache`, `/data/borg-cache` and `/data/borg-security` are also excluded, in addition to `/data/update-backups` and repository data.
+- The rollback archive now retains only non-regenerable manager state such as databases, security data, settings and small operational state files.
+
+### Manager backup completeness verification
+
+- New manager backups use manifest format version 7 and are stored only when the manager database, security database and master key form a complete consistent set.
+- Both SQLite snapshots are verified with `PRAGMA quick_check`. Every encrypted secret must decrypt with the backed-up master key; current backups additionally require controller keys, repository SSH host keys and TLS identity.
+- The security database also contains encrypted repository passphrases/keyfiles and notification secrets. `authorized_keys` and clear-text files below `/run/bbm-secrets` are regenerable and recreated after restore.
+- Web UI and bare-metal restore now reject incomplete, corrupt or master-key-incompatible manager backups before replacing existing data.
+
+## v1.3.0 – 2026-08-01
+
+### Live progress for file restores
+
+- Before every real restore and dry-run, BBM determines the selected archive-object count and original size through a streamed Borg metadata pass. The full item list is never loaded into manager memory.
+- The live dialog reports phase, processed and total files/objects, processed and remaining size, percentage, current rate, ETA and the current archive path.
+- Borg JSON progress frames are removed from the persistent run log while ordinary paths, warnings and errors remain readable.
+- Final values are persisted in dedicated run columns and remain available after a browser reload or when reopening the execution log later.
+- Restores continue to use the private repository-scoped client cache and supervised SSH cancellation path.
+
+### Database and tests
+
+- The additive schema gains restore total size, processed size, total objects and processed objects. Existing installations from v1.1.0 onward are extended automatically.
+- New regression tests cover parser chunk boundaries, Borg JSON, terminal states, database migration, API output, restore command generation and Web UI rendering.
+
 ## v1.2.10 – 2026-08-01
 
 ### Cache backups split into independent artifacts

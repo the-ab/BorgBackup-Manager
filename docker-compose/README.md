@@ -36,7 +36,7 @@ The `.env` file must remain next to `compose.yaml`. It is also mounted read-only
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `BBM_IMAGE_TAG` | `latest` | GHCR tag to deploy. Pin a release such as `v1.2.10` for reproducible installations. |
+| `BBM_IMAGE_TAG` | `latest` | GHCR tag to deploy. Pin a release such as `v1.3.4` for reproducible installations. |
 | `TZ` | `Europe/Berlin` | Time zone used by the Web UI, schedules, and Borg processes. Use a valid IANA time-zone name. |
 | `BBM_HTTPS_PORT` | `8443` | HTTPS Web UI port published on the Docker host. |
 | `BBM_REPOSITORY_SSH_PORT` | `2222` | SSH port published on the Docker host for Borg repository access. |
@@ -59,13 +59,13 @@ BBM_IMAGE_TAG=latest
 `latest` follows the most recently published image. Prefer a fixed release for controlled deployments:
 
 ```dotenv
-BBM_IMAGE_TAG=v1.2.10
+BBM_IMAGE_TAG=v1.3.4
 ```
 
 This selects:
 
 ```text
-ghcr.io/the-ab/borgbackup-manager:v1.2.10
+ghcr.io/the-ab/borgbackup-manager:v1.3.4
 ```
 
 ## Network and TLS
@@ -362,6 +362,18 @@ These variables provide defaults for a new `settings.json`. Values saved later t
 | `BBM_STORAGE_GUARD_ENABLED` | `1` | Enable (`1`) or disable (`0`) the default storage guard. |
 | `BBM_STORAGE_GUARD_THRESHOLD_PERCENT` | `95` | Storage-use threshold, valid range `1` to `100`. |
 
+## Access and authentication log
+
+### `BBM_ACCESS_LOG_PATH`
+
+Internal container path of the machine-readable JSON Lines access log:
+
+```dotenv
+BBM_ACCESS_LOG_PATH=/data/logs/access.log
+```
+
+The default is below persistent `BBM_DATA_PATH` and normally appears on the host as `${BBM_DATA_PATH}/logs/access.log`. It contains HTTP access plus successful, failed and rate-limited sign-ins. Passwords, 2FA values, recovery codes and session tokens are never stored. Fail2ban or CrowdSec can consume the `login_failed` and `login_blocked` events. Change this path only if it remains inside a persistent directory readable exclusively by administrators.
+
 ## Readiness and log rotation
 
 ### `BBM_HEALTH_REQUIRE_SSHD`
@@ -374,7 +386,7 @@ With `1`, the container is ready only when both the Web application and the inte
 
 ### `BBM_LOG_MAX_BYTES`
 
-Maximum repository-SSH log size before rotation:
+Maximum size of an access, repository-SSH or error log before rotation:
 
 ```dotenv
 BBM_LOG_MAX_BYTES=10485760

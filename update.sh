@@ -397,7 +397,19 @@ create_project_backup() {
 
 create_data_backup() {
   local data_path repository_path data_abs repository_abs repository_relative archive partial size
-  local -a excludes=(--one-file-system --exclude='./update-backups' --exclude='./borg-cache' --exclude='./archive-cache')
+  local -a excludes=(
+    --one-file-system
+    --exclude='./update-backups'
+    --exclude='./backups'
+    --exclude='./exports'
+    --exclude='./restore-staging'
+    --exclude='./run-logs'
+    --exclude='./logs'
+    --exclude='./archive-cache'
+    --exclude='./borg-cache'
+    --exclude='./borg-security'
+    --exclude='./maintenance-backups'
+  )
   data_path="$(env_value BBM_DATA_PATH "$PROJECT_DIR/data")"
   repository_path="$(env_value BBM_REPOSITORY_PATH "$PROJECT_DIR/repositories")"
   [[ -d "$data_path" ]] || return 0
@@ -427,7 +439,7 @@ PYDATA
   partial="$archive.partial"
   ACTIVE_PARTIAL="$partial"
   rm -f -- "$partial"
-  log "Persistente Manager-Daten werden gesichert; Repository-Daten sowie regenerierbarer Borg- und Archivlisten-Cache werden ausgelassen."
+  log "Rollback-relevante Manager-Daten werden gesichert; Backups, Exporte, Protokolle, Repository-Daten sowie Borg-/Archiv-Caches werden ausgelassen."
   if ! tar "${excludes[@]}" -czf "$partial" -C "$data_path" .; then
     rm -f -- "$partial"
     fail "Persistente Manager-Daten konnten nicht gesichert werden"
@@ -437,7 +449,7 @@ PYDATA
   chmod 600 "$archive" 2>/dev/null || true
   size="$(du -h "$archive" 2>/dev/null | awk '{print $1}' || true)"
   log "Persistente Manager-Daten gesichert: $archive${size:+ ($size)}"
-  log "Repository-Daten sowie Borg- und Archivlisten-Cache wurden nicht kopiert oder verändert."
+  log "Backups, Exporte, Protokolle, Repository-Daten sowie Borg-/Archiv-Caches wurden nicht kopiert oder verändert."
 }
 
 restore_project_backup() {

@@ -5,6 +5,8 @@ import sqlite3
 import zipfile
 from pathlib import Path
 
+from cryptography.fernet import Fernet
+
 import pytest
 
 from app import backups, manager_cache
@@ -22,9 +24,16 @@ def _prepare_backup_state(monkeypatch, tmp_path: Path) -> tuple[Path, Path, Path
     security = data / "security"
     security.mkdir()
     security_database = security / "security.db"
+    master_key = Fernet.generate_key()
+    cipher = Fernet(master_key)
     with sqlite3.connect(security_database) as connection:
         connection.execute("CREATE TABLE users(id INTEGER PRIMARY KEY, username TEXT)")
-    (security / "master.key").write_text("test-master-key", encoding="utf-8")
+        connection.execute("INSERT INTO users(username) VALUES ('admin')")
+        connection.execute("CREATE TABLE secrets(scope TEXT, name TEXT, encrypted_value TEXT)")
+        for secret_name in sorted(backups._REQUIRED_SYSTEM_SECRET_NAMES):
+            encrypted = "v2:" + cipher.encrypt(f"value-{secret_name}".encode()).decode("ascii")
+            connection.execute("INSERT INTO secrets VALUES ('system', ?, ?)", (secret_name, encrypted))
+    (security / "master.key").write_bytes(master_key + b"\n")
     borg_cache = data / "borg-cache"
     borg_security = data / "borg-security"
     backup_dir = data / "backups"

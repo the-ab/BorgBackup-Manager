@@ -674,13 +674,27 @@ def test_release_contains_interactive_recovery_script_and_archive_statistics_ui(
     assert '"deduplicated_size_bytes": "INTEGER"' in database
 
 
-def test_update_backup_excludes_repository_tree_and_regenerable_borg_cache():
+def test_update_backup_excludes_repository_tree_backups_logs_exports_and_caches():
     update = (PROJECT_ROOT / "update.sh").read_text(encoding="utf-8")
     assert "env_value BBM_REPOSITORY_PATH" in update
     assert "repository_relative" in update
-    assert "--exclude='./borg-cache'" in update
+    for excluded in (
+        "update-backups", "backups", "exports", "restore-staging", "run-logs", "logs",
+        "archive-cache", "borg-cache", "borg-security",
+    ):
+        assert f"--exclude='./{excluded}'" in update
     assert "Repository-Unterverzeichnis wird vom Manager-Datenbackup ausgeschlossen" in update
     assert '.tar.gz.partial' not in update  # partial path is derived from final archive, not exposed as a stale release file
+
+
+def test_manager_backup_requires_complete_security_database_and_master_key():
+    backups = (PROJECT_ROOT / "app/backups.py").read_text(encoding="utf-8")
+    restore = (PROJECT_ROOT / "restore-backup.sh").read_text(encoding="utf-8")
+    assert "_validate_security_backup_pair" in backups
+    assert "Security-Datenbank-Snapshot stimmt nicht" in backups
+    assert '"format_version": 7' in backups
+    assert "Manager-Backup enthält nicht alle SSH-/TLS-Identitäten" in restore
+    assert "Master-Key fehlt im Manager-Backup" in restore
 
 
 def test_repository_location_confirmation_is_admin_only_in_ui_and_api():

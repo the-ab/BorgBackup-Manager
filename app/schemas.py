@@ -757,6 +757,46 @@ class BackupScheduleOut(BackupScheduleIn):
 class LoginIn(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: SecretStr
+    second_factor: SecretStr | None = None
+
+    @field_validator("second_factor")
+    @classmethod
+    def valid_second_factor(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        secret = value.get_secret_value().strip()
+        if not secret or len(secret) > 64 or any(c in secret for c in "\x00\r\n"):
+            raise ValueError("invalid second factor")
+        return SecretStr(secret)
+
+
+class TwoFactorSetupIn(BaseModel):
+    current_password: SecretStr
+
+
+class TwoFactorConfirmIn(BaseModel):
+    code: SecretStr
+
+
+class TwoFactorDisableIn(BaseModel):
+    current_password: SecretStr
+
+
+class TwoFactorRecoveryRegenerateIn(BaseModel):
+    current_password: SecretStr
+    code: SecretStr
+
+
+class DatabaseCleanupIn(BaseModel):
+    confirm: bool = False
+    create_safety_copy: bool = True
+    vacuum: bool = True
+
+    @model_validator(mode="after")
+    def confirmed(self):
+        if not self.confirm:
+            raise ValueError("database cleanup requires explicit confirmation")
+        return self
 
 
 class PasswordChangeIn(BaseModel):
@@ -1154,22 +1194,14 @@ class ManagerClientCacheRestoreIn(ManagerClientCacheInspectIn):
 
 
 class ManagerBackupRestoreIn(BaseModel):
-    passphrase: SecretStr | None = None
-    safety_passphrase: SecretStr
-    safety_passphrase_confirm: SecretStr
+    passphrase: SecretStr
     confirm: bool = False
 
     @model_validator(mode="after")
     def confirmed(self):
         if not self.confirm:
             raise ValueError("restore requires explicit confirmation")
-        secret = self.passphrase.get_secret_value() if self.passphrase else None
-        if secret is not None and any(c in secret for c in "\x00\r\n"):
-            raise ValueError("backup passphrase must be single-line")
-        safety = self.safety_passphrase.get_secret_value()
-        confirmation = self.safety_passphrase_confirm.get_secret_value()
-        if len(safety) < 12 or any(c in safety for c in "\x00\r\n"):
-            raise ValueError("safety backup passphrase must contain at least 12 single-line characters")
-        if safety != confirmation:
-            raise ValueError("safety backup passphrase confirmation does not match")
+        secret = self.passphrase.get_secret_value()
+        if len(secret) < 12 or any(c in secret for c in "\x00\r\n"):
+            raise ValueError("backup passphrase must contain at least 12 single-line characters")
         return self

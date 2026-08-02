@@ -684,6 +684,34 @@ def audit_split_cache_backup_artifacts() -> None:
             error(f"Split cache-backup documentation missing in {path.name}")
 
 
+def audit_update_and_manager_backup_boundaries() -> None:
+    update = _read(ROOT / "update.sh")
+    backups = _read(APP / "backups.py")
+    restore = _read(ROOT / "restore-backup.sh")
+    for excluded in (
+        "update-backups", "backups", "exports", "restore-staging", "run-logs", "logs",
+        "archive-cache", "borg-cache", "borg-security",
+    ):
+        if f"--exclude='./{excluded}'" not in update:
+            error(f"Update rollback backup does not exclude /data/{excluded}")
+    for marker_text in (
+        "_validate_security_backup_pair",
+        '"format_version": 7',
+        "Security-Datenbank-Snapshot stimmt nicht mit dem Ausgangsbestand überein",
+        "controller_private_key",
+        "tls_private_key",
+    ):
+        if marker_text not in backups:
+            error(f"Manager-backup completeness marker missing: {marker_text}")
+    for marker_text in (
+        "Master-Key fehlt im Manager-Backup",
+        "Manager-Backup enthält nicht alle SSH-/TLS-Identitäten",
+        "PRAGMA quick_check",
+    ):
+        if marker_text not in restore:
+            error(f"Bare-metal restore completeness marker missing: {marker_text}")
+
+
 def audit_manager_archive_mounts() -> None:
     main = _read(APP / "main.py")
     service = _read(APP / "service.py")
@@ -726,6 +754,7 @@ def main() -> int:
     audit_standalone_image_deployment(version)
     audit_manager_archive_mounts()
     audit_split_cache_backup_artifacts()
+    audit_update_and_manager_backup_boundaries()
     audit_document_feature_alignment()
     audit_current_source_stats_and_parallelism()
     audit_eta_fallback_search_and_modal_editing()

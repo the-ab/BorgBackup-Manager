@@ -462,12 +462,25 @@ async function submitLogin(event) {
   const passwordInput = $('#login-password');
   errorBox.textContent = '';
   try {
+    const secondFactorField = $('#login-second-factor-field');
+    const secondFactorInput = $('#login-second-factor');
     const response = await fetch('/api/auth/login', {
       method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: {'Content-Type': 'application/json', 'X-BBM-Request': '1'},
-      body: JSON.stringify({username: usernameInput.value.trim(), password: passwordInput.value}),
+      body: JSON.stringify({
+        username: usernameInput.value.trim(),
+        password: passwordInput.value,
+        second_factor: secondFactorField?.classList.contains('hidden') ? null : (secondFactorInput?.value || null),
+      }),
     });
     let body = {};
     try { body = await response.json(); } catch { /* textlose Antwort */ }
+    if (response.status === 202 && body.status === 'two-factor-required') {
+      secondFactorField.classList.remove('hidden');
+      secondFactorInput.required = true;
+      errorBox.textContent = 'Passwort korrekt. Jetzt den 2FA-Code oder einen Wiederherstellungscode eingeben.';
+      secondFactorInput.focus();
+      return;
+    }
     if (!response.ok) throw new Error(body.detail || 'Anmeldung abgelehnt');
     storeReloadSessionToken(body.reload_token || '');
     // Erst nachweisen, dass der Browser den HttpOnly-Cookie wirklich gespeichert
@@ -477,6 +490,9 @@ async function submitLogin(event) {
     state.currentUser = verifiedUser;
     applyUserPreferences(false);
     passwordInput.value = '';
+    if ($('#login-second-factor')) $('#login-second-factor').value = '';
+    $('#login-second-factor-field')?.classList.add('hidden');
+    if ($('#login-second-factor')) $('#login-second-factor').required = false;
     $('#login').classList.add('hidden');
     $('#app').classList.remove('hidden');
     applyUserPermissions();
@@ -687,7 +703,7 @@ function clearRepositoryStatus() {
 }
 
 function validView(view) {
-  return Boolean($(`#view-${view}`) && ($(`nav button[data-view="${view}"]`) || SYSTEM_VIEWS.has(view)));
+  return Boolean($(`#view-${view}`) && ($(`[data-view="${view}"]`) || SYSTEM_VIEWS.has(view)));
 }
 
 function isSystemView(view) {
@@ -727,7 +743,7 @@ function goToView(view, updateHash = true) {
   if (view === 'runs' && updateHash) state.runFilter = 'all';
   const systemView = isSystemView(view);
   const sidebarView = systemView ? 'settings' : view;
-  const button = $(`nav button[data-view="${sidebarView}"]`);
+  const button = $(`[data-view="${sidebarView}"]`);
   $$('nav button').forEach((item) => item.classList.toggle('active', item === button));
   $$('.view').forEach((item) => item.classList.toggle('active', item.id === 'view-' + view));
   syncSystemWorkspaceNavigation(view);
@@ -738,6 +754,7 @@ function goToView(view, updateHash = true) {
   }
   if (view === 'releases') loadReleaseNotes();
   if (view === 'help') loadHelpLanguage(currentLanguage());
+  if (view === 'profile') loadProfilePage().catch((error) => toast(error.message, true));
   if (view === 'restore' && $('#restore-form').elements.job_id.value) syncRestoreArchives(false);
   if (view === 'runs') {
     syncRunFilterControls();
@@ -774,7 +791,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.2.10`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.3.4`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -2444,16 +2461,16 @@ function renderUsers() {
   const list = $('#user-list');
   if (!list || state.currentUser?.role !== 'admin') return;
   const status = state.securityStatus;
-  if (status) $('#security-status').textContent = `${status.users} Benutzer · ${status.administrators ?? state.users.filter((item) => item.role === 'admin').length} Administratoren · ${status.sessions} aktive Sitzungen · ${status.encrypted_secrets ?? 0} verschlüsselte Geheimnisse · ${status.sensitive_storage_ok ? 'Sicherheitsprüfung OK' : 'Sicherheitsprüfung erforderlich'} · ${status.secret_database || status.database}`;
+  if (status) $('#security-status').textContent = `${status.users} Benutzer · ${status.administrators ?? state.users.filter((item) => item.role === 'admin').length} Administratoren · ${status.sessions} aktive Sitzungen · ${status.two_factor_users ?? 0} mit 2FA · ${status.encrypted_secrets ?? 0} verschlüsselte Geheimnisse · ${status.sensitive_storage_ok ? 'Sicherheitsprüfung OK' : 'Sicherheitsprüfung erforderlich'} · ${status.secret_database || status.database}`;
   if (!state.users.length) { list.innerHTML = '<div class="empty">Keine Benutzer vorhanden.</div>'; return; }
   const administratorCount = state.users.filter((item) => item.role === 'admin').length;
   const rows = state.users.map((user) => {
     const own = user.id === state.currentUser?.id;
     const lastAdministrator = user.role === 'admin' && administratorCount <= 1;
     const accountActions = own
-      ? `<span class="hint">${lastAdministrator ? 'Eigenes Konto · letzter Administrator geschützt' : 'Eigenes Passwort über die Seitenleiste ändern'}</span>`
-      : `<button class="secondary" ${bbmAction('resetUserPassword', user.id)}>Passwort setzen</button>${lastAdministrator ? '<button class="danger ghost" disabled title="Der letzte Administrator kann nicht gelöscht werden">Letzter Administrator</button>' : `<button class="danger ghost" ${bbmAction('deleteUser', user.id)}>Löschen</button>`}`;
-    return `<tr><td data-label="Status"><span class="badge ${user.enabled ? 'success' : 'inactive'}">${user.enabled ? 'aktiv' : 'inaktiv'}</span></td><td data-label="Benutzer"><b>${esc(user.username)}</b>${user.must_change_password ? '<small>Passwortwechsel erforderlich</small>' : ''}</td><td data-label="Rolle">${user.role === 'admin' ? 'Administrator' : 'Benutzer'}${lastAdministrator ? '<small>Letzter Administrator · geschützt</small>' : ''}</td><td data-label="Letzte Anmeldung">${esc(formatDate(user.last_login_at))}</td><td data-label="Aktionen"><div class="table-actions"><button class="secondary" ${bbmAction('editUser', user.id)}>Bearbeiten</button>${accountActions}</div></td></tr>`;
+      ? `<span class="hint">${lastAdministrator ? 'Eigenes Konto · letzter Administrator geschützt' : 'Eigenes Passwort und 2FA über die Seitenleiste verwalten'}</span>`
+      : `<button class="secondary" ${bbmAction('resetUserPassword', user.id)}>Passwort setzen</button>${user.two_factor_enabled ? `<button class="danger ghost" ${bbmAction('resetUserTwoFactor', user.id)}>2FA zurücksetzen</button>` : ''}${lastAdministrator ? '<button class="danger ghost" disabled title="Der letzte Administrator kann nicht gelöscht werden">Letzter Administrator</button>' : `<button class="danger ghost" ${bbmAction('deleteUser', user.id)}>Löschen</button>`}`;
+    return `<tr><td data-label="Status"><span class="badge ${user.enabled ? 'success' : 'inactive'}">${user.enabled ? 'aktiv' : 'inaktiv'}</span></td><td data-label="Benutzer"><b>${esc(user.username)}</b>${user.must_change_password ? '<small>Passwortwechsel erforderlich</small>' : ''}<small>${user.two_factor_enabled ? '2FA aktiv' : '2FA nicht eingerichtet'}</small></td><td data-label="Rolle">${user.role === 'admin' ? 'Administrator' : 'Benutzer'}${lastAdministrator ? '<small>Letzter Administrator · geschützt</small>' : ''}</td><td data-label="Letzte Anmeldung">${esc(formatDate(user.last_login_at))}</td><td data-label="Aktionen"><div class="table-actions"><button class="secondary" ${bbmAction('editUser', user.id)}>Bearbeiten</button>${accountActions}</div></td></tr>`;
   }).join('');
   list.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Status</th><th>Benutzer</th><th>Rolle</th><th>Letzte Anmeldung</th><th>Aktionen</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -2890,6 +2907,78 @@ function renderBackupProgress(run, active) {
     ${lastStatus}`;
 }
 
+
+function renderRestoreProgress(run, active) {
+  const box = $('#log-backup-progress');
+  if (!box) return;
+  if (run.action !== 'restore') return;
+  const english = String(currentLocale()).toLowerCase().startsWith('en');
+  const progress = run.restore_progress;
+  if (!progress) {
+    if (!active) {
+      box.classList.add('hidden');
+      box.innerHTML = '';
+      return;
+    }
+    box.classList.remove('hidden');
+    box.innerHTML = `<div class="backup-progress-head"><strong>${english ? 'Restore progress' : 'Restore-Fortschritt'}</strong><span>${english ? 'Waiting for preparation …' : 'Warte auf Vorbereitung …'}</span></div><progress max="100"></progress>`;
+    return;
+  }
+  box.classList.remove('hidden');
+  const phase = String(progress.phase || 'preparing');
+  const phaseLabels = english ? {
+    preparing: 'Reading archive metadata …',
+    restoring: 'Restoring files …',
+    permissions: 'Applying directory permissions …',
+    finished: 'Restore completed',
+    failed: 'Restore failed',
+    cancelled: 'Restore cancelled',
+  } : {
+    preparing: 'Archivmetadaten werden ausgewertet …',
+    restoring: 'Dateien werden wiederhergestellt …',
+    permissions: 'Verzeichnisrechte werden gesetzt …',
+    finished: 'Wiederherstellung abgeschlossen',
+    failed: 'Wiederherstellung fehlgeschlagen',
+    cancelled: 'Wiederherstellung abgebrochen',
+  };
+  const processedBytes = Math.max(0, Number(progress.processed_bytes || 0));
+  const totalBytes = Math.max(0, Number(progress.total_bytes || 0));
+  const processedFiles = Math.max(0, Number(progress.processed_files || 0));
+  const totalFiles = Math.max(0, Number(progress.total_files || 0));
+  const remainingBytes = Math.max(0, totalBytes - processedBytes);
+  const percent = progress.percent == null ? null : Number(progress.percent);
+  const eta = progress.eta_seconds == null ? null : Number(progress.eta_seconds);
+  const speed = Math.max(0, Number(progress.bytes_per_second || 0));
+  const filesLabel = totalFiles > 0
+    ? `${processedFiles.toLocaleString(currentLocale())} / ${totalFiles.toLocaleString(currentLocale())}`
+    : processedFiles.toLocaleString(currentLocale());
+  const sizeLabel = totalBytes > 0
+    ? `${formatBytes(processedBytes)} / ${formatBytes(totalBytes)}`
+    : formatBytes(processedBytes);
+  const percentLabel = Number.isFinite(percent)
+    ? `${percent.toLocaleString(currentLocale(), {maximumFractionDigits: 1})} %`
+    : (phaseLabels[phase] || phase);
+  const progressTag = Number.isFinite(percent)
+    ? `<progress max="100" value="${Math.max(0, Math.min(100, percent))}"></progress>`
+    : '<progress max="100"></progress>';
+  const etaLabel = Number.isFinite(eta) && eta >= 0
+    ? `${english ? 'approx.' : 'ca.'} ${formatDuration(eta)}`
+    : (english ? 'not calculable yet' : 'noch nicht berechenbar');
+  const speedLabel = speed > 0 ? `${formatBytes(speed)}/s` : '–';
+  box.innerHTML = `
+    <div class="backup-progress-head"><strong>${english ? 'Restore progress' : 'Restore-Fortschritt'}</strong><span>${esc(percentLabel)}</span></div>
+    ${progressTag}
+    <div class="backup-progress-grid">
+      <div><span>${english ? 'Files / objects' : 'Dateien / Objekte'}</span><strong>${esc(filesLabel)}</strong></div>
+      <div><span>${english ? 'Processed size' : 'Verarbeitete Größe'}</span><strong>${esc(sizeLabel)}</strong></div>
+      <div><span>${english ? 'Remaining size' : 'Verbleibende Größe'}</span><strong>${totalBytes > 0 ? esc(formatBytes(remainingBytes)) : '–'}</strong></div>
+      <div><span>${english ? 'Current rate' : 'Aktuelle Rate'}</span><strong>${esc(speedLabel)}</strong></div>
+      <div class="backup-progress-eta"><span>${english ? 'Remaining estimate' : 'Restzeitschätzung'}</span><strong>${esc(etaLabel)}</strong></div>
+    </div>
+    <div class="backup-progress-path"><span>${english ? 'Phase' : 'Phase'}</span><strong>${esc(phaseLabels[phase] || phase)}</strong></div>
+    <div class="backup-progress-path"><span>${english ? 'Currently processing' : 'Aktuell verarbeitet'}</span><code data-i18n-skip title="${esc(progress.path || '')}">${esc(progress.path || '–')}</code></div>`;
+}
+
 function renderRunDialog(run, {appendLog = false} = {}) {
   $('#log-dialog h2').textContent = `${run.job_name || 'Repository-Verwaltung'} · ${runActionLabel(run.action)}`;
   $('#log-content').classList.toggle('archive-diff-output', run.action === 'diff-archives');
@@ -2924,15 +3013,33 @@ function renderRunDialog(run, {appendLog = false} = {}) {
   $('#log-stdout').textContent = run.output || 'Keine Standardausgabe.';
   $('#log-stderr').textContent = run.error || 'Keine Fehler oder Warnungen erkannt.';
   const active = ['queued', 'running'].includes(run.status);
-  const progressFiles = run.backup_progress?.files;
+  const progressFiles = run.action === 'restore'
+    ? run.restore_progress?.processed_files
+    : run.backup_progress?.files;
   $('#log-live-state').textContent = active
-    ? `Live · ${run.status}${progressFiles != null ? ' · ' + Number(progressFiles).toLocaleString(currentLocale()) + ' ' + (String(currentLocale()).toLowerCase().startsWith('en') ? 'files' : 'Dateien') : ''}`
+    ? `Live · ${run.status}${progressFiles != null ? ' · ' + Number(progressFiles).toLocaleString(currentLocale()) + ' ' + (String(currentLocale()).toLowerCase().startsWith('en') ? 'files / objects' : 'Dateien / Objekte') : ''}`
     : `${run.status}${run.duration_seconds != null ? ' · ' + run.duration_seconds + ' s' : ''}`;
   renderBackupProgress(run, active);
+  renderRestoreProgress(run, active);
   const trigger = run.trigger_type === 'schedule' ? `Zeitplan: ${esc(run.schedule_name || 'unbekannt')}` : 'Manuell';
+  const isRestore = run.action === 'restore';
   const backupSize = [run.backup_original_size_bytes, run.backup_compressed_size_bytes, run.backup_deduplicated_size_bytes].some((value) => value != null)
     ? `Dedupliziert ${formatBytes(run.backup_deduplicated_size_bytes)} · Original ${formatBytes(run.backup_original_size_bytes)} · Komprimiert ${formatBytes(run.backup_compressed_size_bytes)}`
     : '–';
+  const restoreProcessedBytes = run.restore_progress?.processed_bytes ?? run.restore_processed_size_bytes;
+  const restoreTotalBytes = run.restore_progress?.total_bytes ?? run.restore_total_size_bytes;
+  const restoreProcessedFiles = run.restore_progress?.processed_files ?? run.restore_processed_file_count;
+  const restoreTotalFiles = run.restore_progress?.total_files ?? run.restore_total_file_count;
+  const operationSize = isRestore
+    ? (restoreTotalBytes != null && Number(restoreTotalBytes) > 0
+      ? `${formatBytes(restoreProcessedBytes)} / ${formatBytes(restoreTotalBytes)}`
+      : formatBytes(restoreProcessedBytes))
+    : backupSize;
+  const operationFiles = isRestore
+    ? (restoreTotalFiles != null && Number(restoreTotalFiles) > 0
+      ? `${Number(restoreProcessedFiles || 0).toLocaleString(currentLocale())} / ${Number(restoreTotalFiles).toLocaleString(currentLocale())}`
+      : (restoreProcessedFiles == null ? '–' : Number(restoreProcessedFiles).toLocaleString(currentLocale())))
+    : (run.backup_file_count == null ? '–' : Number(run.backup_file_count).toLocaleString(currentLocale()));
   const network = run.backup_network;
   const networkTraffic = network
     ? `↑ ${formatBytes(network.upload_bytes)} · ↓ ${formatBytes(network.download_bytes)}`
@@ -2941,7 +3048,7 @@ function renderRunDialog(run, {appendLog = false} = {}) {
     ? 'Cumulative traffic on the client interface used for the repository route since this job started. Other traffic on the same interface is included.'
     : 'Kumulierter Verkehr des für die Repository-Route verwendeten Client-Interfaces seit Jobstart. Anderer Verkehr auf demselben Interface ist enthalten.';
   const networkHint = String(currentLocale()).toLowerCase().startsWith('en') ? 'since job start' : 'seit Jobstart';
-  $('#log-summary').innerHTML = `<div><span>Status</span><strong class="status-text ${esc(run.status)}">${esc(runStatusLabel(run.status))}</strong></div><div><span>Gestartet</span><strong>${run.started_at ? esc(formatDate(run.started_at)) : 'wartet'}</strong></div><div><span>Dauer</span><strong>${esc(formatDuration(run.duration_seconds))}</strong></div><div><span>Lauf</span><strong>#${run.id}</strong></div><div><span>Ausführung</span><strong>${trigger}</strong></div><div><span>Backup-Größe</span><strong>${backupSize}</strong></div><div><span>Dateien</span><strong>${run.backup_file_count == null ? '–' : Number(run.backup_file_count).toLocaleString(currentLocale())}</strong></div><div class="run-network-summary" title="${esc(networkTitle)}"><span>Netzwerk</span><strong>${esc(networkTraffic)}</strong><small>${esc(networkHint)}</small></div>`;
+  $('#log-summary').innerHTML = `<div><span>Status</span><strong class="status-text ${esc(run.status)}">${esc(runStatusLabel(run.status))}</strong></div><div><span>Gestartet</span><strong>${run.started_at ? esc(formatDate(run.started_at)) : 'wartet'}</strong></div><div><span>Dauer</span><strong>${esc(formatDuration(run.duration_seconds))}</strong></div><div><span>Lauf</span><strong>#${run.id}</strong></div><div><span>Ausführung</span><strong>${trigger}</strong></div><div><span>${isRestore ? 'Restore-Größe' : 'Backup-Größe'}</span><strong>${esc(operationSize)}</strong></div><div><span>${isRestore ? 'Dateien / Objekte' : 'Dateien'}</span><strong>${esc(operationFiles)}</strong></div><div class="run-network-summary" title="${esc(networkTitle)}"><span>Netzwerk</span><strong>${esc(networkTraffic)}</strong><small>${esc(networkHint)}</small></div>`;
 
   const clientNetworkChip = $('#client-network-live');
   if (clientNetworkChip) {
@@ -4409,7 +4516,7 @@ resetScheduleForm();
 resetUserForm();
 
 function renderDiagnosticLog(name) {
-  const selected = ['sshd', 'borg', 'debug'].includes(name) ? name : 'sshd';
+  const selected = ['sshd', 'borg', 'debug', 'access'].includes(name) ? name : 'sshd';
   state.activeDiagnosticLog = selected;
   const viewer = document.getElementById('diagnostic-log-content');
   if (!viewer) return;
@@ -4417,6 +4524,7 @@ function renderDiagnosticLog(name) {
     sshd: 'Noch keine SSH-Servermeldung protokolliert.',
     borg: 'Noch kein Start von borg serve protokolliert.',
     debug: 'Keine unerwarteten Tracebacks oder Hintergrundfehler protokolliert.',
+    access: 'Noch kein Zugriffs- oder Authentifizierungsereignis protokolliert.',
   };
   viewer.textContent = state.diagnosticLogs[selected] || empty[selected];
   $$('[data-diagnostic-log]').forEach((button) => {
@@ -4482,10 +4590,10 @@ $('#load-diagnostics').onclick = async () => {
     const diagnosticGrid = diagnosticChecks.map(([label, ok, detail]) => `<div class="diagnostic-check"><span>${esc(label)}</span><b class="badge ${ok ? 'success' : 'failed'}">${ok ? 'OK' : 'FEHLER'}</b>${detail ? `<small>${esc(detail)}</small>` : ''}</div>`).join('');
     const sharedRepositories = Number(checks.managed_repositories_shared_across_hosts ?? 0);
     $('#system-diagnostics').className = '';
-    state.diagnosticLogs = {sshd: diagnostics.sshd_log || '', borg: diagnostics.borg_serve_log || '', debug: diagnostics.debug_log || ''};
+    state.diagnosticLogs = {sshd: diagnostics.sshd_log || '', borg: diagnostics.borg_serve_log || '', debug: diagnostics.debug_log || '', access: diagnostics.access_log || ''};
     const globalParallel = Number(diagnostics.global_parallel_limit || 0) > 0 ? `max. ${Number(diagnostics.global_parallel_limit)}` : 'unbegrenzt';
     const sourceStatsParallel = Number(diagnostics.source_stats_parallel_limit || 1);
-    $('#system-diagnostics').innerHTML = `<p class="diagnostic-server"><b>Repository-Server:</b> ${esc(diagnostics.borg_version)} · <b>Globale Parallelität:</b> ${globalParallel} · <b>Quellenstatistiken:</b> max. ${sourceStatsParallel}</p><h3>Repository-Dateisysteme</h3>${filesystemRows ? `<div class="table-scroll diagnostic-filesystems"><table class="data-table"><thead><tr><th>Mount</th><th>Belegung</th><th>Parallelität</th><th>Repositories / Sperre</th><th>Status</th></tr></thead><tbody>${filesystemRows}</tbody></table></div>` : '<p>Repository-Speicher konnte nicht ermittelt werden.</p>'}<h3>Serverprüfungen</h3><div class="diagnostic-check-grid">${diagnosticGrid}<div class="diagnostic-check diagnostic-info"><span>Gemeinsam genutzte Repositories</span><b class="badge inactive">${sharedRepositories}</b><small>Information</small></div></div><h3>Serverprotokolle</h3><div class="diagnostic-log-tabs" role="tablist"><button class="secondary" data-diagnostic-log="sshd" role="tab">sshd-Log</button><button class="secondary" data-diagnostic-log="borg" role="tab">borg-serve-Log</button><button class="secondary" data-diagnostic-log="debug" role="tab">Debug-/Fehlerlog</button></div><pre id="diagnostic-log-content" class="diagnostic-log-content"></pre>`;
+    $('#system-diagnostics').innerHTML = `<p class="diagnostic-server"><b>Repository-Server:</b> ${esc(diagnostics.borg_version)} · <b>Globale Parallelität:</b> ${globalParallel} · <b>Quellenstatistiken:</b> max. ${sourceStatsParallel}</p><h3>Repository-Dateisysteme</h3>${filesystemRows ? `<div class="table-scroll diagnostic-filesystems"><table class="data-table"><thead><tr><th>Mount</th><th>Belegung</th><th>Parallelität</th><th>Repositories / Sperre</th><th>Status</th></tr></thead><tbody>${filesystemRows}</tbody></table></div>` : '<p>Repository-Speicher konnte nicht ermittelt werden.</p>'}<h3>Serverprüfungen</h3><div class="diagnostic-check-grid">${diagnosticGrid}<div class="diagnostic-check diagnostic-info"><span>Gemeinsam genutzte Repositories</span><b class="badge inactive">${sharedRepositories}</b><small>Information</small></div></div><h3>Serverprotokolle</h3><div class="diagnostic-log-tabs" role="tablist"><button class="secondary" data-diagnostic-log="sshd" role="tab">sshd-Log</button><button class="secondary" data-diagnostic-log="borg" role="tab">borg-serve-Log</button><button class="secondary" data-diagnostic-log="debug" role="tab">Debug-/Fehlerlog</button><button class="secondary" data-diagnostic-log="access" role="tab">Zugriffs-/Authentifizierungslog</button></div><pre id="diagnostic-log-content" class="diagnostic-log-content"></pre>`;
     $$('[data-diagnostic-log]').forEach((tab) => tab.onclick = () => renderDiagnosticLog(tab.dataset.diagnosticLog));
     renderDiagnosticLog(state.activeDiagnosticLog);
     button.textContent = 'Diagnose neu laden';
@@ -4520,7 +4628,7 @@ function applyUserPreferences(persistLanguage = true) {
   applyTheme(state.currentUser?.appearance || 'auto', false);
   loadHelpLanguage(language);
   renderSystemHealthStatus();
-  const form = $('#preferences-form');
+  const form = $('#profile-preferences-form');
   if (form) {
     form.elements.language.value = language;
     form.elements.appearance.value = state.currentUser?.appearance || 'auto';
@@ -4568,29 +4676,69 @@ $('#controller-key-confirm-form').onsubmit = async (event) => {
   finally { release(); }
 };
 $('#theme-toggle').onclick = () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
-$('#user-preferences').onclick = () => {
-  const form = $('#preferences-form');
-  form.elements.language.value = state.currentUser?.language || 'de';
-  form.elements.appearance.value = state.currentUser?.appearance || 'auto';
-  $('#preferences-error').textContent = '';
-  $('#preferences-dialog').showModal();
-};
-$('#close-preferences-dialog').onclick = () => $('#preferences-dialog').close();
-$('#preferences-form').onsubmit = async (event) => {
+async function loadProfilePage() {
+  if (!state.currentUser) return;
+  $('#profile-username').textContent = state.currentUser.username || '–';
+  $('#profile-role').textContent = state.currentUser.role === 'admin' ? 'Administrator' : 'Benutzer';
+  $('#profile-two-factor-status').textContent = 'Status wird geladen …';
+  $('#profile-two-factor-detail').textContent = 'Status wird geladen …';
+  const form = $('#profile-preferences-form');
+  if (form) {
+    form.elements.language.value = state.currentUser.language || 'de';
+    form.elements.appearance.value = state.currentUser.appearance || 'auto';
+  }
+  try {
+    const status = await api('/auth/2fa/status');
+    const label = status.enabled ? 'Aktiv' : 'Nicht eingerichtet';
+    $('#profile-two-factor-status').textContent = label;
+    $('#profile-two-factor-detail').textContent = status.enabled
+      ? 'Aktiv – bei jeder Anmeldung erforderlich'
+      : 'Nicht eingerichtet';
+  } catch (_error) {
+    $('#profile-two-factor-status').textContent = 'Status nicht verfügbar';
+    $('#profile-two-factor-detail').textContent = 'Status nicht verfügbar';
+  }
+}
+
+$('#profile-settings')?.addEventListener('click', () => goToView('profile'));
+$('#profile-open-two-factor')?.addEventListener('click', () => {
+  renderTwoFactorDialog().catch((error) => toast(error.message, true));
+});
+
+$('#profile-preferences-form')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const release = markButtonBusy(event.submitter, currentLanguage() === 'en' ? 'Saving …' : 'Wird gespeichert …');
-  $('#preferences-error').textContent = '';
+  $('#profile-preferences-error').textContent = '';
   try {
     const form = new FormData(event.target);
     state.currentUser.language = form.get('language') === 'en' ? 'en' : 'de';
     state.currentUser.appearance = ['auto', 'light', 'dark'].includes(form.get('appearance')) ? form.get('appearance') : 'auto';
     await saveUserPreferences();
     applyUserPreferences();
-    $('#preferences-dialog').close();
+    await loadProfilePage();
     setSyncState(currentLanguage() === 'en' ? 'Personal preferences saved' : 'Persönliche Einstellungen gespeichert', 'success');
-  } catch (error) { $('#preferences-error').textContent = error.message; }
+  } catch (error) { $('#profile-preferences-error').textContent = error.message; }
   finally { release(); }
-};
+});
+
+$('#profile-password-form')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const release = markButtonBusy(event.submitter, 'Passwort wird geändert …');
+  const form = new FormData(event.target);
+  $('#profile-password-error').textContent = '';
+  try {
+    await api('/auth/change-password', {method: 'POST', body: JSON.stringify({
+      current_password: form.get('current_password'),
+      new_password: form.get('new_password'),
+      new_password_confirm: form.get('new_password_confirm'),
+    })});
+    event.target.reset();
+    await logout(false);
+    $('#login-error').textContent = 'Passwort geändert. Bitte mit dem neuen Passwort erneut anmelden.';
+  } catch (error) { $('#profile-password-error').textContent = error.message; }
+  finally { release(); }
+});
+
 applyTheme(document.documentElement.dataset.theme || 'light', false);
 window.BBMI18n?.setLanguage?.(currentLanguage(), false);
 
@@ -4636,7 +4784,6 @@ $('#user-password-form').onsubmit = async (event) => {
 };
 
 $('#logout').onclick = () => logout(true);
-$('#change-password').onclick = () => openPasswordDialog(false);
 $('#close-password-dialog').onclick = () => $('#password-dialog').close();
 $('#password-dialog').addEventListener('cancel', (event) => { if ($('#password-dialog').dataset.force === '1') event.preventDefault(); });
 $('#password-form').onsubmit = async (event) => {
@@ -5140,9 +5287,7 @@ $('#backup-restore-form').onsubmit = async (event) => {
     const result = await api(`/backups/${encodeURIComponent(name)}/restore`, {
       method: 'POST',
       body: JSON.stringify({
-        passphrase: form.get('passphrase') || null,
-        safety_passphrase: form.get('safety_passphrase'),
-        safety_passphrase_confirm: form.get('safety_passphrase_confirm'),
+        passphrase: form.get('passphrase'),
         confirm: form.get('confirm') === 'on',
       }),
     });
@@ -5279,12 +5424,140 @@ document.addEventListener('bbm-language-changed', (event) => {
   if (hashView() === 'releases') loadReleaseNotes();
 });
 
+
+async function resetUserTwoFactor(id) {
+  const user = state.users.find((item) => Number(item.id) === Number(id));
+  if (!user || !confirm(`Zwei-Faktor-Authentifizierung für ${user.username} wirklich zurücksetzen? Alle Sitzungen dieses Benutzers werden beendet.`)) return;
+  await api(`/users/${id}/2fa/reset`, {method: 'POST'});
+  toast('Zwei-Faktor-Authentifizierung zurückgesetzt');
+  await refreshAreas(['users', 'security']);
+}
+
+async function renderTwoFactorDialog() {
+  const dialog = $('#two-factor-dialog');
+  const status = await api('/auth/2fa/status');
+  $('#two-factor-dialog-status').textContent = status.enabled ? '2FA ist aktiv' : '2FA ist nicht eingerichtet';
+  $('#two-factor-disabled-actions').classList.toggle('hidden', Boolean(status.enabled));
+  $('#two-factor-enabled-actions').classList.toggle('hidden', !status.enabled);
+  $('#two-factor-setup-details').classList.add('hidden');
+  const qrCode = $('#two-factor-qr-code');
+  if (qrCode) qrCode.removeAttribute('src');
+  $('#two-factor-regenerated')?.classList.add('hidden');
+  $('#two-factor-error').textContent = '';
+  dialog.showModal();
+}
+
+$('#close-two-factor-dialog')?.addEventListener('click', () => $('#two-factor-dialog').close());
+$('#start-two-factor-setup')?.addEventListener('click', async () => {
+  const password = $('#two-factor-form').elements.current_password.value;
+  $('#two-factor-error').textContent = '';
+  try {
+    const result = await api('/auth/2fa/setup', {method: 'POST', body: JSON.stringify({current_password: password})});
+    $('#two-factor-secret').value = result.secret;
+    $('#two-factor-uri').value = result.provisioning_uri;
+    const qrCode = $('#two-factor-qr-code');
+    if (!result.qr_code_data_uri || !String(result.qr_code_data_uri).startsWith('data:image/svg+xml;base64,')) {
+      throw new Error('QR-Code konnte nicht erzeugt werden');
+    }
+    qrCode.src = result.qr_code_data_uri;
+    $('#two-factor-recovery-codes').textContent = (result.recovery_codes || []).join('\n');
+    $('#two-factor-setup-details').classList.remove('hidden');
+    $('#two-factor-disabled-actions').classList.add('hidden');
+    $('#two-factor-dialog-status').textContent = 'Authenticator einrichten und Code bestätigen';
+  } catch (error) { $('#two-factor-error').textContent = error.message; }
+});
+$('#copy-two-factor-secret')?.addEventListener('click', () => {
+  copyText($('#two-factor-secret').value, 'Authenticator-Schlüssel kopiert', 'Authenticator-Schlüssel').catch((error) => toast(error.message, true));
+});
+$('#copy-two-factor-recovery-codes')?.addEventListener('click', () => {
+  copyText($('#two-factor-recovery-codes').textContent, 'Wiederherstellungscodes kopiert', 'Wiederherstellungscodes').catch((error) => toast(error.message, true));
+});
+$('#copy-two-factor-new-recovery-codes')?.addEventListener('click', () => {
+  copyText($('#two-factor-new-recovery-codes').textContent, 'Wiederherstellungscodes kopiert', 'Neue Wiederherstellungscodes').catch((error) => toast(error.message, true));
+});
+$('#confirm-two-factor-setup')?.addEventListener('click', async () => {
+  try {
+    await api('/auth/2fa/confirm', {method: 'POST', body: JSON.stringify({code: $('#two-factor-confirm-code').value})});
+    toast('Zwei-Faktor-Authentifizierung aktiviert. Bitte erneut anmelden.');
+    await logout(false);
+  } catch (error) { $('#two-factor-error').textContent = error.message; }
+});
+$('#regenerate-two-factor-codes')?.addEventListener('click', async () => {
+  $('#two-factor-error').textContent = '';
+  try {
+    const result = await api('/auth/2fa/recovery-codes', {method: 'POST', body: JSON.stringify({
+      current_password: $('#two-factor-disable-password').value,
+      code: $('#two-factor-regenerate-code').value,
+    })});
+    $('#two-factor-new-recovery-codes').textContent = (result.recovery_codes || []).join('\n');
+    $('#two-factor-regenerated').classList.remove('hidden');
+    $('#two-factor-regenerate-code').value = '';
+    toast('Neue Wiederherstellungscodes erstellt');
+  } catch (error) { $('#two-factor-error').textContent = error.message; }
+});
+$('#disable-two-factor')?.addEventListener('click', async () => {
+  if (!confirm('Zwei-Faktor-Authentifizierung wirklich deaktivieren?')) return;
+  try {
+    await api('/auth/2fa/disable', {method: 'POST', body: JSON.stringify({current_password: $('#two-factor-disable-password').value})});
+    toast('Zwei-Faktor-Authentifizierung deaktiviert. Bitte erneut anmelden.');
+    await logout(false);
+  } catch (error) { $('#two-factor-error').textContent = error.message; }
+});
+
+function renderDatabaseMaintenance(data) {
+  const status = $('#database-maintenance-status');
+  const details = $('#database-maintenance-details');
+  const cleanup = $('#cleanup-manager-database');
+  if (!data?.supported) {
+    status.textContent = 'Die Datenbankbereinigung ist nur für SQLite verfügbar.';
+    cleanup.disabled = true;
+    details.innerHTML = '';
+    return;
+  }
+  const items = [
+    ['Veraltete aktive Läufe', data.stale_active_runs],
+    ['Verwaiste Mount-Einträge', data.stale_mount_rows],
+    ['Verwaiste Repository-Zugänge', data.orphan_repository_access_rows],
+    ['Verwaiste Geräteaktionen', data.orphan_host_action_rows],
+    ['Alte SSH-Klartexttabelle', data.legacy_host_action_table ? data.legacy_host_action_rows : 0],
+    ['Verwaiste Benachrichtigungszustellungen', data.orphan_notification_deliveries],
+    ['Zeitpläne mit ungültigen Zielen', data.schedule_rows_with_invalid_targets],
+    ['Freie SQLite-Seiten', data.freelist_pages],
+  ];
+  status.textContent = data.vacuum_pending
+    ? 'Die logische Bereinigung ist abgeschlossen. Der ausstehende SQLite-Neuaufbau wird beim nächsten Manager-Start vor Freigabe der WebUI ausgeführt.'
+    : (data.changes_available ? 'Bereinigbare Einträge wurden gefunden.' : 'Keine verwaisten oder veralteten Einträge gefunden.');
+  status.classList.toggle('warning-state', Boolean(data.changes_available));
+  details.innerHTML = `<div class="table-scroll"><table class="data-table"><tbody>${items.map(([label, value]) => `<tr><th>${esc(label)}</th><td>${Number(value || 0)}</td></tr>`).join('')}<tr><th>Geschätzt freigebbarer Speicher</th><td>${formatBytes(Number(data.reclaimable_bytes_estimate || 0))}</td></tr></tbody></table></div>`;
+  cleanup.disabled = !data.changes_available;
+}
+
+$('#inspect-manager-database')?.addEventListener('click', async (event) => {
+  const release = markButtonBusy(event.currentTarget, 'Wird geprüft …');
+  try { renderDatabaseMaintenance(await api('/system/database-maintenance')); }
+  catch (error) { toast(error.message, true); }
+  finally { release(); }
+});
+$('#cleanup-manager-database')?.addEventListener('click', async (event) => {
+  if (!confirm('Manager-Datenbank sicher bereinigen? Vorher wird eine lokale SQLite-Sicherheitskopie erstellt.')) return;
+  const release = markButtonBusy(event.currentTarget, 'Wird bereinigt …');
+  try {
+    const result = await api('/system/database-maintenance', {method: 'POST', body: JSON.stringify({confirm: true, create_safety_copy: true, vacuum: true})});
+    renderDatabaseMaintenance(result.after);
+    $('#database-maintenance-status').textContent = result.restart_required
+      ? `Logische Bereinigung abgeschlossen. Sicherheitskopie: ${result.safety_copy || 'nicht erstellt'}. SQLite-Neuaufbau wird beim nächsten Manager-Start ausgeführt.`
+      : `Bereinigung abgeschlossen. Sicherheitskopie: ${result.safety_copy || 'nicht erstellt'}`;
+    toast(result.restart_required ? 'Bereinigt; Neustart für SQLite-Neuaufbau erforderlich' : 'Manager-Datenbank bereinigt');
+  } catch (error) { toast(error.message, true); }
+  finally { release(); }
+});
+
 const BBM_ACTION_HANDLERS = Object.freeze({
   removeEntity, action, showRun, resetRepositoryState, initRepository, compactRepository, goToView, goToRuns,
   toggleJobActions, cancelExecution, retryExecution, deleteExecution, refreshRepoSize, testRepository,
   clearRepositoryCache, setRepositoryEnabled, editHost, checkHostVersion, setHostEnabled, editHostSshAction, runHostSshAction, deleteHostSshAction, editRepository, copyRepositoryPublicKey, editJob, setJobEnabled,
   bootstrapJob, confirmRepositoryLocation, editSchedule, deleteSchedule, openRepositoryArchives,
-  editUser, resetUserPassword, deleteUser, showRepositoryDiagnostic, showRepositoryStatusDetails,
+  editUser, resetUserPassword, resetUserTwoFactor, deleteUser, showRepositoryDiagnostic, showRepositoryStatusDetails,
 });
 
 document.addEventListener('click', (event) => {
@@ -5323,7 +5596,7 @@ document.addEventListener('click', (event) => {
 Object.assign(window, {
   removeEntity, action, showRun, openActiveRun, resetRepositoryState, initRepository, compactRepository, goToView, goToRuns, toggleJobActions, cancelExecution, retryExecution, deleteExecution, cleanupRunHistory,
   refreshRepoSize, testRepository, clearRepositoryCache, setRepositoryEnabled, downloadBackup, deleteBackup, rotateControllerKey, editHost, setHostEnabled, editHostSshAction, runHostSshAction, deleteHostSshAction, editRepository, editJob, setJobEnabled, editSchedule, deleteSchedule, prepareRepositoryImport,
-  openRepositoryArchives, archiveInfo, renameArchive, deleteArchive, deleteSelectedArchives, openArchiveBrowser, prepareRestore, exportBrowserSelection, editUser, resetUserPassword, deleteUser,
+  openRepositoryArchives, archiveInfo, renameArchive, deleteArchive, deleteSelectedArchives, openArchiveBrowser, prepareRestore, exportBrowserSelection, editUser, resetUserPassword, resetUserTwoFactor, deleteUser,
   showRepositoryDiagnostic, showRepositoryStatusDetails,
 });
 

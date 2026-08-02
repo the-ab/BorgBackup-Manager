@@ -42,7 +42,7 @@ def test_language_and_theme_controls_are_per_user_not_global_settings():
     schemas = (PROJECT_ROOT / 'app/schemas.py').read_text(encoding='utf-8')
     security = (PROJECT_ROOT / 'app/security_store.py').read_text(encoding='utf-8')
 
-    assert 'id="preferences-dialog"' in html
+    assert 'id="profile-preferences-form"' in html
     assert 'name="language"' in html
     assert 'name="appearance"' in html
     settings_section = html.split('id="view-settings"', 1)[1].split('id="view-help"', 1)[0]

@@ -6,6 +6,7 @@ cd "$project_root"
 
 required_files=(
   LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md
+  RELEASE_CHECKLIST.de.md RELEASE_CHECKLIST.md
   .gitignore .dockerignore VERSION app/release.py scripts/project-audit.py
   compose.yaml
   docker-compose/compose.yaml docker-compose/.env.example
@@ -39,9 +40,22 @@ cleanup_runtime() {
 }
 trap cleanup_runtime EXIT
 
-BBM_DATA_DIR="$runtime_dir" \
-BBM_DATABASE_URL="sqlite:///$runtime_dir/test.db" \
-pytest -q
+mapfile -t test_files < <(find tests -maxdepth 1 -type f -name 'test_*.py' -print | sort)
+((${#test_files[@]} > 0)) || { echo "No test files found." >&2; exit 1; }
+test_group_count=5
+for ((group_index=0; group_index<test_group_count; group_index++)); do
+  group_files=()
+  for ((file_index=group_index; file_index<${#test_files[@]}; file_index+=test_group_count)); do
+    group_files+=("${test_files[$file_index]}")
+  done
+  ((${#group_files[@]} > 0)) || continue
+  echo "Running test group $((group_index + 1))/$test_group_count (${#group_files[@]} files) ..."
+  group_runtime_dir="$runtime_dir/group-$((group_index + 1))"
+  mkdir -p "$group_runtime_dir"
+  BBM_DATA_DIR="$group_runtime_dir" \
+  BBM_DATABASE_URL="sqlite:///$group_runtime_dir/test.db" \
+  pytest -q -o faulthandler_timeout=60 "${group_files[@]}"
+done
 
 cleanup_runtime
 trap - EXIT

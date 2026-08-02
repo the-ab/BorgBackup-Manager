@@ -41,3 +41,17 @@ The policy covers the BorgBackup Manager application, its release scripts and
 its container configuration. Vulnerabilities in BorgBackup, OpenSSH, OpenSSL,
 Docker, the host operating system or other third-party components should also be
 reported to their respective upstream projects.
+## Authentication hardening and external blocking
+
+BorgBackup Manager supports per-user TOTP two-factor authentication with one-time recovery codes. TOTP secrets are encrypted in the security database and recovery codes are stored only as hashes. The setup QR code is generated locally from the provisioning URI; no external QR service receives the secret. Recovery codes are explicitly labelled, shown in full only at creation or regeneration, and each code is valid once. Enabling, disabling or administratively resetting 2FA revokes existing sessions for that account.
+
+Saved host SSH action commands are authenticated-encrypted with the same master-key trust anchor in `security.db`. Upgrading from the legacy plaintext table imports and verifies all rows before dropping the source table, detects empty or interrupted legacy tables, checkpoints SQLite WAL state, vacuums `manager.db`, and scans the database plus WAL/SHM files for migrated command remnants. Run previews and normal diagnostics do not include command text. General database-maintenance VACUUM work is deferred to application startup so an exclusive SQLite lock cannot disrupt live API requests.
+
+The persistent JSON Lines log `/data/logs/access.log` is intended for security monitoring and external blocking tools. Events include `login_failed`, `login_blocked`, `login_success`, `login_two_factor_required`, `logout` and ordinary `http_access`. Credentials, second-factor values, recovery codes and session tokens are never included. Log rotation uses `BBM_LOG_MAX_BYTES` and `BBM_LOG_ROTATIONS`.
+
+When Fail2ban, CrowdSec or a reverse proxy performs blocking, ensure that the manager receives the real client address only from trusted proxies configured through `BBM_TRUSTED_PROXY_CIDRS`. Never trust forwarded headers from arbitrary sources. Test every filter/parser with sanitized sample lines before enabling a firewall action, and whitelist administrative networks where appropriate.
+
+## Database maintenance
+
+The WebUI database-maintenance action is deliberately conservative. It previews candidate rows, refuses to run while executions or backup tasks are active, creates a verified SQLite safety copy and never bulk-deletes normal devices, repositories, jobs or completed run history. Maintenance copies are stored in `/data/maintenance-backups` and are not included in update rollback archives.
+

@@ -16,6 +16,7 @@ from typing import Callable
 from tempfile import NamedTemporaryFile, mkdtemp
 
 from cryptography.exceptions import InvalidTag
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
@@ -57,6 +58,167 @@ RESTORE_COMPONENTS = ("manager.db", "settings.json", "notifications.json", "ssh"
 
 ProgressCallback = Callable[[dict], None]
 
+
+_REQUIRED_SYSTEM_SECRET_NAMES = {
+    "controller_private_key",
+    "controller_public_key",
+    "repository_ssh_host_private_key",
+    "repository_ssh_host_public_key",
+    "tls_certificate",
+    "tls_private_key",
+}
+
+
+def _sqlite_integrity_check(path: Path, label: str) -> None:
+    if not path.is_file():
+        raise ValueError(f"{label} fehlt")
+    try:
+        with sqlite3.connect(path, timeout=60) as connection:
+            result = connection.execute("PRAGMA quick_check").fetchone()
+    except sqlite3.Error as exc:
+        raise ValueError(f"{label} kann nicht gelesen werden") from exc
+    if not result or str(result[0]).casefold() != "ok":
+        raise ValueError(f"{label} ist beschädigt: {result[0] if result else 'keine Prüfausgabe'}")
+
+
+def _validate_security_backup_pair(
+    security_database: Path,
+    master_key_path: Path,
+    *,
+    require_runtime_identity: bool,
+) -> dict[str, int]:
+    """Verify that the security database and master key form a usable pair.
+
+    The runtime SSH/TLS files are intentionally not persistent. Their encrypted
+    source values live in security.db and can only be recovered with master.key.
+    A manager backup must never be reported as successful when this pair is
+    missing, corrupt or mutually incompatible.
+    """
+    _sqlite_integrity_check(security_database, "Security-Datenbank")
+    if not master_key_path.is_file():
+        raise ValueError("Master-Key fehlt; vollständiges Manager-Backup ist nicht möglich")
+    try:
+        key = master_key_path.read_bytes().strip()
+        cipher = Fernet(key)
+    except (OSError, ValueError, TypeError) as exc:
+        raise ValueError("Master-Key ist ungültig") from exc
+
+    try:
+        with sqlite3.connect(security_database, timeout=60) as connection:
+            tables = {str(row[0]) for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            missing_tables = {"users", "secrets"} - tables
+            if missing_tables:
+                raise ValueError(
+                    "Security-Datenbank ist unvollständig; fehlt: " + ", ".join(sorted(missing_tables))
+                )
+            user_count = int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+            if user_count < 1:
+                raise ValueError("Security-Datenbank enthält kein Benutzerkonto")
+            secret_rows = connection.execute(
+                "SELECT scope,name,encrypted_value FROM secrets ORDER BY scope,name"
+            ).fetchall()
+            user_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+            two_factor_rows = connection.execute(
+                "SELECT id,username,two_factor_secret FROM users WHERE two_factor_enabled=1"
+            ).fetchall() if "two_factor_secret" in user_columns else []
+            host_ssh_action_rows = connection.execute(
+                "SELECT id,name,encrypted_command FROM host_ssh_actions ORDER BY id"
+            ).fetchall() if "host_ssh_actions" in tables else []
+    except sqlite3.Error as exc:
+        raise ValueError("Security-Datenbank konnte nicht vollständig geprüft werden") from exc
+
+    system_names: set[str] = set()
+    for scope, name, encrypted_value in secret_rows:
+        value = str(encrypted_value or "")
+        if not value.startswith("v2:"):
+            raise ValueError(f"Geheimnis {scope}/{name} verwendet ein nicht unterstütztes Format")
+        try:
+            cipher.decrypt(value[3:].encode("ascii"))
+        except (InvalidToken, UnicodeEncodeError, ValueError) as exc:
+            raise ValueError(
+                f"Geheimnis {scope}/{name} kann mit dem gesicherten Master-Key nicht entschlüsselt werden"
+            ) from exc
+        if str(scope) == "system":
+            system_names.add(str(name))
+
+    for user_id, username, encrypted_value in two_factor_rows:
+        value = str(encrypted_value or "")
+        if not value.startswith("v2:"):
+            raise ValueError(f"2FA-Geheimnis für Benutzer {username or user_id} verwendet ein nicht unterstütztes Format")
+        try:
+            cipher.decrypt(value[3:].encode("ascii"))
+        except (InvalidToken, UnicodeEncodeError, ValueError) as exc:
+            raise ValueError(
+                f"2FA-Geheimnis für Benutzer {username or user_id} kann mit dem gesicherten Master-Key nicht entschlüsselt werden"
+            ) from exc
+
+    for action_id, name, encrypted_value in host_ssh_action_rows:
+        value = str(encrypted_value or "")
+        if not value.startswith("v2:"):
+            raise ValueError(f"SSH-Aktion {name or action_id} verwendet ein nicht unterstütztes Verschlüsselungsformat")
+        try:
+            cipher.decrypt(value[3:].encode("ascii"))
+        except (InvalidToken, UnicodeEncodeError, ValueError) as exc:
+            raise ValueError(
+                f"SSH-Aktion {name or action_id} kann mit dem gesicherten Master-Key nicht entschlüsselt werden"
+            ) from exc
+
+    if require_runtime_identity:
+        missing_secrets = _REQUIRED_SYSTEM_SECRET_NAMES - system_names
+        if missing_secrets:
+            raise ValueError(
+                "Security-Datenbank enthält nicht alle SSH-/TLS-Identitäten; fehlt: "
+                + ", ".join(sorted(missing_secrets))
+            )
+    return {
+        "users": user_count,
+        "secrets": len(secret_rows),
+        "system_secrets": len(system_names),
+        "two_factor_users": len(two_factor_rows),
+        "host_ssh_actions": len(host_ssh_action_rows),
+    }
+
+
+
+def _unlink_sqlite_family(path: Path) -> None:
+    """Remove a temporary SQLite database and all WAL/SHM sidecars."""
+    for candidate in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm")):
+        candidate.unlink(missing_ok=True)
+
+
+def cleanup_stale_security_snapshots(*, older_than_seconds: int = 3600) -> int:
+    """Remove abandoned temporary security snapshots from interrupted backups.
+
+    A missing base database proves that remaining ``-wal``/``-shm`` files are
+    orphaned and can be removed immediately. Complete families are removed only
+    after the configured age threshold, avoiding interference with a snapshot
+    that might still be written by an already running process.
+    """
+    removed = 0
+    cutoff = datetime.now(timezone.utc).timestamp() - max(60, int(older_than_seconds))
+    bases: set[Path] = set()
+    for path in DATA_DIR.glob("bbm-security-*.sqlite3*"):
+        text = str(path)
+        if text.endswith("-wal") or text.endswith("-shm"):
+            text = text[:-4]
+        bases.add(Path(text))
+    for base in bases:
+        family = (base, Path(str(base) + "-wal"), Path(str(base) + "-shm"))
+        try:
+            existing = [item for item in family if item.is_file()]
+            if not existing:
+                continue
+            base_missing = not base.is_file()
+            old_enough = max(item.stat().st_mtime for item in existing) < cutoff
+            if base_missing or old_enough:
+                for item in existing:
+                    item.unlink(missing_ok=True)
+                    removed += 1
+        except OSError:
+            continue
+    return removed
 
 def _version_tuple(value: object) -> tuple[int, int, int]:
     match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?", str(value or "").strip())
@@ -198,17 +360,25 @@ def _write_plain_backup(
     the control-plane backup small makes update/restore operations predictable
     even when repositories are several TiB large.
     """
+    security_dir = SECURITY_DATABASE_PATH.parent
+    master_key_path = security_dir / "master.key"
+    require_runtime_identity = _version_tuple(app_version) >= _version_tuple("1.3.1")
+    _sqlite_integrity_check(_database_path(), "Manager-Datenbank")
+    source_security_inventory = _validate_security_backup_pair(
+        SECURITY_DATABASE_PATH, master_key_path, require_runtime_identity=require_runtime_identity
+    )
     with NamedTemporaryFile(prefix="bbm-db-", suffix=".sqlite3", dir=DATA_DIR, delete=False) as temporary:
         snapshot = Path(temporary.name)
     try:
         _report(progress, stage="database", message="Datenbank-Snapshot wird erstellt …", percent=10.0)
         _sqlite_snapshot(snapshot)
+        _sqlite_integrity_check(snapshot, "Manager-Datenbank-Snapshot")
         _report(progress, stage="manager_data", message="Manager-Daten und Sicherheitseinstellungen werden verpackt …", percent=28.0)
         permissions: dict[str, int] = {}
         compression_type, compression_level, compression_name = _compression_settings(compression)
         manifest = {
             "format": BACKUP_FORMAT,
-            "format_version": 6,
+            "format_version": 7,
             "backup_type": "manager",
             "app_version": app_version,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -221,7 +391,17 @@ def _write_plain_backup(
             "borg_security_included": False,
             "client_borg_cache_included": False,
             "compression": compression_name,
-            "includes": ["database", "security_database", "master_key", "settings", "notification_settings", "migration_environment"],
+            "includes": [
+                "database", "security_database", "master_key", "settings",
+                "notification_settings", "migration_environment",
+                "controller_keys", "repository_ssh_host_keys", "repository_credentials",
+                "borg_keyfiles", "tls_material", "notification_secrets",
+            ],
+            "security_inventory": source_security_inventory,
+            "regenerable_not_included": [
+                "authorized_keys", "runtime_secret_files", "run_logs", "debug_logs",
+                "exports", "backup_artifacts", "archive_cache", "borg_cache", "borg_security",
+            ],
         }
         zip_kwargs = {"compression": compression_type}
         if compression_level is not None:
@@ -236,43 +416,43 @@ def _write_plain_backup(
             if NOTIFICATION_SETTINGS_PATH.is_file():
                 archive.write(NOTIFICATION_SETTINGS_PATH, "data/notifications.json")
                 permissions["data/notifications.json"] = 0o600
-            security_dir = DATA_DIR / "security"
-            if SECURITY_DATABASE_PATH.is_file():
-                with NamedTemporaryFile(prefix="bbm-security-", suffix=".sqlite3", dir=DATA_DIR, delete=False) as security_temporary:
-                    security_snapshot = Path(security_temporary.name)
+            with NamedTemporaryFile(prefix="bbm-security-", suffix=".sqlite3", dir=DATA_DIR, delete=False) as security_temporary:
+                security_snapshot = Path(security_temporary.name)
+            try:
+                source = sqlite3.connect(SECURITY_DATABASE_PATH, timeout=60)
+                target = sqlite3.connect(security_snapshot)
                 try:
-                    source = sqlite3.connect(SECURITY_DATABASE_PATH, timeout=60)
-                    target = sqlite3.connect(security_snapshot)
-                    try:
-                        source.backup(target)
-                        has_sessions = target.execute(
-                            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
+                    source.backup(target)
+                    has_sessions = target.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
+                    ).fetchone()
+                    if has_sessions:
+                        has_reload_tokens = target.execute(
+                            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_reload_tokens'"
                         ).fetchone()
-                        if has_sessions:
-                            has_reload_tokens = target.execute(
-                                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_reload_tokens'"
-                            ).fetchone()
-                            if has_reload_tokens:
-                                target.execute("DELETE FROM session_reload_tokens")
-                            target.execute("DELETE FROM sessions")
-                            target.commit()
-                    finally:
-                        target.close(); source.close()
-                    archive.write(security_snapshot, "data/security/security.db")
-                    permissions["data/security/security.db"] = 0o600
+                        if has_reload_tokens:
+                            target.execute("DELETE FROM session_reload_tokens")
+                        target.execute("DELETE FROM sessions")
+                        target.commit()
                 finally:
-                    security_snapshot.unlink(missing_ok=True)
-            for security_file in ("master.key",):
-                path = security_dir / security_file
-                if path.is_file() and not path.is_symlink():
-                    archive.write(path, f"data/security/{security_file}")
-                    permissions[f"data/security/{security_file}"] = 0o600
+                    target.close(); source.close()
+                snapshot_inventory = _validate_security_backup_pair(
+                    security_snapshot, master_key_path, require_runtime_identity=require_runtime_identity
+                )
+                if snapshot_inventory != source_security_inventory:
+                    raise ValueError("Security-Datenbank-Snapshot stimmt nicht mit dem Ausgangsbestand überein")
+                archive.write(security_snapshot, "data/security/security.db")
+                permissions["data/security/security.db"] = 0o600
+            finally:
+                _unlink_sqlite_family(security_snapshot)
+            archive.write(master_key_path, "data/security/master.key")
+            permissions["data/security/master.key"] = 0o600
             _report(progress, stage="finalize_archive", message="Manager-Backup-Archiv wird abgeschlossen …", percent=74.0, current=None, total=None, bytes_done=0)
             archive.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
             archive.writestr("permissions.json", json.dumps(permissions, indent=2, sort_keys=True) + "\n")
         return manifest
     finally:
-        snapshot.unlink(missing_ok=True)
+        _unlink_sqlite_family(snapshot)
 
 
 def _write_cache_backup(
@@ -1244,8 +1424,17 @@ def prepare_full_backup_restore(path: Path, passphrase: str | None = None) -> tu
         if not migration_path.is_file():
             raise ValueError("Backup enthält keine Migrationsumgebung")
         _parse_env(migration_path)
-        if not (staging / "data" / "manager.db").is_file():
+        manager_database = staging / "data" / "manager.db"
+        security_database = staging / "data" / "security" / "security.db"
+        master_key = staging / "data" / "security" / "master.key"
+        if not manager_database.is_file():
             raise ValueError("Backup enthält keine Manager-Datenbank")
+        _sqlite_integrity_check(manager_database, "Manager-Datenbank im Backup")
+        _validate_security_backup_pair(
+            security_database,
+            master_key,
+            require_runtime_identity=int(manifest.get("format_version") or 0) >= 7,
+        )
         return staging, manifest
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)

@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.2.10
+# Installation and Operations — BorgBackup Manager 1.3.4
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.2.10.zip
+BorgBackup-Manager-1.3.4.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.2.10.zip
+unzip /path/BorgBackup-Manager-1.3.4.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.2.10.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.3.4.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -119,7 +119,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.2.10` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
+`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.3.4` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
 
 During first start the entrypoint checks `/repositories` using `BBM_BORG_UID` and `BBM_BORG_GID`. If the mount is empty and is owned by `root` only because Docker created the host directory, only the mount root is assigned to the configured UID/GID and receives owner read/write/execute access. The entrypoint never runs recursive `chown` on repositories. Existing non-empty data therefore requires correct host ownership, group permissions or ACLs. NFS deployments with `root_squash` must configure matching numeric UID/GID or server-side permissions.
 
@@ -290,7 +290,7 @@ sudo -n mount /mnt/offline-backup
 sudo -n umount /mnt/offline-backup
 ```
 
-The WebUI does not expose an ad-hoc SSH console. Only saved actions can be started, and every start requires confirmation. Name, command, target device, enabled state, and timeout are stored in `manager.db`. **Do not put credentials or tokens into commands**, because command text is not encrypted. Interactive password prompts are unsupported; use a narrowly scoped sudoers rule with `sudo -n` when elevated privileges are required. Output and errors are recorded as regular runs and can be cancelled from the live log.
+The WebUI does not expose an ad-hoc SSH console. Only saved actions can be started, and every start requires confirmation. Name, command, target device, enabled state, and timeout are protected with the existing master key; command text is authenticated-encrypted in `/data/security/security.db`. On the first v1.3.4 start, existing plaintext rows are fully imported and verified by decrypting them again before the old `manager.db` table is removed. An empty or previously abandoned legacy table is detected as well. Before the WebUI is made available, a checkpoint and `VACUUM` sanitize the database and WAL; a final scan then verifies that no migrated command remains in `manager.db`, `manager.db-wal`, or `manager.db-shm`. A failed step remains retryable and never leaves an accepted partially migrated action set. Run previews and normal logs expose only the action name and target device. Interactive password prompts remain unsupported; use a narrowly scoped sudoers rule with `sudo -n` when elevated privileges are required. Output and errors are recorded as regular runs and can be cancelled from the live log.
 
 ## 9. Create or attach a repository
 
@@ -474,6 +474,8 @@ Restore modes:
 
 Extraction runs on the target device. Verify free space, ownership and application consistency first. A dry-run is strongly recommended for large or destructive restores.
 
+BBM first performs a streamed Borg metadata pass over the selected archive objects to determine total count and original size. The live dialog then displays processed/total files and objects, processed/remaining bytes, percentage, current rate, ETA and current path. Dry-runs use the same progress view. Large selections therefore require one additional metadata pass, but the complete item list is never loaded into manager memory.
+
 ## 18. Notifications
 
 Open **System -> Notifications** and configure one or more channels:
@@ -493,13 +495,13 @@ Since v1.0.77 manager state and Borg caches are separate backup types. Newly cre
 
 ### Create manager backup
 
-Manager backups contain the application database, security database, master key, settings, controller/repository SSH keys, Borg keyfiles and TLS files. Repository data, full run logs, `/data/borg-cache`, `/data/borg-security` and client Borg caches are excluded from newly created manager backups.
+Manager backups contain the application database, security database, master key, settings, notification configuration and `migration.env`. Controller keys, repository SSH host keys, Borg keyfiles/passphrases, TLS material and notification secrets are encrypted inside the security database; the master key is the mandatory decryption anchor. `authorized_keys` and clear-text files below `/run/bbm-secrets` are regenerated from the databases after restore. Before storing the artifact, BBM validates both SQLite databases, the required security tables, the master key and decryptability of every stored secret. A missing component or mismatched key makes backup creation fail. Repository data, existing backup artifacts, exports, complete run/debug logs, `/data/borg-cache`, `/data/borg-security` and client Borg caches are excluded.
 
 New manager backups are mandatory streaming AES-256-GCM encrypted `.bbm` files protected by a non-stored passphrase of at least twelve characters. Compression is selectable: none, Deflate 1, Deflate 6 (default), or Deflate 9. Import and restore require metadata version v1.1.0 or newer. The Web UI shows live phase/progress/event output and resumes an active status after reload.
 
 ### Create split cache artifacts
 
-Starting with v1.2.10, one cache-backup run no longer creates a single large bundle. It emits independent files:
+Starting with v1.3.0, one cache-backup run no longer creates a single large bundle. It emits independent files:
 
 - `borgbackup-manager-cache-manager-v...` for `/data/borg-cache` and `/data/borg-security`
 - `borgbackup-manager-cache-client-<device-name>-h<ID>-v...` for each selected device
@@ -516,7 +518,7 @@ Under **Manage Borg cache**, manager and client state can still be scanned, rese
 
 ### Upload
 
-Upload supported manager or cache `.bbm`/`.zip` artifacts under **System -> Manager Backup -> Upload backup**. Type, filename, limits and structure are validated, files are stored with mode `0600`, and existing names are never overwritten. Manager backups use the normal backup limits; cache artifacts use the separate `BBM_BACKUP_CACHE_*` limits.
+Upload supported manager or cache `.bbm`/`.zip` artifacts in the compact **Upload backup** section directly below **Create manager backup** under **System -> Manager Backup**. Type, filename, limits and structure are validated, files are stored with mode `0600`, and existing names are never overwritten. Manager backups use the normal backup limits; cache artifacts use the separate `BBM_BACKUP_CACHE_*` limits.
 
 ### Restore manager backup
 
@@ -536,7 +538,7 @@ Administrators manage accounts in **System -> Users**. New or reset accounts mus
 
 The last active administrator cannot be disabled, deleted or demoted. Regular users are read-only and cannot access administrative APIs through direct URLs.
 
-Every user can store language, appearance, density and list height. English and German are available.
+Every user opens **Profile** directly below the username in the sidebar. It opens a dedicated profile page with an account overview, directly editable **Appearance & Language** settings, an inline password form, and **Two-factor authentication** management. Language, appearance, density and list height are stored per user. English and German are available.
 
 ## 21. System settings and diagnostics
 
@@ -715,3 +717,57 @@ bash -n install.sh update.sh recovery.sh restore-backup.sh
 sh -n docker/entrypoint.sh docker/borg-serve.sh
 PYTHONPATH=. pytest -q
 ```
+
+## Two-factor authentication, access log and external blocking tools
+
+Each user can start TOTP setup under **Profile -> Two-factor authentication** in the sidebar. The current password is verified again. BBM locally renders a QR code from the same `otpauth://` URI for direct scanning; the Base32 secret and URI remain available for manual setup, and no external QR service is contacted. Confirm setup with a current six-digit code. The ten codes appear in an explicitly labelled **Recovery codes** section stating that they are shown in full only during this setup and that every code is valid only once. Store them outside the manager.
+
+The persistent access log is stored on the host at:
+
+```text
+${BBM_DATA_PATH}/logs/access.log
+```
+
+With default paths:
+
+```text
+/docker_data/borgbackup-manager/data/logs/access.log
+```
+
+A Fail2ban filter at `/etc/fail2ban/filter.d/borgbackup-manager.conf` can use:
+
+```ini
+[Definition]
+failregex = ^\{.*"event":"login_(?:failed|blocked)".*"remote_address":"<HOST>".*\}$
+ignoreregex =
+```
+
+Example `/etc/fail2ban/jail.d/borgbackup-manager.local`:
+
+```ini
+[borgbackup-manager]
+enabled = true
+filter = borgbackup-manager
+logpath = /docker_data/borgbackup-manager/data/logs/access.log
+backend = auto
+port = 8443
+findtime = 5m
+maxretry = 5
+bantime = 15m
+```
+
+Adapt `port` and `logpath`, then test before enabling:
+
+```bash
+sudo fail2ban-regex \
+  /docker_data/borgbackup-manager/data/logs/access.log \
+  /etc/fail2ban/filter.d/borgbackup-manager.conf
+```
+
+CrowdSec can acquire the same file as a custom file source. The custom parser must decode the JSON fields, set `evt.Meta.source_ip` from `remote_address`, and assign a custom `evt.Meta.log_type` to `login_failed`/`login_blocked`. A `leaky` scenario can evaluate that log type. Exact paths and YAML schemas depend on the installed CrowdSec version; verify the parser/scenario with `cscli explain` and CrowdSec configuration checks before allowing a bouncer to enforce firewall decisions.
+
+The access log never contains passwords, TOTP/recovery codes or session tokens. Behind a reverse proxy, configure `BBM_TRUSTED_PROXY_CIDRS` so only trusted proxy addresses may supply the real client IP.
+
+## Maintaining the manager database
+
+Under **System → System diagnostics → Clean manager database**, run **Inspect database** first. The preview lists only stale or orphaned technical rows. **Clean safely** creates a verified copy below `/data/maintenance-backups`, applies the listed repairs and runs SQLite optimization. The action is blocked while runs or manager/cache backup tasks are active.

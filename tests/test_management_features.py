@@ -4,6 +4,8 @@ import json
 import sqlite3
 import zipfile
 
+from cryptography.fernet import Fernet
+
 import pytest
 from pathlib import Path
 
@@ -88,13 +90,19 @@ def test_full_backup_contains_snapshot_manifest_and_keys(monkeypatch, tmp_path: 
     security_dir = data / "security"
     security_dir.mkdir()
     security_database = security_dir / "security.db"
+    master_key = Fernet.generate_key()
+    cipher = Fernet(master_key)
     security_connection = sqlite3.connect(security_database)
     security_connection.execute("CREATE TABLE users(id INTEGER PRIMARY KEY, username TEXT)")
     security_connection.execute("CREATE TABLE sessions(id INTEGER PRIMARY KEY, token_hash TEXT)")
+    security_connection.execute("CREATE TABLE secrets(scope TEXT, name TEXT, encrypted_value TEXT)")
     security_connection.execute("INSERT INTO users(username) VALUES ('admin')")
     security_connection.execute("INSERT INTO sessions(token_hash) VALUES ('must-not-be-restored')")
+    for secret_name in sorted(backups._REQUIRED_SYSTEM_SECRET_NAMES):
+        encrypted = "v2:" + cipher.encrypt(f"value-{secret_name}".encode()).decode("ascii")
+        security_connection.execute("INSERT INTO secrets VALUES ('system', ?, ?)", (secret_name, encrypted))
     security_connection.commit(); security_connection.close()
-    (security_dir / "master.key").write_text("test-master-key", encoding="utf-8")
+    (security_dir / "master.key").write_bytes(master_key + b"\n")
     monkeypatch.setattr(backups, "DATABASE_URL", f"sqlite:///{database}")
     monkeypatch.setattr(backups, "SECURITY_DATABASE_PATH", security_database)
     passphrase = "Serverwechsel-Backup-2026!"
@@ -263,11 +271,23 @@ def test_encrypted_manager_backup_roundtrip_and_wrong_passphrase(monkeypatch, tm
     connection.execute("INSERT INTO sample VALUES ('encrypted')")
     connection.commit(); connection.close()
     (data / "settings.json").write_text('{"density":"compact"}', encoding="utf-8")
-    (data / "ssh").mkdir()
-    (data / "ssh" / "id_ed25519").write_text("private", encoding="utf-8")
+    security_dir = data / "security"
+    security_dir.mkdir()
+    security_database = security_dir / "security.db"
+    master_key = Fernet.generate_key()
+    cipher = Fernet(master_key)
+    with sqlite3.connect(security_database) as connection:
+        connection.execute("CREATE TABLE users(id INTEGER PRIMARY KEY, username TEXT)")
+        connection.execute("INSERT INTO users(username) VALUES ('admin')")
+        connection.execute("CREATE TABLE secrets(scope TEXT, name TEXT, encrypted_value TEXT)")
+        for secret_name in sorted(backups._REQUIRED_SYSTEM_SECRET_NAMES):
+            encrypted = "v2:" + cipher.encrypt(f"value-{secret_name}".encode()).decode("ascii")
+            connection.execute("INSERT INTO secrets VALUES ('system', ?, ?)", (secret_name, encrypted))
+    (security_dir / "master.key").write_bytes(master_key + b"\n")
     monkeypatch.setattr(backups, "DATA_DIR", data)
     monkeypatch.setattr(backups, "BACKUP_DIR", data / "backups")
     monkeypatch.setattr(backups, "SETTINGS_PATH", data / "settings.json")
+    monkeypatch.setattr(backups, "SECURITY_DATABASE_PATH", security_database)
     monkeypatch.setattr(backups, "DATABASE_URL", f"sqlite:///{database}")
     result = backups.create_full_backup("1.1.0", "verschluesselt", "correct horse")
 
@@ -608,3 +628,33 @@ def test_all_logs_cleanup_removes_protected_runs_deliveries_and_source_statistic
         assert job.source_stats_checked_at is None
         assert job.source_stats_origin is None
         assert job.source_stats_detail_json == "{}"
+
+
+def test_restore_run_json_exposes_persisted_progress_statistics():
+    from datetime import datetime, timezone
+    import app.main as main_module
+    from app.models import Run
+
+    row = Run(
+        id=999002,
+        job_id=None,
+        job_name_snapshot="restore-test",
+        action="restore",
+        status="success",
+        output="",
+        error="",
+        log_output="",
+        restore_total_size_bytes=4096,
+        restore_processed_size_bytes=4096,
+        restore_total_file_count=12,
+        restore_processed_file_count=12,
+        created_at=datetime.now(timezone.utc),
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+    )
+    payload = main_module.run_json(row, include_details=False, log_file_available=False)
+    assert payload["restore_total_size_bytes"] == 4096
+    assert payload["restore_processed_file_count"] == 12
+    assert payload["restore_progress"]["phase"] == "finished"
+    assert payload["restore_progress"]["percent"] == 100.0
+    assert payload["restore_progress"]["processed_files"] == 12

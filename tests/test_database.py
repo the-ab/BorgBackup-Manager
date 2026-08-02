@@ -46,4 +46,16 @@ def test_supported_v110_database_receives_current_additive_columns():
         "backup_deduplicated_size_bytes", "backup_file_count",
         "backup_source_size_bytes_snapshot", "backup_source_file_count_snapshot",
         "backup_network_download_bytes", "backup_network_upload_bytes",
+        "restore_total_size_bytes", "restore_processed_size_bytes",
+        "restore_total_file_count", "restore_processed_file_count",
     } <= run_columns
+
+
+def test_file_sqlite_uses_wal_and_busy_timeout():
+    from app.database import engine
+    if engine.dialect.name != "sqlite" or not engine.url.database or engine.url.database == ":memory:":
+        return
+    with engine.connect() as connection:
+        assert str(connection.exec_driver_sql("PRAGMA journal_mode").scalar()).casefold() == "wal"
+        assert int(connection.exec_driver_sql("PRAGMA busy_timeout").scalar()) >= 30000
+        assert int(connection.exec_driver_sql("PRAGMA foreign_keys").scalar()) == 1

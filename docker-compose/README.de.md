@@ -36,7 +36,7 @@ Die Datei `.env` muss im selben Verzeichnis wie `compose.yaml` liegen. Sie wird 
 
 | Variable | Standard | Bedeutung |
 |---|---:|---|
-| `BBM_IMAGE_TAG` | `latest` | Zu verwendender GHCR-Tag. Für reproduzierbare Installationen wird ein fester Tag wie `v1.2.10` empfohlen. |
+| `BBM_IMAGE_TAG` | `latest` | Zu verwendender GHCR-Tag. Für reproduzierbare Installationen wird ein fester Tag wie `v1.3.4` empfohlen. |
 | `TZ` | `Europe/Berlin` | Zeitzone für WebUI, Zeitpläne und Borg-Läufe. Einen gültigen IANA-Zeitzonennamen verwenden. |
 | `BBM_HTTPS_PORT` | `8443` | Auf dem Docker-Host veröffentlichter HTTPS-Port der WebUI. |
 | `BBM_REPOSITORY_SSH_PORT` | `2222` | Auf dem Docker-Host veröffentlichter SSH-Port für Borg-Repository-Zugriffe. |
@@ -59,13 +59,13 @@ BBM_IMAGE_TAG=latest
 `latest` folgt dem jeweils zuletzt veröffentlichten Image. Für kontrollierte Updates besser eine feste Version verwenden:
 
 ```dotenv
-BBM_IMAGE_TAG=v1.2.10
+BBM_IMAGE_TAG=v1.3.4
 ```
 
 Das daraus verwendete Image lautet:
 
 ```text
-ghcr.io/the-ab/borgbackup-manager:v1.2.10
+ghcr.io/the-ab/borgbackup-manager:v1.3.4
 ```
 
 ## Netzwerk und TLS
@@ -362,6 +362,18 @@ Diese Variablen erzeugen die Anfangswerte einer neuen `settings.json`. Danach in
 | `BBM_STORAGE_GUARD_ENABLED` | `1` | Speicherplatz-Sperre standardmäßig aktivieren (`1`) oder deaktivieren (`0`). |
 | `BBM_STORAGE_GUARD_THRESHOLD_PERCENT` | `95` | Sperrgrenze der Speichernutzung, gültig `1` bis `100`. |
 
+## Zugriffs- und Authentifizierungslog
+
+### `BBM_ACCESS_LOG_PATH`
+
+Interner Containerpfad des maschinenlesbaren JSON-Lines-Zugriffslogs:
+
+```dotenv
+BBM_ACCESS_LOG_PATH=/data/logs/access.log
+```
+
+Der Standard liegt im persistenten `BBM_DATA_PATH` und ist auf dem Host normalerweise unter `${BBM_DATA_PATH}/logs/access.log` erreichbar. Das Log enthält HTTP-Zugriffe sowie erfolgreiche, fehlgeschlagene und blockierte Anmeldungen. Passwörter, 2FA-Codes, Wiederherstellungscodes und Sitzungstoken werden nicht gespeichert. Fail2ban oder CrowdSec können insbesondere die Ereignisse `login_failed` und `login_blocked` auswerten. Der Pfad sollte nur geändert werden, wenn er weiterhin innerhalb eines persistent eingebundenen und nur für Administratoren lesbaren Verzeichnisses liegt.
+
 ## Bereitschaftsprüfung und Protokollrotation
 
 ### `BBM_HEALTH_REQUIRE_SSHD`
@@ -374,7 +386,7 @@ Bei `1` gilt der Container nur dann als bereit, wenn neben der Webanwendung auch
 
 ### `BBM_LOG_MAX_BYTES`
 
-Maximale Größe eines Repository-SSH-Protokolls vor der Rotation:
+Maximale Größe eines Zugriffs-, Repository-SSH- oder Fehlerprotokolls vor der Rotation:
 
 ```dotenv
 BBM_LOG_MAX_BYTES=10485760
