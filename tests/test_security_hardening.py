@@ -39,7 +39,7 @@ def test_unsafe_browser_api_requires_csrf_header_and_matching_origin(monkeypatch
     user = main_module.AuthUser(
         id=1, username="admin", role="admin", enabled=True, must_change_password=False,
     )
-    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: user)
+    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: (user, "ok"))
     with TestClient(app, base_url="https://testserver") as client:
         missing = client.post("/api/auth/login", json={"username": "admin", "password": "irrelevant"})
         wrong_origin = client.post(
@@ -93,7 +93,7 @@ def test_restore_permissions_manifest_cannot_escape_staging(tmp_path: Path):
     staging.mkdir()
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
+        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 7, "backup_type": "manager", "app_version": "1.3.5"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"sqlite-placeholder")
         archive.writestr("permissions.json", json.dumps({"../victim": 0o777}))
@@ -111,7 +111,7 @@ def test_restore_rejects_archives_exceeding_entry_limit(monkeypatch, tmp_path: P
     staging.mkdir()
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
+        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 7, "backup_type": "manager", "app_version": "1.3.5"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"db")
     archive_bytes.seek(0)
@@ -124,7 +124,7 @@ def test_new_manager_backups_require_strong_encryption(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(backups, "BACKUP_DIR", tmp_path / "backups")
     monkeypatch.setattr(backups, "DATA_DIR", tmp_path)
     with pytest.raises(ValueError, match="verschlüsselt"):
-        backups.create_full_backup("1.1.0", "insecure", None)
+        backups.create_full_backup("1.3.5", "insecure", None)
     with pytest.raises(ValueError, match="mindestens 12"):
         backups._encrypt_backup(tmp_path / "missing.zip", tmp_path / "out.bbm", {}, "too-short")
 
@@ -163,7 +163,7 @@ def test_public_health_hides_components_and_admin_route_exposes_them(monkeypatch
     monkeypatch.setattr(main_module, "repository_sshd_listening", lambda: False)
     monkeypatch.setattr(main_module, "HEALTH_REQUIRE_SSHD", True)
     with TestClient(app, base_url="https://testserver") as client:
-        public = client.get("/api/health")
+        obsolete = client.get("/api/health")
         strict = client.get("/api/health/strict")
         denied = client.get("/api/system/health")
         login = client.post(
@@ -172,7 +172,7 @@ def test_public_health_hides_components_and_admin_route_exposes_them(monkeypatch
         )
         assert login.status_code == 200, login.text
         detailed = client.get("/api/system/health")
-    assert public.json() == {"status": "degraded"}
+    assert obsolete.status_code == 404
     assert strict.status_code == 503 and strict.json() == {"status": "degraded"}
     assert denied.status_code == 401
     assert detailed.status_code == 503
@@ -205,7 +205,7 @@ def test_restore_rejects_single_entry_with_extreme_compression(monkeypatch, tmp_
     staging.mkdir()
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
+        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 7, "backup_type": "manager", "app_version": "1.3.5"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"0" * 4096)
     archive_bytes.seek(0)
@@ -219,7 +219,7 @@ def test_restore_rejects_out_of_range_permission_modes(tmp_path: Path):
     staging.mkdir()
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
+        archive.writestr("manifest.json", json.dumps({"format": backups.BACKUP_FORMAT, "format_version": 7, "backup_type": "manager", "app_version": "1.3.5"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"db")
         archive.writestr("permissions.json", json.dumps({"data/manager.db": 0o10000}))

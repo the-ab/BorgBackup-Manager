@@ -113,7 +113,9 @@ def test_markdown_defaults_are_english_and_german_uses_de_suffix():
     assert "zentrale Webverwaltung" in readme_de
     assert "Manager host requirements" in install_en
     assert "Voraussetzungen des Manager-Hosts" in install_de
-    assert "System tab active state" in notes_en
-    assert "Aktive Markierung der System-Reiter" in notes_de
-    assert (PROJECT_ROOT / "app/RELEASE_NOTES.md").is_file()
-    assert (PROJECT_ROOT / "app/RELEASE_NOTES.de.md").is_file()
+    assert "Release notes history restored" in notes_en
+    assert "Reliable v1.3.5 baseline" in notes_en
+    assert "Release-Notes-Historie wiederhergestellt" in notes_de
+    assert "Verlässliche v1.3.5-Baseline" in notes_de
+    assert not (PROJECT_ROOT / "app/RELEASE_NOTES.md").exists()
+    assert not (PROJECT_ROOT / "app/RELEASE_NOTES.de.md").exists()

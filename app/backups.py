@@ -44,9 +44,9 @@ BACKUP_FORMAT = "borgbackup-manager-full-backup"
 CACHE_BACKUP_FORMAT = "borgbackup-manager-cache-backup"
 BACKUP_ENVELOPE_FORMAT = "borgbackup-manager-encrypted-backup"
 BACKUP_MAGIC = b"BBM-BACKUP-1\n"
-MIN_SUPPORTED_BACKUP_VERSION = "1.1.0"
+MIN_SUPPORTED_BACKUP_VERSION = "1.3.5"
 MANAGER_BACKUP_NAME = re.compile(
-    r"^borgbackup-manager-backup-v[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}-[a-zA-Z0-9_-]+\.(?:zip|bbm)$"
+    r"^borgbackup-manager-backup-v[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}-[a-zA-Z0-9_-]+\.bbm$"
 )
 CACHE_BACKUP_NAME = re.compile(
     r"^borgbackup-manager-cache-(?:(?:manager|client-[a-zA-Z0-9_-]+-h[0-9]+)-)?v[0-9A-Za-z.+-]+-[0-9]{8}-[0-9]{6}-[a-zA-Z0-9_-]+\.(?:zip|bbm)$"
@@ -319,7 +319,7 @@ def _compression_settings(value: str) -> tuple[int, int | None, str]:
     return choices[normalized]
 
 
-def _migration_env() -> str:
+def _environment_snapshot() -> str:
     keys = (
         "TZ", "BBM_HTTPS_PORT", "BBM_TLS_HOSTS", "BBM_SESSION_TTL_SECONDS",
         "BBM_SESSION_IDLE_TIMEOUT_SECONDS", "BBM_SESSION_COOKIE_NAME", "BBM_SESSION_COOKIE_SECURE",
@@ -362,7 +362,7 @@ def _write_plain_backup(
     """
     security_dir = SECURITY_DATABASE_PATH.parent
     master_key_path = security_dir / "master.key"
-    require_runtime_identity = _version_tuple(app_version) >= _version_tuple("1.3.1")
+    require_runtime_identity = True
     _sqlite_integrity_check(_database_path(), "Manager-Datenbank")
     source_security_inventory = _validate_security_backup_pair(
         SECURITY_DATABASE_PATH, master_key_path, require_runtime_identity=require_runtime_identity
@@ -386,14 +386,13 @@ def _write_plain_backup(
             "encrypted": False,
             "repository_data_included": False,
             "run_logs_included": False,
-            # Retain explicit false flags so old readers do not infer cache data.
             "borg_cache_included": False,
             "borg_security_included": False,
             "client_borg_cache_included": False,
             "compression": compression_name,
             "includes": [
                 "database", "security_database", "master_key", "settings",
-                "notification_settings", "migration_environment",
+                "notification_settings", "environment_snapshot",
                 "controller_keys", "repository_ssh_host_keys", "repository_credentials",
                 "borg_keyfiles", "tls_material", "notification_secrets",
             ],
@@ -407,7 +406,7 @@ def _write_plain_backup(
         if compression_level is not None:
             zip_kwargs["compresslevel"] = compression_level
         with zipfile.ZipFile(destination, "w", **zip_kwargs) as archive:
-            archive.writestr("migration.env", _migration_env())
+            archive.writestr("migration.env", _environment_snapshot())
             archive.write(snapshot, "data/manager.db")
             permissions["data/manager.db"] = 0o600
             if SETTINGS_PATH.is_file():
@@ -1068,6 +1067,11 @@ def _read_any_backup_manifest(archive: zipfile.ZipFile) -> dict:
     if not isinstance(manifest, dict) or manifest.get("format") not in {BACKUP_FORMAT, CACHE_BACKUP_FORMAT}:
         raise ValueError("Datei ist kein unterstütztes BorgBackup-Manager-Backup")
     _require_supported_backup_version(manifest)
+    expected_format_version = 7 if manifest.get("format") == BACKUP_FORMAT else 2
+    if int(manifest.get("format_version") or 0) != expected_format_version:
+        raise ValueError(
+            "Backup verwendet ein Format vor der einmaligen BorgBackup-Manager-v1.3.5-Baseline"
+        )
     return manifest
 
 
@@ -1075,17 +1079,15 @@ def _read_cache_backup_manifest(archive: zipfile.ZipFile) -> dict:
     manifest = _read_any_backup_manifest(archive)
     if manifest.get("format") != CACHE_BACKUP_FORMAT:
         raise ValueError("Backup ist kein eigenständiges Borg-Cache-Backup")
-    format_version = int(manifest.get("format_version") or 1)
-    if format_version not in {1, 2}:
-        raise ValueError("Cache-Backup verwendet eine nicht unterstützte Formatversion")
-    if format_version >= 2:
-        artifact_kind = str(manifest.get("cache_artifact_kind") or "")
-        if artifact_kind not in {"manager", "client"}:
-            raise ValueError("Cache-Backup enthält keinen gültigen Artefakttyp")
-        if artifact_kind == "manager" and manifest.get("client_borg_cache_included"):
-            raise ValueError("Manager-Cache-Artefakt enthält unerwartete Client-Caches")
-        if artifact_kind == "client" and manifest.get("borg_cache_included"):
-            raise ValueError("Client-Cache-Artefakt enthält unerwarteten Manager-Cache")
+    if int(manifest.get("format_version") or 0) != 2:
+        raise ValueError("Cache-Backup verwendet ein Format vor der v1.3.5-Baseline")
+    artifact_kind = str(manifest.get("cache_artifact_kind") or "")
+    if artifact_kind not in {"manager", "client"}:
+        raise ValueError("Cache-Backup enthält keinen gültigen Artefakttyp")
+    if artifact_kind == "manager" and manifest.get("client_borg_cache_included"):
+        raise ValueError("Manager-Cache-Artefakt enthält unerwartete Client-Caches")
+    if artifact_kind == "client" and manifest.get("borg_cache_included"):
+        raise ValueError("Client-Cache-Artefakt enthält unerwarteten Manager-Cache")
     return manifest
 
 
@@ -1143,11 +1145,10 @@ def _client_cache_entries_from_manifest(manifest: dict) -> list[dict]:
         }
         if status == "saved":
             archive_path = str(raw.get("archive_path") or "")
-            legacy_expected = f"data/client-borg-cache/host-{host_id}/repository-{repository_id}.tar"
             named_pattern = re.compile(
                 rf"^data/client-borg-cache/[A-Za-z0-9_-]+-h{host_id}/[A-Za-z0-9_-]+-r{repository_id}\.tar$"
             )
-            if archive_path != legacy_expected and not named_pattern.fullmatch(archive_path):
+            if not named_pattern.fullmatch(archive_path):
                 raise ValueError("Client-Cache-Metadaten enthalten einen ungültigen Archivpfad")
             _safe_relative_path(archive_path)
             item["archive_path"] = archive_path
@@ -1155,11 +1156,10 @@ def _client_cache_entries_from_manifest(manifest: dict) -> list[dict]:
             if borg_repository_id is None:
                 raise ValueError("Gesicherter Client-Sicherheitsstatus enthält keine Borg-Repository-ID")
             security_archive_path = str(raw.get("security_archive_path") or "")
-            legacy_expected_security = f"data/client-borg-security/host-{host_id}/repository-{repository_id}.tar"
             named_security_pattern = re.compile(
                 rf"^data/client-borg-security/[A-Za-z0-9_-]+-h{host_id}/[A-Za-z0-9_-]+-r{repository_id}\.tar$"
             )
-            if security_archive_path != legacy_expected_security and not named_security_pattern.fullmatch(security_archive_path):
+            if not named_security_pattern.fullmatch(security_archive_path):
                 raise ValueError("Client-Sicherheitsstatus-Metadaten enthalten einen ungültigen Archivpfad")
             _safe_relative_path(security_archive_path)
             item["security_archive_path"] = security_archive_path
@@ -1179,7 +1179,7 @@ def client_borg_cache_inventory(path: Path, passphrase: str | None = None) -> di
     return {
         "backup_version": manifest.get("app_version"),
         "created_at": manifest.get("created_at"),
-        "cache_artifact_kind": manifest.get("cache_artifact_kind") or "legacy_combined",
+        "cache_artifact_kind": str(manifest["cache_artifact_kind"]),
         "source_host_id": manifest.get("source_host_id"),
         "source_host_name": manifest.get("source_host_name"),
         "included": bool(manifest.get("client_borg_cache_included")),
@@ -1209,7 +1209,7 @@ def restore_client_borg_cache_from_backup(
 
     The target uses the same manager repository assignment, but may be a
     different connected device. This makes device replacement and cache
-    migration possible without importing a multi-device archive.
+    transfer possible without importing a multi-device archive.
     """
     target_repository_id = int(target_repository_id)
     source_host_id = int(source_host_id)
@@ -1420,10 +1420,10 @@ def prepare_full_backup_restore(path: Path, passphrase: str | None = None) -> tu
                 manifest = _safe_extract(archive, staging, skip_extract_prefixes=("data/client-borg-cache/", "data/client-borg-security/"))
                 if manifest.get("format") != BACKUP_FORMAT:
                     raise ValueError("Cache-Backup kann nicht als Manager-Backup wiederhergestellt werden")
-        migration_path = staging / "migration.env"
-        if not migration_path.is_file():
-            raise ValueError("Backup enthält keine Migrationsumgebung")
-        _parse_env(migration_path)
+        environment_path = staging / "migration.env"
+        if not environment_path.is_file():
+            raise ValueError("Backup enthält kein aktuelles Umgebungsabbild")
+        _parse_env(environment_path)
         manager_database = staging / "data" / "manager.db"
         security_database = staging / "data" / "security" / "security.db"
         master_key = staging / "data" / "security" / "master.key"
@@ -1433,7 +1433,7 @@ def prepare_full_backup_restore(path: Path, passphrase: str | None = None) -> tu
         _validate_security_backup_pair(
             security_database,
             master_key,
-            require_runtime_identity=int(manifest.get("format_version") or 0) >= 7,
+            require_runtime_identity=True,
         )
         return staging, manifest
     except Exception:
@@ -1450,9 +1450,8 @@ def apply_prepared_restore(staging: Path) -> None:
         incoming = source / component
         target = DATA_DIR / component
         if not incoming.exists():
-            # Backups created before the notification center must not retain a
-            # newer installation's channel configuration after a rollback.
-            # Notification secrets are already replaced with security.db.
+            # Optional current configuration files that are absent in the
+            # backup must not survive from the replaced installation.
             if component == "notifications.json":
                 target.unlink(missing_ok=True)
             continue
@@ -1495,7 +1494,7 @@ def validate_uploaded_backup(path: Path, name: str) -> dict:
             raise ValueError("Backup-Header enthält ungültige Verschlüsselungsparameter") from exc
         if len(salt) != 16 or len(nonce) != 12 or path.stat().st_size <= payload_offset + 16:
             raise ValueError("Verschlüsseltes Backup ist unvollständig")
-        backup_type = str(header.get("backup_type") or ("cache" if CACHE_BACKUP_NAME.fullmatch(name) else "manager"))
+        backup_type = str(header.get("backup_type") or "")
         if backup_type not in {"manager", "cache"}:
             raise ValueError("Backup-Header enthält einen unbekannten Backup-Typ")
         if backup_type == "cache" and not CACHE_BACKUP_NAME.fullmatch(name):
@@ -1567,7 +1566,7 @@ def list_full_backups() -> list[dict]:
         except (OSError, ValueError, KeyError, zipfile.BadZipFile, json.JSONDecodeError):
             pass
         stat_result = path.stat()
-        backup_type = str(manifest.get("backup_type") or ("cache" if CACHE_BACKUP_NAME.fullmatch(path.name) else "manager"))
+        backup_type = str(manifest.get("backup_type") or "")
         items.append({
             "name": path.name,
             "size_bytes": stat_result.st_size,

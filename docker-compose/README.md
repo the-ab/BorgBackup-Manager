@@ -22,7 +22,7 @@ sudo chmod 600 .env
 sudo editor .env
 ```
 
-The `.env` file must remain next to `compose.yaml`. It is also mounted read-only into the container so that legacy installations can be migrated safely. Do not store unrelated secrets in it, and restrict read access to administrators.
+The `.env` file must remain next to `compose.yaml`. It is mounted read-only into the container so current host settings can be included in verified manager backups. Do not store unrelated secrets in it, and restrict read access to administrators.
 
 ## What must be configured?
 
@@ -36,7 +36,7 @@ The `.env` file must remain next to `compose.yaml`. It is also mounted read-only
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `BBM_IMAGE_TAG` | `latest` | GHCR tag to deploy. Pin a release such as `v1.3.5` for reproducible installations. |
+| `BBM_IMAGE_TAG` | `latest` | GHCR tag to deploy. Pin a release such as `v1.3.8` for reproducible installations. |
 | `TZ` | `Europe/Berlin` | Time zone used by the Web UI, schedules, and Borg processes. Use a valid IANA time-zone name. |
 | `BBM_HTTPS_PORT` | `8443` | HTTPS Web UI port published on the Docker host. |
 | `BBM_REPOSITORY_SSH_PORT` | `2222` | SSH port published on the Docker host for Borg repository access. |
@@ -59,13 +59,13 @@ BBM_IMAGE_TAG=latest
 `latest` follows the most recently published image. Prefer a fixed release for controlled deployments:
 
 ```dotenv
-BBM_IMAGE_TAG=v1.3.5
+BBM_IMAGE_TAG=v1.3.8
 ```
 
 This selects:
 
 ```text
-ghcr.io/the-ab/borgbackup-manager:v1.3.5
+ghcr.io/the-ab/borgbackup-manager:v1.3.8
 ```
 
 ## Network and TLS
@@ -403,17 +403,6 @@ BBM_LOG_ROTATIONS=5
 ```
 
 The value must be at least `1`.
-
-## Migrating old TLS files
-
-The commented variables are needed only when an old installation still has certificate files inside the container data path:
-
-```dotenv
-# BBM_TLS_CERT_FILE=/data/tls/fullchain.pem
-# BBM_TLS_KEY_FILE=/data/tls/privkey.pem
-```
-
-Do not enable them for current new installations. The certificate and private key are managed in the encrypted security database.
 
 ## Start and verify
 

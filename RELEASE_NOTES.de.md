@@ -1,5 +1,108 @@
 # Release Notes
 
+## v1.3.8 — Release-Notes-Historie wiederhergestellt
+Veröffentlicht: 2. August 2026
+
+### Vollständige Versionshistorie wiederhergestellt
+
+- Die Bereinigung in v1.3.6 und v1.3.7 hatte die Release Notes fälschlich auf den jeweils aktuellen Eintrag reduziert.
+- `RELEASE_NOTES.de.md` und `RELEASE_NOTES.md` enthalten wieder die vollständige Versionshistorie. Die bisherigen Einträge werden nicht mehr entfernt.
+- README, Installationsanleitungen, integrierte Hilfe und Betriebsdokumentation bleiben weiterhin auf den aktuellen Funktions- und Update-Stand beschränkt. Historische Updateanweisungen stehen ausschließlich in den Release Notes.
+
+### Deutsche Release Notes im Container korrigiert
+
+- Das Dockerfile kopierte bisher nur `RELEASE_NOTES.md` in das Image. Bei deutscher Sprache konnte die WebUI deshalb `RELEASE_NOTES.de.md` im Container nicht finden.
+- Das Image enthält jetzt beide Sprachdateien. Die WebUI zeigt die vollständigen deutschen oder englischen Release Notes passend zur gewählten Sprache an.
+- Paket-, API- und Regressionstests prüfen beide Dateien sowie den Erhalt mehrerer historischer Versionsblöcke.
+
+## v1.3.7 — Verlässliche v1.3.5-Baseline
+Veröffentlicht: 2. August 2026
+
+### Update von v1.3.5 korrigiert
+
+- Jede regulär gestartete v1.3.5-Installation enthält bereits alle aktuell benötigten Manager- und Security-Tabellen sowie Spalten. Frühere Updates konnten jedoch ungenutzte Zusatzobjekte wie die alte Tabelle `archive_mounts` zurücklassen.
+- Die bisherige Baseline-Prüfung wertete solche harmlosen Zusatzobjekte fälschlich als zu altes Datenbankschema und blockierte dadurch einen korrekten Updatepfad von v1.3.5.
+- v1.3.7 übernimmt jede vollständige v1.3.5-Datenbank automatisch in das exakte aktuelle Schema. Ein manueller SQLite-Eingriff ist nicht erforderlich.
+
+### Verlustfreie Baseline-Übernahme
+
+- Vor der Übernahme wird eine konsistente SQLite-Sicherheitskopie mit eingeschränkten Dateirechten erstellt.
+- Alle aktuellen Tabellen und Spalten werden in eine neue Datenbank kopiert.
+- Zeilenzahl und SHA-256-Inhaltsdigest jeder produktiven Tabelle werden vor und nach dem Kopieren verglichen.
+- Fremdschlüsselprüfung und `PRAGMA quick_check` müssen erfolgreich sein, bevor die Datenbank atomar ersetzt wird.
+- Ungenutzte Zusatzobjekte und zusätzliche alte Spalten werden nur nach erfolgreichem Datenvergleich entfernt.
+- Das gleiche Verfahren gilt für `security.db`, sodass auch dort ungenutzte v1.3.5-Restobjekte keinen Updateabbruch mehr verursachen.
+
+### Sicherheitsgrenze bleibt erhalten
+
+- Fehlende aktuelle Tabellen oder Spalten weisen weiterhin auf einen tatsächlich älteren, nicht unterstützten Stand hin und werden nicht erraten oder ergänzt.
+- Noch vorhandene Klartext-SSH-Aktionen oder nicht bereinigte historische SSH-Befehle werden weiterhin abgelehnt, statt vertrauliche Inhalte stillschweigend zu übernehmen.
+- Manager-Backup, Restore, Geräte, Repositories, Jobs, Zeitpläne, Quellenstatistiken und gespeicherte Sicherungsgrößen bleiben unverändert.
+
+### Regressionstests
+
+- Reale v1.3.5-Strukturen mit `archive_mounts` werden automatisch normalisiert.
+- Weitere ungenutzte Zusatzobjekte in `manager.db` und `security.db` werden verlustfrei entfernt.
+- Aktuelle Datensätze werden nach der Baseline-Übernahme vollständig und identisch nachgewiesen.
+- Unvollständige Vor-v1.3.5-Schemata und vertrauliche SSH-Altbestände bleiben geschützt abgewiesen.
+
+## v1.3.6 — Bereinigter Ausgangsstand
+Veröffentlicht: 2. August 2026
+
+## Bereinigter Ausgangsstand
+
+v1.3.6 ist ein einmaliger Kompatibilitätsschnitt. Direkte Updates werden nur von einer vollständig bereinigten Installation v1.3.5 unterstützt. Ältere BBM-Versionen, ältere Datenbankschemata und ältere Manager-/Cache-Backupformate werden nicht mehr automatisch migriert.
+
+Vor dem Update von v1.3.5:
+
+1. **System → Systemdiagnose → Manager-Datenbank bereinigen** ausführen.
+2. Einen eventuell verlangten Neustart abschließen.
+3. Ein neues verschlüsseltes Manager-Backup erstellen und prüfen.
+4. Erst danach v1.3.6 mit `update.sh` installieren.
+
+Installationen unterhalb v1.3.5 müssen zuerst den finalen v1.3.5-Stand erreichen und dort bereinigt werden. Ist das nicht möglich, ist eine Neuinstallation von v1.3.6 erforderlich; wiederhergestellt werden kann nur ein unterstütztes Manager-Backup ab v1.3.5.
+
+## Entfernte BBM-Altkompatibilität
+
+- additive Schema-Migrationen und automatische Ergänzungen alter Tabellen oder Spalten entfernt
+- historische SSH-Aktions- und Laufbereinigungsmodule aus dem Laufzeitcode entfernt
+- nicht mehr verwendete API-Aliase und Übergangsendpunkte entfernt
+- geräteweiter alter Repository-Bootstrap entfernt; Repository-Zugriff wird ausschließlich über den aktuellen jobbezogenen Ablauf eingerichtet
+- alte Paketkopien und Übergangsbereinigungen im Updater entfernt
+- unbekannte oder veraltete `.env`-Schlüssel werden nicht mehr als unterstützte Konfiguration fortgeführt
+- alte Manager- und Cache-Backupformate werden abgelehnt
+- Manager- und Security-Datenbank müssen dem aktuellen v1.3.5-Ausgangsschema entsprechen; Abweichungen führen zu einer klaren Startmeldung statt zu einer geratenen Migration
+
+## Erhaltene Daten und Funktionen
+
+Der Kompatibilitätsschnitt verändert den aktuellen fachlichen Datenbestand nicht. Bei einem unterstützten Update und bei der Wiederherstellung eines unterstützten Manager-Backups bleiben insbesondere erhalten:
+
+- Geräte und Repository-Zuordnungen
+- Repositories und verschlüsselte Zugangsdaten
+- Backup-Jobs und Zeitpläne
+- Benutzer, Rollen, Einstellungen und Zwei-Faktor-Authentifizierung
+- letzte Quellenstatistiken mit Größe und Dateizahl
+- Original-, komprimierte und deduplizierte Größe abgeschlossener Sicherungen
+- Archiv-Metadaten, Ausführungsstatus und Benachrichtigungseinstellungen
+- verschlüsselte gespeicherte SSH-Aktionen in `security.db`
+
+Die operative Borg-Kompatibilität bleibt unverändert. Unterstützte Borg-1.x-Clients, vorhandene Borg-Archive, zugeordnete Archivserien, externe Repositories und die Borg-Cache-Verwaltung sind keine BBM-Altversionsmigration und bleiben verfügbar.
+
+## Dokumentation bereinigt
+
+README, Installationsanleitungen, integrierte Hilfe, Compose-Dokumentation, Sicherheitsdokumentation und Release-Checkliste beschreiben nur noch den aktuellen Funktionsstand. Frühere Einmal-Übergänge und historische Versionsanweisungen wurden entfernt. Der einzige verbleibende Versionshinweis ist die einmalige v1.3.5-Mindest-Baseline für Update und Restore.
+
+## Release-Prüfung
+
+Der Projektaudit verhindert künftig unter anderem:
+
+- erneute Aufnahme historischer BBM-Migrationsmodule
+- additive Schema-Kompatibilität
+- Rückkehr entfernter API-Aliase
+- doppelte oder historische Release-Note-Kopien
+- historische Übergangsanleitungen in aktueller Dokumentation
+- Freigabe eines Pakets ohne aktuelle Baseline-, Backup-/Restore-, Übersetzungs- und Paketprüfungen
+
 ## v1.3.5 – 02.08.2026
 
 ### Historische SSH-Klartextdetails vollständig bereinigt

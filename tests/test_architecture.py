@@ -298,7 +298,9 @@ def test_authentication_uses_hashed_passwords_and_server_side_sessions():
 
     assert "hashlib.scrypt" in security_store
     assert "token_hash = hashlib.sha256" in security_store
-    assert "CREATE TABLE IF NOT EXISTS sessions" in security_store
+    assert "CREATE TABLE sessions" in security_store
+    assert "CREATE TABLE IF NOT EXISTS sessions" not in security_store
+    assert "if not existing_tables:" in security_store
     assert "ALLOW_LEGACY_TOKEN_AUTH" not in security
     assert "BBM_ADMIN_TOKEN" not in security
     assert "get_session_user" in security
@@ -436,12 +438,12 @@ def test_restore_script_supports_encrypted_manager_backups():
     assert "python3-cryptography" in restore
     assert "Cipher" in restore
     assert "modes.GCM" in restore
-    assert 'MIN_SUPPORTED_BACKUP_VERSION="1.1.0"' in restore
+    assert 'MIN_SUPPORTED_BACKUP_VERSION="1.3.5"' in restore
     assert "Scrypt" in restore
     assert "Backup-Passphrase" in restore
 
 
-def test_updater_canonicalizes_env_and_removes_pre_v110_settings():
+def test_updater_requires_current_baseline_without_old_env_migrations():
     compose = (PROJECT_ROOT / "compose.yaml").read_text(encoding="utf-8")
     entrypoint = (PROJECT_ROOT / "docker/entrypoint.sh").read_text(encoding="utf-8")
     updater = (PROJECT_ROOT / "update.sh").read_text(encoding="utf-8")
@@ -454,10 +456,11 @@ def test_updater_canonicalizes_env_and_removes_pre_v110_settings():
     for obsolete in (
         "COMPOSE_FILE", "BBM_ADMIN_TOKEN", "BBM_SECRET_KEY",
         "BBM_ALLOW_LEGACY_TOKEN_AUTH", "BBM_TLS_CERT_FILE", "BBM_TLS_KEY_FILE",
+        "compose.archive-mounts.yaml",
     ):
-        assert obsolete in updater
-    assert 'MIN_SUPPORTED_VERSION="1.1.0"' in updater
-    assert "compose.archive-mounts.yaml" in updater  # deletion/rollback cleanup only
+        assert obsolete not in updater
+    assert 'MIN_SUPPORTED_VERSION="1.3.5"' in updater
+    assert '/api/hosts/{host_id}/bootstrap-repository' not in (PROJECT_ROOT / "app/main.py").read_text(encoding="utf-8")
 
 
 def test_security_bootstrap_uses_only_current_security_store():
@@ -615,7 +618,7 @@ def test_update_output_is_compact_and_reports_authentication_state():
     assert 'python -m app.account_recovery reset admin --admin' in update
     assert 'authentication_readiness()' in main
     assert 'payload = {"status": "ready" if is_ready else "starting"}' in main
-    assert 'active_administrators' not in main[main.index('@app.get("/api/ready")'):main.index('@app.get("/api/health")')]
+    assert 'active_administrators' not in main[main.index('@app.get("/api/ready")'):main.index('@app.get("/api/health/strict")')]
 
 
 def test_frontend_dom_references_exist_and_login_is_not_admin_prefilled():
@@ -651,7 +654,7 @@ def test_public_readiness_exposes_current_version():
 def test_release_contains_interactive_recovery_script_and_archive_statistics_ui():
     recovery = (PROJECT_ROOT / "recovery.sh").read_text(encoding="utf-8")
     javascript = (PROJECT_ROOT / "app/static/app.js").read_text(encoding="utf-8")
-    database = (PROJECT_ROOT / "app/database.py").read_text(encoding="utf-8")
+    models = (PROJECT_ROOT / "app/models.py").read_text(encoding="utf-8")
     assert "app.account_recovery status" in recovery
     assert "app.initial_admin" in recovery
     assert "app.account_recovery unlock" in recovery
@@ -669,21 +672,21 @@ def test_release_contains_interactive_recovery_script_and_archive_statistics_ui(
     css = (PROJECT_ROOT / "app/static/style.css").read_text(encoding="utf-8")
     assert "grid-template-columns: minmax(6.5rem, 1fr) auto" in css
     assert ".archive-row .actions button" in css
-    assert '"original_size_bytes": "INTEGER"' in database
-    assert '"compressed_size_bytes": "INTEGER"' in database
-    assert '"deduplicated_size_bytes": "INTEGER"' in database
+    assert "original_size_bytes" in models
+    assert "compressed_size_bytes" in models
+    assert "deduplicated_size_bytes" in models
 
 
 def test_update_backup_excludes_repository_tree_backups_logs_exports_and_caches():
     update = (PROJECT_ROOT / "update.sh").read_text(encoding="utf-8")
     assert "env_value BBM_REPOSITORY_PATH" in update
-    assert "repository_relative" in update
+    assert "repository_relative" not in update
     for excluded in (
         "update-backups", "backups", "exports", "restore-staging", "run-logs", "logs",
         "archive-cache", "borg-cache", "borg-security",
     ):
         assert f"--exclude='./{excluded}'" in update
-    assert "Repository-Unterverzeichnis wird vom Manager-Datenbackup ausgeschlossen" in update
+    assert "vollständig getrennte Verzeichnisbäume" in update
     assert '.tar.gz.partial' not in update  # partial path is derived from final archive, not exposed as a stale release file
 
 
@@ -749,7 +752,7 @@ def test_env_example_is_complete_and_matches_compose_defaults():
     assert "BBM_REPOSITORY_PATH: ${BBM_REPOSITORY_PATH:-./repositories}" in compose
 
 
-def test_installer_preserves_extended_env_and_rejects_identical_paths():
+def test_installer_emits_only_current_env_and_rejects_overlapping_paths():
     installer = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
     for key in (
         "BBM_SESSION_COOKIE_NAME", "BBM_SESSION_COOKIE_SECURE", "BBM_COMMAND_TIMEOUT", "BBM_APPEARANCE",
@@ -757,8 +760,9 @@ def test_installer_preserves_extended_env_and_rejects_identical_paths():
         "BBM_LOG_MAX_BYTES", "BBM_LOG_ROTATIONS",
     ):
         assert f"{key}=" in installer
-    assert "Unbekannte/erweiterte Schlüssel" in installer
+    assert "ausschließlich dokumentierte aktuelle Schlüssel" in installer
     assert "Daten- und Repository-Verzeichnis dürfen nicht identisch sein" in installer
+    assert "Das Repository-Verzeichnis darf nicht innerhalb des Manager-Datenverzeichnisses liegen" in installer
     assert "validate_positive_integer" in installer
     assert "validate_boolean" in installer
     assert "validate_cookie_name" in installer
@@ -825,7 +829,7 @@ def test_local_release_check_audits_references_without_github_automation():
     assert "audit_frontend_api_routes" in audit
     assert "audit_docker_sources" in audit
     assert "audit_markdown_links" in audit
-    assert "old-updater compatibility copy" in audit
+    assert "audit_baseline_cutoff" in audit
     assert "python scripts/project-audit.py" in release_check
     assert not (PROJECT_ROOT / ".github").exists()
 

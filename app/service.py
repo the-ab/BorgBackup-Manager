@@ -55,7 +55,6 @@ from app.runner import (
     Command,
     CommandCancelled,
     backup_command,
-    delete_archive_command,
     delete_archives_command,
     diff_archives_command,
     execute,
@@ -321,7 +320,7 @@ def _write_authorized_keys(lines: list[str]) -> None:
 
 
 def rebuild_repository_authorized_keys() -> int:
-    """Write only repository-scoped BBM keys; legacy global keys are removed."""
+    """Write the current repository-scoped BBM key set."""
     lines: list[str] = []
     with SessionLocal() as db:
         rows = db.scalars(
@@ -406,7 +405,7 @@ def repository_access_ready(host_id: int, repository_id: int) -> bool:
 def _repository_execution_key(repository: Repository | None, repository_id: int | None = None) -> str:
     """Return a stable key for the physical Borg repository target.
 
-    Database IDs alone are insufficient: legacy data or slug collisions can
+    Database IDs alone are insufficient: duplicate imports or slug collisions can
     leave two repository records pointing at the same managed directory or
     external URL. Borg still sees one physical repository and must therefore
     be serialized as one queue.
@@ -1895,15 +1894,9 @@ def queue_repository_init(repository_id: int) -> int:
 
 async def bootstrap_host_repository(
     host_id: int,
-    repository_ids: list[int] | None = None,
+    repository_ids: list[int],
 ) -> dict[int, str]:
-    """Provision repository-scoped SSH keys for one device.
-
-    When ``repository_ids`` is omitted, all managed repository assignments of
-    the device are renewed for backward compatibility. A job-level call passes
-    exactly one repository ID so the user can configure access directly where
-    the job is managed.
-    """
+    """Provision repository-scoped SSH keys for an explicit device assignment."""
     sync_repository_access_assignments()
     with SessionLocal() as db:
         host = db.get(Host, host_id)
@@ -1917,7 +1910,7 @@ async def bootstrap_host_repository(
                 .order_by(HostRepositoryAccess.repository_id)
             )
         )
-        selected_ids = assigned_ids if repository_ids is None else sorted(set(repository_ids))
+        selected_ids = sorted(set(repository_ids))
         if not selected_ids:
             raise ValueError("No managed repository access is assigned to this device")
         missing = sorted(set(selected_ids) - set(assigned_ids))
@@ -2407,9 +2400,9 @@ def queue_job_action(
                 restore.get("overwrite_existing", False),
             )
         elif action == "delete-archive" and restore:
-            command = delete_archive_command(
-                job,
-                restore["archive"],
+            command = delete_archives_command(
+                job.repository,
+                [restore["archive"]],
                 restore.get("compact_after", True),
             )
         elif action == "rename-archive" and restore:
@@ -2758,22 +2751,6 @@ async def _scheduled_backup_group(
             await asyncio.gather(*(_wait_for_run(run_id) for run_id in compact_runs))
 
     await _refresh_changed_repositories(changed_repositories)
-
-
-async def scheduled_backup(
-    job_id: int,
-    schedule_name: str | None = None,
-    *,
-    schedule_id: int | None = None,
-    schedule_parallel_limit: int = 0,
-) -> None:
-    """Backward-compatible single-job schedule entry point."""
-    await _scheduled_backup_group(
-        [job_id],
-        schedule_name,
-        schedule_id=schedule_id,
-        schedule_parallel_limit=schedule_parallel_limit,
-    )
 
 
 async def scheduled_schedule(

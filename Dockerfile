@@ -16,7 +16,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 COPY VERSION ./
-COPY README.md INSTALLATION.md RELEASE_NOTES.md ./
+COPY README.md INSTALLATION.md RELEASE_NOTES.md RELEASE_NOTES.de.md ./
 COPY LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md ./
 COPY app ./app
 COPY docker/entrypoint.sh /usr/local/bin/bbm-entrypoint

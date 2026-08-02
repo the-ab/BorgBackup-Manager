@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.3.5
+# Installation and Operations — BorgBackup Manager 1.3.8
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.3.5.zip
+BorgBackup-Manager-1.3.8.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.3.5.zip
+unzip /path/BorgBackup-Manager-1.3.8.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.3.5.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.3.8.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -119,7 +119,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.3.5` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
+`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.3.8` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
 
 During first start the entrypoint checks `/repositories` using `BBM_BORG_UID` and `BBM_BORG_GID`. If the mount is empty and is owned by `root` only because Docker created the host directory, only the mount root is assigned to the configured UID/GID and receives owner read/write/execute access. The entrypoint never runs recursive `chown` on repositories. Existing non-empty data therefore requires correct host ownership, group permissions or ACLs. NFS deployments with `root_squash` must configure matching numeric UID/GID or server-side permissions.
 
@@ -160,7 +160,7 @@ Set `BBM_SHOW_INITIAL_ADMIN_ON_START=0` to disable automatic log output. When en
 
 A focused reference grouped by required values, networking, paths, sessions, security limits, backup limits, and performance settings is included at [`docker-compose/README.md`](docker-compose/README.md). The German version is available at [`docker-compose/README.de.md`](docker-compose/README.de.md).
 
-The guided installer writes a complete `.env`. During updates from v1.1.0 or newer, `update.sh` rebuilds the file from the current template, preserves supported custom values, adds missing current values, and removes obsolete legacy or Compose-override keys. Supported host variables include:
+The guided installer writes a complete `.env`. During supported updates from the v1.3.5 baseline, `update.sh` preserves values of documented current variables, adds missing current variables from the template, and discards unsupported keys. Supported host variables include:
 
 ```dotenv
 TZ=Europe/Berlin
@@ -290,7 +290,7 @@ sudo -n mount /mnt/offline-backup
 sudo -n umount /mnt/offline-backup
 ```
 
-The WebUI does not expose an ad-hoc SSH console. Only saved actions can be started, and every start requires confirmation. Name, command, target device, enabled state, and timeout are protected with the existing master key; command text is authenticated-encrypted in `/data/security/security.db`. On the first v1.3.5 start, existing plaintext rows are fully imported and verified by decrypting them again before the old `manager.db` table is removed. An empty or previously abandoned legacy table is detected as well. Startup also redacts every historical SSH action run created before v1.3.3 whose complete command was still stored in `runs.command_preview`. Status, timestamps and labels remain; preview, output, error, log and warning fields plus the file-backed SSH run log are removed. Before the WebUI is made available, a checkpoint and `VACUUM` sanitize the database and WAL; a final scan then verifies that no migrated command remains in `manager.db`, `manager.db-wal`, or `manager.db-shm`. A failed step remains retryable and never leaves an accepted partially migrated action set. New run previews expose only the action name and target device. Interactive password prompts remain unsupported; use a narrowly scoped sudoers rule with `sudo -n` when elevated privileges are required. Output and errors for new runs are recorded as regular runs and can be cancelled from the live log.
+The WebUI does not expose an ad-hoc SSH console. Only saved actions can be started, and every start requires confirmation. Name, command, target device, enabled state and timeout are protected with the existing master key; command text is authenticated-encrypted in `/data/security/security.db`. `manager.db` contains no SSH-action command table and run previews expose only the action name and target device. Interactive password prompts remain unsupported; use a narrowly scoped sudoers rule with `sudo -n` when elevated privileges are required. Output and errors are recorded as regular runs and can be cancelled from the live log.
 
 ## 9. Create or attach a repository
 
@@ -439,7 +439,7 @@ Borg warning causes are captured while output is streaming and stored separately
 
 If Borg emits only return code 1 without a detailed warning line, the execution states that the cause was not emitted rather than inventing one.
 
-Complete status and path output is stored in `/data/run-logs/run-ID.log`. SQLite contains only bounded metadata and diagnostic previews plus structured warning causes; ordinary file paths are removed from database previews at run completion and from older previews during startup cleanup.
+Complete status and path output is stored in `/data/run-logs/run-ID.log`. SQLite contains only bounded metadata and diagnostic previews plus structured warning causes; ordinary file paths are removed from database previews at run completion.
 
 ## 15. Archive overview
 
@@ -491,17 +491,17 @@ Delivery failures are logged separately and never change the Borg result. Notifi
 
 ## 19. Manager backup and cache backup
 
-Since v1.0.77 manager state and Borg caches are separate backup types. Newly created manager backups never include Borg caches, keeping the recovery artifact small even when repositories or client caches are very large.
+Manager state and Borg caches are separate backup types. Newly created manager backups never include Borg caches, keeping the recovery artifact small even when repositories or client caches are very large.
 
 ### Create manager backup
 
 Manager backups contain the application database, security database, master key, settings, notification configuration and `migration.env`. Controller keys, repository SSH host keys, Borg keyfiles/passphrases, TLS material and notification secrets are encrypted inside the security database; the master key is the mandatory decryption anchor. `authorized_keys` and clear-text files below `/run/bbm-secrets` are regenerated from the databases after restore. Before storing the artifact, BBM validates both SQLite databases, the required security tables, the master key and decryptability of every stored secret. A missing component or mismatched key makes backup creation fail. Repository data, existing backup artifacts, exports, complete run/debug logs, `/data/borg-cache`, `/data/borg-security` and client Borg caches are excluded.
 
-New manager backups are mandatory streaming AES-256-GCM encrypted `.bbm` files protected by a non-stored passphrase of at least twelve characters. Compression is selectable: none, Deflate 1, Deflate 6 (default), or Deflate 9. Import and restore require metadata version v1.1.0 or newer. The Web UI shows live phase/progress/event output and resumes an active status after reload.
+New manager backups are mandatory streaming AES-256-GCM encrypted `.bbm` files protected by a non-stored passphrase of at least twelve characters. Compression is selectable: none, Deflate 1, Deflate 6 (default), or Deflate 9. Import and restore require backup metadata version v1.3.5 or newer. The Web UI shows live phase/progress/event output and resumes an active status after reload.
 
 ### Create split cache artifacts
 
-Starting with v1.3.0, one cache-backup run no longer creates a single large bundle. It emits independent files:
+One cache-backup run emits independent files:
 
 - `borgbackup-manager-cache-manager-v...` for `/data/borg-cache` and `/data/borg-security`
 - `borgbackup-manager-cache-client-<device-name>-h<ID>-v...` for each selected device
@@ -522,11 +522,11 @@ Upload supported manager or cache `.bbm`/`.zip` artifacts in the compact **Uploa
 
 ### Restore manager backup
 
-Select a manager backup, provide its passphrase, provide a separate passphrase for the automatic encrypted safety backup, confirm replacement, and start restore. The manager verifies the artifact type and minimum metadata version v1.1.0 before replacing manager/security databases, master key, settings and SSH/TLS/repository keys. A standalone cache artifact is rejected as full manager state.
+Select a manager backup, provide its passphrase, provide a separate passphrase for the automatic encrypted safety backup, confirm replacement, and start restore. The manager verifies the artifact type and minimum metadata version v1.3.5 before replacing manager/security databases, master key, settings and SSH/TLS/repository keys. A standalone cache artifact is rejected as full manager state.
 
 ### Restore cache backup
 
-Open **Cache backup restore**. Select the cache artifact and enter its passphrase only when encrypted. The manager Borg cache/security state can be restored as one explicit action. Saved client caches can be listed and restored one current device/repository assignment at a time. Existing manager or client caches are preserved under timestamped `pre-bbm-restore` names before replacement. No run may be queued or active during cache restore. Cache backup metadata must identify BorgBackup Manager v1.1.0 or newer.
+Open **Cache backup restore**. Select the cache artifact and enter its passphrase only when encrypted. The manager Borg cache/security state can be restored as one explicit action. Saved client caches can be listed and restored one current device/repository assignment at a time. Existing manager or client caches are preserved under timestamped `pre-bbm-restore` names before replacement. No run may be queued or active during cache restore. Cache backup metadata must identify BorgBackup Manager v1.3.5 or newer.
 
 ### Server migration
 
@@ -554,48 +554,19 @@ System diagnostics include repository filesystem usage, Web-user permissions, SS
 
 ## 22. Update
 
-### Normal update
+### Supported baseline
 
-### One-time transition from v1.2.4 to v1.2.5
+v1.3.8 keeps v1.3.5 as the one-time backward-compatibility cutoff. Every regularly started v1.3.5 installation can update directly. Historical update helpers, additive pre-v1.3.5 schema migrations, old public API aliases and obsolete backup formats are no longer included.
 
-The v1.2.4 updater still requires the now-removed `compose.archive-mounts.yaml` inside a release ZIP. For this transition only, first extract the new updater from the already checksum-verified v1.2.5 ZIP:
-
-```bash
-cd /opt/BorgBackup-Manager
-unzip -p updates/BorgBackup-Manager-1.2.5.zip BorgBackup-Manager/update.sh > update.sh.new
-bash -n update.sh.new
-chmod 755 update.sh.new
-mv update.sh.new update.sh
-```
-
-Then run the normal v1.2.5 update command. The new updater removes the old override file, and cleans `COMPOSE_FILE` plus other obsolete values from `.env`.
+Before updating, create and verify a fresh encrypted manager backup and verify the new ZIP with its SHA-256 file. A separate cleanup or manual SQLite command is not required for a normally running v1.3.5 installation. Then run:
 
 ```bash
-cd /opt/BorgBackup-Manager
-cp /path/BorgBackup-Manager-NEW-VERSION.zip updates/
-cp /path/BorgBackup-Manager-NEW-VERSION.zip.sha256 updates/
-sha256sum -c updates/BorgBackup-Manager-NEW-VERSION.zip.sha256
 bash update.sh \
-  --file updates/BorgBackup-Manager-NEW-VERSION.zip \
-  --sha256 PUBLISHED_SHA256
+  --file updates/BorgBackup-Manager-1.3.8.zip \
+  --sha256 <SHA-256>
 ```
 
-The updater:
-
-1. verifies SHA-256 before opening the ZIP,
-2. validates safe paths and package completeness,
-3. builds the new image,
-4. stops the current container,
-5. creates a consistent persistent manager-data backup while excluding repositories and regenerable caches,
-6. applies the project files,
-7. starts and checks the new container,
-8. rolls back project files and restarts the prior container on failure where possible.
-
-Reload the browser with `Ctrl+F5` after a frontend update.
-
-### Minimum supported source version
-
-Direct updates from releases older than v1.1.0 are rejected. Those installations require a clean deployment. Legacy token, secret, client-mount, database, and updater compatibility paths from pre-v1.1.0 releases are no longer included.
+The updater rejects a source version below v1.3.5. At startup, v1.3.8 accepts every complete v1.3.5 manager and security schema, creates restricted safety copies, copies all current tables into the exact current schema, verifies row counts, SHA-256 content digests, foreign keys and SQLite integrity, and only then removes unused surplus objects such as `archive_mounts`. Missing current tables or columns still identify a genuinely older unsupported structure. If an older installation cannot first reach v1.3.5, deploy v1.3.8 cleanly and restore a supported v1.3.5-or-newer manager backup.
 
 ## 23. Health checks
 
@@ -770,4 +741,4 @@ The access log never contains passwords, TOTP/recovery codes or session tokens. 
 
 ## Maintaining the manager database
 
-Under **System → System diagnostics → Clean manager database**, run **Inspect database** first. In addition to stale or orphaned technical rows, the preview reports historical SSH action runs containing command plaintext saved by older releases and affected maintenance copies. **Clean safely** redacts command preview, output, error, database log fields and file-backed SSH run logs for those legacy runs. Unsafe older maintenance copies are removed; only then is a new verified copy created below `/data/maintenance-backups`. The SQLite rebuild runs at the next startup before the WebUI is exposed. The action is blocked while runs or manager/cache backup tasks are active.
+Under **System → System diagnostics → Clean manager database**, run **Inspect database** first. The current cleanup handles stale interrupted runs, inactive archive-mount rows, orphan assignments and notifications, invalid schedule targets and reclaimable SQLite pages. Devices, repositories, jobs, schedules, source statistics, backup-size metadata and completed backup runs remain unchanged. A full SQLite rebuild is queued for the next startup so it cannot hold an exclusive lock while the WebUI is serving requests.

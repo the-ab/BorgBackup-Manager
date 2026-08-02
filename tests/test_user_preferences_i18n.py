@@ -83,17 +83,19 @@ def test_release_notes_endpoint_follows_requested_language():
         english = client.get('/api/system/release-notes?language=en', headers=headers)
     assert german.status_code == 200
     assert english.status_code == 200
-    assert 'Statusanzeige öffnet direkt' in german.json()['content']
-    assert 'Direct live-log access' in english.json()['content']
+    assert 'Release-Notes-Historie wiederhergestellt' in german.json()['content']
+    assert 'Verlässliche v1.3.5-Baseline' in german.json()['content']
+    assert 'Release notes history restored' in english.json()['content']
+    assert 'Reliable v1.3.5 baseline' in english.json()['content']
 
 
 def test_release_package_includes_bilingual_release_notes():
     dockerfile = (PROJECT_ROOT / 'Dockerfile').read_text(encoding='utf-8')
     updater = (PROJECT_ROOT / 'update.sh').read_text(encoding='utf-8')
-    assert 'COPY README.md INSTALLATION.md RELEASE_NOTES.md ./' in dockerfile
-    assert 'COPY README.md INSTALLATION.md RELEASE_NOTES.md RELEASE_NOTES.en.md ./' not in dockerfile
-    assert (PROJECT_ROOT / 'app/RELEASE_NOTES.md').is_file()
-    assert (PROJECT_ROOT / 'app/RELEASE_NOTES.de.md').is_file()
+    assert 'COPY README.md INSTALLATION.md RELEASE_NOTES.md RELEASE_NOTES.de.md ./' in dockerfile
+    assert 'COPY README.md INSTALLATION.md RELEASE_NOTES.md ./' not in dockerfile
+    assert not (PROJECT_ROOT / 'app/RELEASE_NOTES.md').exists()
+    assert not (PROJECT_ROOT / 'app/RELEASE_NOTES.de.md').exists()
     assert 'README.de.md' in updater
     assert 'INSTALLATION.de.md' in updater
     assert 'RELEASE_NOTES.de.md' in updater

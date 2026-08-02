@@ -6,7 +6,8 @@ ROOT = Path(__file__).parents[1]
 def test_public_repository_governance_files_exist():
     required = [
         "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md",
-        "THIRD-PARTY-NOTICES.md", "scripts/release-check.sh",
+        "THIRD-PARTY-NOTICES.md", "RELEASE_CHECKLIST.md",
+        "RELEASE_CHECKLIST.de.md", "scripts/release-check.sh",
     ]
     for relative in required:
         path = ROOT / relative
@@ -58,14 +59,15 @@ def test_synthetic_private_key_markers_are_not_contiguous_in_source():
         assert marker not in path.read_text(encoding="utf-8"), path
 
 
-def test_updater_preserves_public_repository_files_and_removes_legacy_automation():
+def test_updater_preserves_current_public_repository_files_without_transition_cleanup():
     update = (ROOT / "update.sh").read_text(encoding="utf-8")
     for name in [
         "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md",
-        "THIRD-PARTY-NOTICES.md", "pytest.ini", "scripts", "app",
+        "THIRD-PARTY-NOTICES.md", "RELEASE_CHECKLIST.md",
+        "RELEASE_CHECKLIST.de.md", "pytest.ini", "scripts", "app",
     ]:
         assert name in update
-    assert 'legacy_github = target / ".github"' in update
+    assert 'legacy_github = target / ".github"' not in update
     assert '".github",' not in update
 
 

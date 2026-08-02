@@ -791,7 +791,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.3.5`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.3.8`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -2461,7 +2461,7 @@ function renderUsers() {
   const list = $('#user-list');
   if (!list || state.currentUser?.role !== 'admin') return;
   const status = state.securityStatus;
-  if (status) $('#security-status').textContent = `${status.users} Benutzer · ${status.administrators ?? state.users.filter((item) => item.role === 'admin').length} Administratoren · ${status.sessions} aktive Sitzungen · ${status.two_factor_users ?? 0} mit 2FA · ${status.encrypted_secrets ?? 0} verschlüsselte Geheimnisse · ${status.sensitive_storage_ok ? 'Sicherheitsprüfung OK' : 'Sicherheitsprüfung erforderlich'} · ${status.secret_database || status.database}`;
+  if (status) $('#security-status').textContent = `${status.users} Benutzer · ${status.administrators ?? state.users.filter((item) => item.role === 'admin').length} Administratoren · ${status.sessions} aktive Sitzungen · ${status.two_factor_users ?? 0} mit 2FA · ${status.encrypted_secrets ?? 0} verschlüsselte Geheimnisse · Sicherheitsspeicher aktiv · ${status.secret_database || status.database}`;
   if (!state.users.length) { list.innerHTML = '<div class="empty">Keine Benutzer vorhanden.</div>'; return; }
   const administratorCount = state.users.filter((item) => item.role === 'admin').length;
   const rows = state.users.map((user) => {
@@ -2756,9 +2756,7 @@ async function clearRepositoryCache(id) {
   try {
     const result = await api(`/repositories/${id}/clear-cache`, {method: 'POST'});
     await refreshAreas(['repositories']);
-    const legacy = result.legacy_cache_removed ? ' Der bisherige Cache im Repository-Mount wurde ebenfalls entfernt.' : '';
-    const legacyWarning = result.legacy_cache_error ? ` Alt-Cache konnte nicht entfernt werden: ${result.legacy_cache_error}` : '';
-    setRepositoryStatus(`${repo.name}: lokaler Borg-Cache gelöscht.${legacy}${legacyWarning} Verbindung jetzt erneut prüfen.`, Boolean(result.legacy_cache_error));
+    setRepositoryStatus(`${repo.name}: lokaler Borg-Cache gelöscht. Verbindung jetzt erneut prüfen.`, false);
   } catch (error) {
     setRepositoryStatus(error.message, true);
     setSyncState('Cache-Löschung fehlgeschlagen', 'error');
@@ -5519,10 +5517,6 @@ function renderDatabaseMaintenance(data) {
     ['Verwaiste Mount-Einträge', data.stale_mount_rows],
     ['Verwaiste Repository-Zugänge', data.orphan_repository_access_rows],
     ['Verwaiste Geräteaktionen', data.orphan_host_action_rows],
-    ['Alte SSH-Klartexttabelle', data.legacy_host_action_table ? data.legacy_host_action_rows : 0],
-    ['Historische SSH-Läufe mit Klartextdetails', data.legacy_ssh_run_rows],
-    ['Verbliebene historische SSH-Laufprotokolle', data.legacy_ssh_run_logs],
-    ['Unsichere Wartungskopien mit SSH-Klartext', data.sensitive_maintenance_backups],
     ['Verwaiste Benachrichtigungszustellungen', data.orphan_notification_deliveries],
     ['Zeitpläne mit ungültigen Zielen', data.schedule_rows_with_invalid_targets],
     ['Freie SQLite-Seiten', data.freelist_pages],

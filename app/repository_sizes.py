@@ -45,13 +45,6 @@ def repository_statistics_from_borg_info(output: str) -> dict[str, int | None]:
     return result
 
 
-def repository_size_from_borg_info(output: str) -> int:
-    """Backward-compatible accessor for the deduplicated compressed size."""
-    value = repository_statistics_from_borg_info(output)["deduplicated_size"]
-    assert value is not None
-    return value
-
-
 def store_repository_statistics(
     repository_id: int,
     *,

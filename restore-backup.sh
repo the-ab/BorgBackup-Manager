@@ -8,11 +8,11 @@ DEFAULT_BASE_PATH="/docker_data/borgbackup-manager"
 DEFAULT_DATA_PATH="$DEFAULT_BASE_PATH/data"
 DEFAULT_REPOSITORY_PATH="$DEFAULT_BASE_PATH/repositories"
 DEFAULT_ARCHIVE_MOUNT_PATH="$DEFAULT_BASE_PATH/archive-mounts"
-MIN_SUPPORTED_BACKUP_VERSION="1.1.0"
+MIN_SUPPORTED_BACKUP_VERSION="1.3.5"
 DEFAULT_TIMEZONE="Europe/Berlin"
 
 fail() { echo "Fehler: $*" >&2; exit 1; }
-[[ $# -eq 1 ]] || fail "Verwendung: bash restore-backup.sh /pfad/borgbackup-manager-backup-....zip|.bbm"
+[[ $# -eq 1 ]] || fail "Verwendung: bash restore-backup.sh /pfad/borgbackup-manager-backup-....bbm"
 BACKUP_FILE="$(readlink -f -- "$1" 2>/dev/null || true)"
 [[ -n "$BACKUP_FILE" && -f "$BACKUP_FILE" ]] || fail "Backup-Datei nicht gefunden: $1"
 command -v python3 >/dev/null 2>&1 || fail "python3 wird benötigt"
@@ -21,7 +21,7 @@ command -v python3 >/dev/null 2>&1 || fail "python3 wird benötigt"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$TMP_DIR"' EXIT
 
-backup_passphrase=""
+backup_passphrase="${BBM_RESTORE_BACKUP_PASSPHRASE:-}"
 if python3 - "$BACKUP_FILE" <<'PYMAGIC'
 from pathlib import Path
 import sys
@@ -29,8 +29,10 @@ raise SystemExit(0 if Path(sys.argv[1]).read_bytes()[:13] == b"BBM-BACKUP-1\n" e
 PYMAGIC
 then
   python3 -c 'import cryptography' >/dev/null 2>&1 || fail "Verschlüsseltes Backup benötigt python3-cryptography (Debian: apt install python3-cryptography)"
-  read -r -s -p "Backup-Passphrase: " backup_passphrase
-  echo
+  if [ -z "$backup_passphrase" ]; then
+    read -r -s -p "Backup-Passphrase: " backup_passphrase
+    echo
+  fi
   [ -n "$backup_passphrase" ] || fail "Backup-Passphrase darf nicht leer sein"
 fi
 export BBM_RESTORE_BACKUP_PASSPHRASE="$backup_passphrase"
@@ -50,7 +52,7 @@ max_cache_entries = int(os.environ.get("BBM_BACKUP_CACHE_MAX_ENTRIES", "250000")
 max_compression_ratio = int(os.environ.get("BBM_BACKUP_MAX_COMPRESSION_RATIO", "250"))
 max_cache_compression_ratio = int(os.environ.get("BBM_BACKUP_CACHE_MAX_COMPRESSION_RATIO", "5000"))
 
-minimum_supported_version = (1, 1, 0)
+minimum_supported_version = (1, 3, 5)
 
 try:
     from cryptography.fernet import Fernet, InvalidToken
@@ -66,7 +68,7 @@ def version_tuple(value):
 
 def require_supported_version(metadata):
     if version_tuple(metadata.get("app_version")) < minimum_supported_version:
-        raise SystemExit("Backups vor BorgBackup Manager v1.1.0 werden nicht mehr unterstützt")
+        raise SystemExit("Backups vor BorgBackup Manager v1.3.5 werden nicht mehr unterstützt")
 
 with source.open("rb") as handle:
     prefix = handle.read(len(magic))
@@ -146,9 +148,10 @@ if prefix == magic:
     archive_source = decrypted_path
 
 else:
-    if source.stat().st_size > max_file_bytes:
-        raise SystemExit(f"Backup-Datei überschreitet das Größenlimit von {max_file_bytes} Bytes")
-    archive_source = source
+    raise SystemExit(
+        "Unverschlüsselte Manager-ZIP-Backups vor der v1.3.5-Baseline werden nicht mehr unterstützt. "
+        "Verwenden Sie ein aktuelles verschlüsseltes .bbm-Manager-Backup."
+    )
 
 
 def safe_relative_path(raw_path: str, label: str) -> Path:
@@ -178,6 +181,10 @@ with zipfile.ZipFile(archive_source) as archive:
     if not isinstance(manifest, dict) or manifest.get("format") != "borgbackup-manager-full-backup":
         raise SystemExit("Datei ist kein BorgBackup-Manager-Vollbackup")
     require_supported_version(manifest)
+    if int(manifest.get("format_version") or 0) != 7:
+        raise SystemExit("Manager-Backup verwendet ein Format vor der v1.3.5-Baseline")
+    if manifest.get("backup_type") != "manager":
+        raise SystemExit("Backup enthält keinen aktuellen Manager-Backup-Typ")
     include_cache = bool(manifest.get("borg_cache_included") or manifest.get("client_borg_cache_included"))
     entry_limit = max_cache_entries if include_cache else max_entries
     uncompressed_limit = max_cache_uncompressed_bytes if include_cache else max_uncompressed_bytes
@@ -281,18 +288,10 @@ required_identity = {
     "repository_ssh_host_private_key", "repository_ssh_host_public_key",
     "tls_certificate", "tls_private_key",
 }
-if int(manifest.get("format_version") or 0) >= 7:
-    missing_identity = required_identity - system_names
-    if missing_identity:
-        raise SystemExit("Manager-Backup enthält nicht alle SSH-/TLS-Identitäten: " + ", ".join(sorted(missing_identity)))
+missing_identity = required_identity - system_names
+if missing_identity:
+    raise SystemExit("Manager-Backup enthält nicht alle SSH-/TLS-Identitäten: " + ", ".join(sorted(missing_identity)))
 print(f"Backup v{manifest.get('app_version', '?')} vom {manifest.get('created_at', '?')} vollständig geprüft.")
-if manifest.get("client_borg_cache_included"):
-    saved = int(manifest.get("client_borg_cache_saved_count") or 0)
-    print(
-        f"Hinweis: Das Backup enthält {saved} gesicherte Client-Borg-Cache(s). "
-        "Diese werden beim Manager-Restore bewusst nicht automatisch auf Clients verteilt; "
-        "sie können danach im Bereich Cache-Backup gezielt pro Gerät/Repository wiederhergestellt werden."
-    )
 PY
 unset BBM_RESTORE_BACKUP_PASSPHRASE backup_passphrase
 

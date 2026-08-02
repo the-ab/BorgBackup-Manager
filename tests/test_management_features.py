@@ -106,7 +106,7 @@ def test_full_backup_contains_snapshot_manifest_and_keys(monkeypatch, tmp_path: 
     monkeypatch.setattr(backups, "DATABASE_URL", f"sqlite:///{database}")
     monkeypatch.setattr(backups, "SECURITY_DATABASE_PATH", security_database)
     passphrase = "Serverwechsel-Backup-2026!"
-    result = backups.create_full_backup("1.1.0", "serverwechsel", passphrase)
+    result = backups.create_full_backup("1.3.5", "serverwechsel", passphrase)
     assert result.suffix == ".bbm"
 
     with backups.plain_backup_file(result, passphrase) as plain_backup:
@@ -240,28 +240,6 @@ def test_run_history_cleanup_removes_matching_log_file(monkeypatch, tmp_path):
     assert not path.exists()
 
 
-def test_invalid_stored_borg_version_is_reset():
-    from uuid import uuid4
-
-    import app.main as main_module
-    from app.database import Base, SessionLocal, engine
-    from app.models import Host
-
-    Base.metadata.create_all(engine)
-    with SessionLocal() as db:
-        row = Host(
-            name=f"invalid-version-{uuid4().hex}", address="127.0.0.1", port=22, username="root",
-            borg_version="1.02.1", borg_version_status="critical",
-        )
-        db.add(row); db.commit(); host_id = row.id
-
-    assert main_module.repair_invalid_stored_borg_versions() >= 1
-    with SessionLocal() as db:
-        row = db.get(Host, host_id)
-        assert row.borg_version is None
-        assert row.borg_version_status == "unknown"
-
-
 def test_encrypted_manager_backup_roundtrip_and_wrong_passphrase(monkeypatch, tmp_path: Path):
     data = tmp_path / "data"
     data.mkdir()
@@ -289,12 +267,12 @@ def test_encrypted_manager_backup_roundtrip_and_wrong_passphrase(monkeypatch, tm
     monkeypatch.setattr(backups, "SETTINGS_PATH", data / "settings.json")
     monkeypatch.setattr(backups, "SECURITY_DATABASE_PATH", security_database)
     monkeypatch.setattr(backups, "DATABASE_URL", f"sqlite:///{database}")
-    result = backups.create_full_backup("1.1.0", "verschluesselt", "correct horse")
+    result = backups.create_full_backup("1.3.5", "verschluesselt", "correct horse")
 
     assert result.suffix == ".bbm"
     listed = backups.list_full_backups()
     assert listed[0]["encrypted"] is True
-    assert listed[0]["manifest"]["app_version"] == "1.1.0"
+    assert listed[0]["manifest"]["app_version"] == "1.3.5"
     try:
         backups.prepare_full_backup_restore(result, "wrong passphrase")
     except ValueError as exc:
@@ -369,12 +347,13 @@ def test_uploaded_encrypted_backup_is_validated_and_stored_without_overwrite(mon
     monkeypatch.setattr(backups, "BACKUP_DIR", backup_dir)
     monkeypatch.setattr(backups, "DATA_DIR", data_dir)
 
-    name = "borgbackup-manager-backup-v1.1.0-20260719-120000-upload.bbm"
+    name = "borgbackup-manager-backup-v1.3.5-20260719-120000-upload.bbm"
     source = tmp_path / "incoming"
     header = {
         "format": backups.BACKUP_ENVELOPE_FORMAT,
         "format_version": 2,
-        "app_version": "1.1.0",
+        "backup_type": "manager",
+        "app_version": "1.3.5",
         "created_at": "2026-07-19T12:00:00+00:00",
         "label": "upload",
         "encrypted": True,
@@ -402,7 +381,7 @@ def test_uploaded_encrypted_backup_is_validated_and_stored_without_overwrite(mon
     assert duplicate.is_file()
 
 
-def test_run_json_skips_legacy_backup_parser_when_statistics_are_persisted(monkeypatch):
+def test_run_json_uses_persisted_backup_statistics():
     from datetime import datetime, timezone
     import app.main as main_module
     from app.models import Run
@@ -428,10 +407,6 @@ def test_run_json_skips_legacy_backup_parser_when_statistics_are_persisted(monke
         finished_at=datetime.now(timezone.utc),
     )
 
-    def should_not_run(_text):
-        raise AssertionError("legacy backup parser should not run for complete rows")
-
-    monkeypatch.setattr(main_module, "parse_backup_statistics", should_not_run)
     payload = main_module.run_json(row, include_details=False, log_file_available=False)
     assert payload["archive_name"] == row.archive_name_snapshot
     assert payload["backup_file_count"] == 5

@@ -30,6 +30,61 @@ def test_passwords_are_scrypt_hashes_and_not_reversible():
     assert not security_store.verify_password("Wrong-Test-Password-2026!", encoded)
 
 
+def test_incomplete_existing_security_database_is_rejected_without_schema_completion(monkeypatch, tmp_path: Path):
+    security_dir = tmp_path / "security"
+    database = security_dir / "security.db"
+    security_dir.mkdir()
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL)")
+        connection.commit()
+    monkeypatch.setattr(security_store, "SECURITY_DIR", security_dir)
+    monkeypatch.setattr(security_store, "SECURITY_DATABASE_PATH", database)
+    monkeypatch.setattr(security_store, "INITIAL_ADMIN_PATH", security_dir / "initial-admin.txt")
+
+    with pytest.raises(RuntimeError, match="älter als die unterstützte Baseline"):
+        security_store.initialize_security_store()
+
+    with sqlite3.connect(database) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+    assert tables == {"users"}
+
+
+def test_existing_v135_security_database_with_unknown_table_is_normalized(monkeypatch, tmp_path: Path):
+    from app import secret_crypto
+
+    security_dir = tmp_path / "security"
+    database = security_dir / "security.db"
+    monkeypatch.setattr(security_store, "SECURITY_DIR", security_dir)
+    monkeypatch.setattr(security_store, "SECURITY_DATABASE_PATH", database)
+    monkeypatch.setattr(security_store, "INITIAL_ADMIN_PATH", security_dir / "initial-admin.txt")
+    monkeypatch.setattr(secret_crypto, "MASTER_KEY_PATH", security_dir / "master.key")
+    security_store.initialize_security_store()
+    with sqlite3.connect(database) as connection:
+        user = connection.execute("SELECT id,username,password_hash FROM users ORDER BY id LIMIT 1").fetchone()
+        connection.execute("CREATE TABLE obsolete_transition_state (id INTEGER PRIMARY KEY, note TEXT)")
+        connection.execute("INSERT INTO obsolete_transition_state(id,note) VALUES(1,'legacy')")
+        connection.commit()
+
+    result = security_store.initialize_security_store()
+
+    assert result["baseline_backup"]
+    with sqlite3.connect(database) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        restored = connection.execute("SELECT id,username,password_hash FROM users ORDER BY id LIMIT 1").fetchone()
+    assert "obsolete_transition_state" not in tables
+    assert restored == user
+
+
 def test_generated_initial_admin_password_always_meets_policy(monkeypatch, tmp_path: Path):
     from app import secret_crypto
 
@@ -169,61 +224,6 @@ def test_authentication_readiness_rejects_invalid_password_hash(monkeypatch, tmp
     status = security_store.authentication_readiness()
     assert status["ready"] is False
     assert status["invalid_password_hashes"] == 1
-
-
-@pytest.mark.asyncio
-async def test_scheduled_backup_refreshes_repository_size_once_after_schedule(monkeypatch):
-    import json
-    from types import SimpleNamespace
-    from uuid import uuid4
-
-    from app import service
-    from app.database import Base, SessionLocal, engine
-    from app.models import Host, Job, Repository
-
-    Base.metadata.create_all(engine)
-    suffix = uuid4().hex[:8]
-    with SessionLocal() as db:
-        host = Host(name=f"scheduled-host-{suffix}", address="127.0.0.1", username="root", host_key="key")
-        repository = Repository(name=f"scheduled-repo-{suffix}", location=f"/tmp/{suffix}", initialized=True)
-        db.add_all([host, repository]); db.flush()
-        job = Job(
-            name=f"scheduled-job-{suffix}", host_id=host.id, repository_id=repository.id,
-            source_paths_json='["/srv"]', prune_options_json=json.dumps({"daily": 7}),
-        )
-        db.add(job); db.commit()
-        job_id, repository_id = job.id, repository.id
-
-    queued = []
-    run_ids = iter([101, 102, 103])
-    refreshed = []
-
-    def queue(job_id_arg, action, restore=None, *, refresh_size_after=True, trigger_type="manual", schedule_name=None):
-        queued.append((job_id_arg, action, refresh_size_after, trigger_type, schedule_name))
-        return next(run_ids)
-
-    async def wait(_run_id):
-        return "success"
-
-    async def refresh(repository_id_arg):
-        refreshed.append(repository_id_arg)
-        return {}
-
-    monkeypatch.setattr(service, "queue_job_action", queue)
-    monkeypatch.setattr(service, "_wait_for_run", wait)
-    monkeypatch.setattr(service, "refresh_repository_statistics", refresh)
-    monkeypatch.setattr(service, "load_settings", lambda: SimpleNamespace(
-        repository_size_after_run=True, compact_after_prune=True,
-    ))
-
-    await service.scheduled_backup(job_id, "Nachtlauf")
-
-    assert queued == [
-        (job_id, "backup", False, "schedule", "Nachtlauf"),
-        (job_id, "prune", False, "schedule", "Nachtlauf"),
-        (job_id, "compact", False, "schedule", "Nachtlauf"),
-    ]
-    assert refreshed == [repository_id]
 
 
 @pytest.mark.asyncio

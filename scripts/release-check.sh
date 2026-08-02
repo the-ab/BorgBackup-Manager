@@ -34,12 +34,6 @@ fi
 python scripts/project-audit.py
 python -m compileall -q app tests scripts/project-audit.py
 
-runtime_dir="$(mktemp -d "${TMPDIR:-/tmp}/bbm-test-data.XXXXXX")"
-cleanup_runtime() {
-  rm -rf "$runtime_dir"
-}
-trap cleanup_runtime EXIT
-
 mapfile -t test_files < <(find tests -maxdepth 1 -type f -name 'test_*.py' -print | sort)
 ((${#test_files[@]} > 0)) || { echo "No test files found." >&2; exit 1; }
 test_group_count=5
@@ -49,16 +43,20 @@ for ((group_index=0; group_index<test_group_count; group_index++)); do
     group_files+=("${test_files[$file_index]}")
   done
   ((${#group_files[@]} > 0)) || continue
+  if ((group_index == 3)); then
+    # These filesystem/process-heavy tests are intentionally isolated because
+    # their combined teardown can retain helper processes in constrained builders.
+    for file_index in "${!group_files[@]}"; do
+      test_file="${group_files[$file_index]}"
+      echo "Running isolated $test_file ($((file_index + 1))/${#group_files[@]}) ..."
+      timeout 180 pytest -q -o faulthandler_timeout=60 "$test_file"
+    done
+    continue
+  fi
   echo "Running test group $((group_index + 1))/$test_group_count (${#group_files[@]} files) ..."
-  group_runtime_dir="$runtime_dir/group-$((group_index + 1))"
-  mkdir -p "$group_runtime_dir"
-  BBM_DATA_DIR="$group_runtime_dir" \
-  BBM_DATABASE_URL="sqlite:///$group_runtime_dir/test.db" \
-  pytest -q -o faulthandler_timeout=60 "${group_files[@]}"
+  timeout 300 pytest -q -o faulthandler_timeout=60 "${group_files[@]}"
 done
 
-cleanup_runtime
-trap - EXIT
 
 node --check app/static/app.js
 node --check app/static/i18n.js

@@ -1014,7 +1014,7 @@ class ControllerKeyRotateIn(BaseModel):
 
 
 class ManagerBackupCreateIn(BaseModel):
-    # Manager and cache backups are separate API objects. Reject unknown legacy
+    # Manager and cache backups are separate API objects. Reject unsupported
     # cache fields rather than silently implying that cache data was included.
     model_config = ConfigDict(extra="forbid")
 

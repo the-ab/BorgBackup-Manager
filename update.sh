@@ -6,7 +6,7 @@ PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$PROJECT_DIR"
 
 CURRENT_VERSION="$(cat VERSION 2>/dev/null || echo 0.0.0)"
-MIN_SUPPORTED_VERSION="1.1.0"
+MIN_SUPPORTED_VERSION="1.3.5"
 UPDATE_DIR="${UPDATE_DIR:-updates}"
 ASSUME_YES=0
 NO_BUILD=0
@@ -198,40 +198,23 @@ PY
 
 merge_env_example() {
   [[ -f .env && -f .env.example ]] || return 0
-  python3 - .env .env.example "$(cat VERSION 2>/dev/null || echo unknown)" <<'PYENV'
+  python3 - .env .env.example <<'PYENV'
 from pathlib import Path
 import os
 import re
 import sys
 
-target, example, version = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+target, example = Path(sys.argv[1]), Path(sys.argv[2])
 current_lines = target.read_text(encoding="utf-8").splitlines()
 sample_lines = example.read_text(encoding="utf-8").splitlines()
 pattern = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
-obsolete = {
-    "COMPOSE_FILE",
-    "BBM_ARCHIVE_MOUNTS_ENABLED",
-    "BBM_ARCHIVE_MOUNT_ROOT",
-    "BBM_ARCHIVE_MOUNT_HOST_PATH",
-    "BBM_ADMIN_TOKEN",
-    "BBM_SECRET_KEY",
-    "BBM_ALLOW_LEGACY_TOKEN_AUTH",
-    "BBM_DEBUG_LOG_LEVEL",
-    "BBM_HTTP_PORT",
-    "BBM_TLS_CERT_FILE",
-    "BBM_TLS_KEY_FILE",
-}
 current_values = {}
 current_order = []
-removed = []
 for raw in current_lines:
     match = pattern.match(raw.strip())
     if not match:
         continue
     key, value = match.groups()
-    if key in obsolete:
-        removed.append(key)
-        continue
     if key not in current_values:
         current_order.append(key)
     current_values[key] = value
@@ -257,12 +240,7 @@ if missing_required:
         "Pflichtwert fehlt in .env: " + ", ".join(missing_required)
         + ". Bitte zuerst `bash install.sh --config-only` ausführen."
     )
-custom = [key for key in current_order if key not in sample_keys and key not in obsolete]
-if custom:
-    while output and not output[-1].strip():
-        output.pop()
-    output.extend(["", f"# Benutzerdefinierte Werte, beibehalten beim Update auf v{version}"])
-    output.extend(f"{key}={current_values[key]}" for key in custom)
+unsupported = [key for key in current_order if key not in sample_keys]
 with target.open("w", encoding="utf-8") as handle:
     handle.write("\n".join(output).rstrip() + "\n")
     handle.flush()
@@ -271,11 +249,11 @@ try:
     target.chmod(0o600)
 except OSError:
     pass
-if removed:
-    print("Veraltete .env-Werte entfernt: " + ", ".join(sorted(set(removed))))
 if added:
     print(f"{len(added)} aktuelle .env-Werte ergänzt")
-if not removed and not added:
+if unsupported:
+    print(f"{len(unsupported)} nicht unterstützte .env-Schlüssel verworfen")
+if not added and not unsupported:
     print(".env ist bereits aktuell und wurde geordnet")
 PYENV
 }
@@ -303,8 +281,8 @@ project_items() {
   printf '%s\n' \
     .dockerignore .env.example .gitattributes .gitignore \
     LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md pytest.ini scripts \
-    compose.yaml compose.archive-mounts.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh INSTALLATION.md INSTALLATION.de.md README.md README.de.md \
-    RELEASE_NOTES.md RELEASE_NOTES.de.md VERSION requirements.in requirements.txt requirements-dev.txt app docker docker-compose tests
+    compose.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh INSTALLATION.md INSTALLATION.de.md README.md README.de.md \
+    RELEASE_NOTES.md RELEASE_NOTES.de.md RELEASE_CHECKLIST.md RELEASE_CHECKLIST.de.md VERSION requirements.in requirements.txt requirements-dev.txt app docker docker-compose tests
 }
 
 ensure_supported_source_version() {
@@ -373,6 +351,8 @@ PYDATA
     || fail "BBM_DATA_PATH und BBM_REPOSITORY_PATH dürfen nicht identisch sein"
   [[ "$data_abs/" != "$repository_abs/"* ]] \
     || fail "BBM_DATA_PATH darf nicht innerhalb von BBM_REPOSITORY_PATH liegen"
+  [[ "$repository_abs/" != "$data_abs/"* ]] \
+    || fail "BBM_REPOSITORY_PATH darf nicht innerhalb von BBM_DATA_PATH liegen"
   mkdir -p "$data_path/update-backups"
   probe="$data_path/update-backups/.bbm-write-test-$$"
   : > "$probe" || fail "Update-Backupverzeichnis ist nicht beschreibbar: $data_path/update-backups"
@@ -396,7 +376,7 @@ create_project_backup() {
 }
 
 create_data_backup() {
-  local data_path repository_path data_abs repository_abs repository_relative archive partial size
+  local data_path repository_path data_abs repository_abs archive partial size
   local -a excludes=(
     --one-file-system
     --exclude='./update-backups'
@@ -426,13 +406,8 @@ import sys
 print(Path(sys.argv[1]).resolve())
 PYDATA
 )"
-  if [[ "$repository_abs" == "$data_abs" ]]; then
-    fail "BBM_REPOSITORY_PATH darf für ein sicheres Update-Backup nicht identisch mit BBM_DATA_PATH sein"
-  fi
-  if [[ "$repository_abs" == "$data_abs/"* ]]; then
-    repository_relative="${repository_abs#"$data_abs/"}"
-    excludes+=(--exclude="./$repository_relative")
-    log "Repository-Unterverzeichnis wird vom Manager-Datenbackup ausgeschlossen: $repository_relative"
+  if [[ "$repository_abs" == "$data_abs" || "$repository_abs" == "$data_abs/"* || "$data_abs" == "$repository_abs/"* ]]; then
+    fail "BBM_DATA_PATH und BBM_REPOSITORY_PATH müssen vollständig getrennte Verzeichnisbäume sein"
   fi
 
   archive="$data_path/update-backups/update-${TS}-persistent-v${CURRENT_VERSION}.tar.gz"
@@ -499,6 +474,7 @@ required = [
     "install.sh", "update.sh", "recovery.sh", "restore-backup.sh",
     "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md", "THIRD-PARTY-NOTICES.md",
     "README.md", "README.de.md", "INSTALLATION.md", "INSTALLATION.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
+    "RELEASE_CHECKLIST.md", "RELEASE_CHECKLIST.de.md",
 ]
 missing = [name for name in required if not (source / name).exists()]
 if missing:
@@ -508,6 +484,7 @@ allowed = [
     "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md", "THIRD-PARTY-NOTICES.md", "pytest.ini", "scripts",
     "compose.yaml", "docker-compose", "Dockerfile", "install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "INSTALLATION.md",
     "INSTALLATION.de.md", "README.md", "README.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
+    "RELEASE_CHECKLIST.md", "RELEASE_CHECKLIST.de.md",
     "VERSION", "requirements.in", "requirements.txt",
     "requirements-dev.txt", "app", "docker", "tests",
 ]
@@ -518,22 +495,10 @@ for name in allowed:
     if dst.exists() or dst.is_symlink():
         shutil.rmtree(dst) if dst.is_dir() and not dst.is_symlink() else dst.unlink()
     shutil.copytree(src, dst) if src.is_dir() else shutil.copy2(src, dst)
-legacy_github = target / ".github"
-if legacy_github.exists() or legacy_github.is_symlink():
-    shutil.rmtree(legacy_github) if legacy_github.is_dir() and not legacy_github.is_symlink() else legacy_github.unlink()
-
-for obsolete_name in ("compose.archive-mounts.yaml",):
-    obsolete_path = target / obsolete_name
-    if obsolete_path.exists() or obsolete_path.is_symlink():
-        shutil.rmtree(obsolete_path) if obsolete_path.is_dir() and not obsolete_path.is_symlink() else obsolete_path.unlink()
-
 for name in ("install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "docker/entrypoint.sh", "docker/borg-serve.sh"):
     path = target / name
     if path.exists():
         path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-legacy_english_notes = target / "RELEASE_NOTES.en.md"
-if legacy_english_notes.exists() or legacy_english_notes.is_symlink():
-    legacy_english_notes.unlink()
 PY
   then
     rm -rf -- "$temp_dir"

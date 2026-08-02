@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import inspect
 
 TEST_DATA_DIR = Path(tempfile.gettempdir()) / f"bbm-host-ssh-actions-{os.getpid()}"
 shutil.rmtree(TEST_DATA_DIR, ignore_errors=True)
@@ -21,7 +21,6 @@ from app.main import app
 from app.runner import Command, host_ssh_action_command
 from app import security_store, service
 from app.config import MASTER_KEY_PATH, SECURITY_DATABASE_PATH
-from app.host_ssh_actions import legacy_host_ssh_action_status, migrate_legacy_host_ssh_actions
 from app.backups import _validate_security_backup_pair
 
 from tests.auth_helpers import admin_headers
@@ -173,61 +172,6 @@ def test_host_ssh_action_command_uses_strict_controller_ssh_and_timeout(monkeypa
     assert "sh" in command.argv[-1]
 
 
-def test_legacy_plaintext_actions_are_migrated_and_removed(tmp_path):
-    security_store.initialize_security_store()
-    legacy_path = tmp_path / "legacy-manager.db"
-    legacy_engine = create_engine(f"sqlite:///{legacy_path}")
-    plaintext = "sudo -n mount -t nfs4 secret.example:/vault /mnt/vault"
-    with legacy_engine.begin() as connection:
-        connection.execute(text(
-            """
-            CREATE TABLE host_ssh_actions (
-                id INTEGER PRIMARY KEY,
-                host_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                command TEXT NOT NULL,
-                timeout_seconds INTEGER NOT NULL,
-                enabled BOOLEAN NOT NULL,
-                created_at DATETIME NOT NULL,
-                updated_at DATETIME NOT NULL
-            )
-            """
-        ))
-        connection.execute(text(
-            """
-            INSERT INTO host_ssh_actions(
-                id,host_id,name,command,timeout_seconds,enabled,created_at,updated_at
-            ) VALUES(900001,700001,'legacy mount',:command,45,1,:created,:updated)
-            """
-        ), {"command": plaintext, "created": "2026-08-01 12:00:00", "updated": "2026-08-01 12:00:00"})
-
-    result = migrate_legacy_host_ssh_actions(legacy_engine)
-    try:
-        assert result["supported"] is True
-        assert result["migrated"] == 1
-        assert result["table_removed"] is True
-        assert result["vacuumed"] is True
-        assert result["vacuum_pending"] is False
-        with legacy_engine.connect() as connection:
-            assert "host_ssh_actions" not in inspect(connection).get_table_names()
-        migrated = security_store.get_host_ssh_action(900001)
-        assert migrated is not None
-        assert migrated.command == plaintext
-        assert plaintext.encode("utf-8") not in legacy_path.read_bytes()
-        for sidecar in (legacy_path.with_name(legacy_path.name + "-wal"), legacy_path.with_name(legacy_path.name + "-shm")):
-            if sidecar.exists():
-                assert plaintext.encode("utf-8") not in sidecar.read_bytes()
-        with sqlite3.connect(SECURITY_DATABASE_PATH) as connection:
-            encrypted = connection.execute(
-                "SELECT encrypted_command FROM host_ssh_actions WHERE id=900001"
-            ).fetchone()[0]
-        assert encrypted.startswith("v2:")
-        assert plaintext not in encrypted
-    finally:
-        security_store.delete_host_ssh_action(900001)
-        legacy_engine.dispose()
-
-
 def test_saved_action_preview_never_contains_plaintext_command():
     host = main_module.Host(
         id=778, name="preview-target", address="192.0.2.11", port=22,
@@ -249,7 +193,7 @@ def test_manager_backup_completeness_verifies_encrypted_ssh_actions(tmp_path):
     )
     try:
         result = _validate_security_backup_pair(
-            SECURITY_DATABASE_PATH, MASTER_KEY_PATH, require_runtime_identity=False
+            SECURITY_DATABASE_PATH, MASTER_KEY_PATH, require_runtime_identity=True
         )
         assert result["host_ssh_actions"] >= 1
 
@@ -266,76 +210,7 @@ def test_manager_backup_completeness_verifies_encrypted_ssh_actions(tmp_path):
         import pytest
         with pytest.raises(ValueError, match="SSH-Aktion .* kann mit dem gesicherten Master-Key nicht entschlüsselt werden"):
             _validate_security_backup_pair(
-                copied_database, MASTER_KEY_PATH, require_runtime_identity=False
+                copied_database, MASTER_KEY_PATH, require_runtime_identity=True
             )
     finally:
         security_store.delete_host_ssh_action(action.id)
-
-
-def test_empty_legacy_action_table_is_removed_and_sanitized(tmp_path):
-    security_store.initialize_security_store()
-    legacy_path = tmp_path / "legacy-empty-manager.db"
-    legacy_engine = create_engine(f"sqlite:///{legacy_path}")
-    with legacy_engine.begin() as connection:
-        connection.execute(text(
-            """
-            CREATE TABLE host_ssh_actions (
-                id INTEGER PRIMARY KEY,
-                host_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                command TEXT NOT NULL,
-                timeout_seconds INTEGER NOT NULL,
-                enabled BOOLEAN NOT NULL,
-                created_at DATETIME NOT NULL,
-                updated_at DATETIME NOT NULL
-            )
-            """
-        ))
-    result = migrate_legacy_host_ssh_actions(legacy_engine)
-    try:
-        assert result["table_removed"] is True
-        assert result["migrated"] == 0
-        assert result["vacuumed"] is True
-        assert legacy_host_ssh_action_status(legacy_engine)["table_present"] is False
-    finally:
-        legacy_engine.dispose()
-
-
-def test_legacy_action_migration_can_defer_vacuum_without_leaving_table(tmp_path):
-    security_store.initialize_security_store()
-    legacy_path = tmp_path / "legacy-deferred-manager.db"
-    legacy_engine = create_engine(f"sqlite:///{legacy_path}")
-    action_id = 900002
-    with legacy_engine.begin() as connection:
-        connection.execute(text(
-            """
-            CREATE TABLE host_ssh_actions (
-                id INTEGER PRIMARY KEY,
-                host_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                command TEXT NOT NULL,
-                timeout_seconds INTEGER NOT NULL,
-                enabled BOOLEAN NOT NULL,
-                created_at DATETIME NOT NULL,
-                updated_at DATETIME NOT NULL
-            )
-            """
-        ))
-        connection.execute(text(
-            """
-            INSERT INTO host_ssh_actions VALUES(
-                :id,700002,'deferred','printf confidential',30,1,
-                '2026-08-02 00:00:00','2026-08-02 00:00:00'
-            )
-            """
-        ), {"id": action_id})
-    result = migrate_legacy_host_ssh_actions(legacy_engine, sanitize=False)
-    try:
-        assert result["table_removed"] is True
-        assert result["vacuumed"] is False
-        assert result["vacuum_pending"] is True
-        assert legacy_host_ssh_action_status(legacy_engine)["table_present"] is False
-        assert security_store.get_host_ssh_action(action_id).command == "printf confidential"
-    finally:
-        security_store.delete_host_ssh_action(action_id)
-        legacy_engine.dispose()

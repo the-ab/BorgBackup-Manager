@@ -17,7 +17,7 @@ def _write_fake_artifact(path: Path, *, kind: str, host_id: int | None = None, h
         "format_version": 2,
         "backup_type": "cache",
         "cache_artifact_kind": kind,
-        "app_version": "1.2.10",
+        "app_version": "1.3.5",
         "created_at": "2026-08-01T19:00:00+00:00",
         "label": "test",
         "encrypted": False,
@@ -50,18 +50,18 @@ def test_cache_backup_selection_creates_manager_and_only_selected_device_artifac
     def fake_create(app_version, label, passphrase=None, **kwargs):
         if kwargs["include_manager_borg_cache"]:
             calls.append(("manager", ()))
-            return _write_fake_artifact(tmp_path / "backups" / "borgbackup-manager-cache-manager-v1.2.10-20260801-190000-test.zip", kind="manager")
+            return _write_fake_artifact(tmp_path / "backups" / "borgbackup-manager-cache-manager-v1.3.5-20260801-190000-test.zip", kind="manager")
         host_id = int(kwargs["client_host_ids"][0])
         calls.append(("client", (host_id,)))
         name = hosts[host_id][1].replace(" ", "-")
         return _write_fake_artifact(
-            tmp_path / "backups" / f"borgbackup-manager-cache-client-{name}-h{host_id}-v1.2.10-20260801-190000-test.zip",
+            tmp_path / "backups" / f"borgbackup-manager-cache-client-{name}-h{host_id}-v1.3.5-20260801-190000-test.zip",
             kind="client", host_id=host_id, host_name=hosts[host_id][1],
         )
 
     monkeypatch.setattr(backups, "create_cache_backup", fake_create)
     result = backups.create_cache_backup_set(
-        "1.2.10", "test", encrypted=False,
+        "1.3.5", "test", encrypted=False,
         include_manager_borg_cache=True,
         include_client_borg_cache=True,
         client_host_ids=[2],
@@ -86,13 +86,13 @@ def test_cache_backup_all_scope_expands_to_all_assigned_devices(monkeypatch, tmp
         host_id = int(kwargs["client_host_ids"][0])
         called.append(host_id)
         return _write_fake_artifact(
-            tmp_path / "backups" / f"borgbackup-manager-cache-client-{hosts[host_id][1]}-h{host_id}-v1.2.10-20260801-190000-test.zip",
+            tmp_path / "backups" / f"borgbackup-manager-cache-client-{hosts[host_id][1]}-h{host_id}-v1.3.5-20260801-190000-test.zip",
             kind="client", host_id=host_id, host_name=hosts[host_id][1],
         )
 
     monkeypatch.setattr(backups, "create_cache_backup", fake_create)
     result = backups.create_cache_backup_set(
-        "1.2.10", "test", encrypted=False,
+        "1.3.5", "test", encrypted=False,
         include_manager_borg_cache=False,
         include_client_borg_cache=True,
         client_host_ids=None,

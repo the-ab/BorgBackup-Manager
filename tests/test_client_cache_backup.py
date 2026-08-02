@@ -249,7 +249,7 @@ def test_cache_backup_contains_inventory_and_selectively_restores_client_cache(m
     monkeypatch.setattr(client_cache, "collect_client_borg_caches", fake_collect)
     monkeypatch.setattr(backups, "_client_host_record", lambda host_id: (11, "client-11", True))
     backup = backups.create_cache_backup(
-        "1.1.0",
+        "1.3.5",
         "client-cache",
         "correct horse battery staple",
         include_manager_borg_cache=False,

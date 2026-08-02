@@ -42,7 +42,7 @@ def encrypt_value(value: str) -> str:
 
 def decrypt_value(value: str) -> str:
     if not value.startswith(_MASTER_PREFIX):
-        raise ValueError("Geheimnis verwendet ein nicht mehr unterstütztes Format vor v1.1.0")
+        raise ValueError("Geheimnis verwendet ein nicht unterstütztes Verschlüsselungsformat")
     token = value[len(_MASTER_PREFIX):]
     try:
         return _fernet().decrypt(token.encode("ascii")).decode("utf-8")

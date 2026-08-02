@@ -714,7 +714,7 @@ body.compact .panel { padding: 15px; }
   .exclude-template-apply button { width: 100%; }
 }
 
-/* 0.8.7: kompakte Betriebsansichten für viele Geräte und Jobs */
+/* Kompakte Betriebsansichten für viele Geräte und Jobs */
 main > header { min-height: 76px; margin-bottom: 18px; }
 .metrics { gap: 9px; margin-bottom: 14px; }
 .metric { min-height: 78px; padding: 12px 14px; }

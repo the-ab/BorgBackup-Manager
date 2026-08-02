@@ -11,6 +11,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from app.config import (
@@ -124,98 +125,343 @@ def _connect(timeout_seconds: float = 30.0) -> sqlite3.Connection:
     return connection
 
 
-def initialize_security_store() -> dict[str, Any]:
-    with _connect() as connection:
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'admin',
-                enabled INTEGER NOT NULL DEFAULT 1,
-                must_change_password INTEGER NOT NULL DEFAULT 0,
-                failed_attempts INTEGER NOT NULL DEFAULT 0,
-                locked_until TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                last_login_at TEXT
-            );
-            CREATE TABLE IF NOT EXISTS sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                token_hash TEXT NOT NULL UNIQUE,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                last_seen_at TEXT NOT NULL,
-                remote_address TEXT,
-                user_agent TEXT
-            );
-            CREATE INDEX IF NOT EXISTS ix_sessions_expires_at ON sessions(expires_at);
-            CREATE TABLE IF NOT EXISTS session_reload_tokens (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                token_hash TEXT NOT NULL UNIQUE,
-                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                user_agent_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_session_reload_tokens_expires_at ON session_reload_tokens(expires_at);
-            CREATE TABLE IF NOT EXISTS security_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at TEXT NOT NULL,
-                user_id INTEGER,
-                username TEXT,
-                event TEXT NOT NULL,
-                remote_address TEXT,
-                detail TEXT
-            );
-            CREATE INDEX IF NOT EXISTS ix_security_events_created_at ON security_events(created_at);
-            CREATE TABLE IF NOT EXISTS login_rate_limits (
-                bucket_key TEXT PRIMARY KEY,
-                window_started_at TEXT NOT NULL,
-                attempts INTEGER NOT NULL,
-                blocked_until TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_login_rate_limits_updated_at ON login_rate_limits(updated_at);
-            CREATE TABLE IF NOT EXISTS secrets (
-                scope TEXT NOT NULL,
-                name TEXT NOT NULL,
-                encrypted_value TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY(scope, name)
-            );
-            CREATE INDEX IF NOT EXISTS ix_secrets_scope ON secrets(scope);
-            CREATE TABLE IF NOT EXISTS host_ssh_actions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                host_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                encrypted_command TEXT NOT NULL,
-                timeout_seconds INTEGER NOT NULL DEFAULT 300,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(host_id, name)
-            );
-            CREATE INDEX IF NOT EXISTS ix_security_host_ssh_actions_host_id
-              ON host_ssh_actions(host_id);
-            """
+SECURITY_SCHEMA_SQL = """
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'admin',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_login_at TEXT,
+    language TEXT NOT NULL DEFAULT 'de',
+    appearance TEXT NOT NULL DEFAULT 'auto',
+    two_factor_enabled INTEGER NOT NULL DEFAULT 0,
+    two_factor_secret TEXT,
+    two_factor_recovery_codes_json TEXT NOT NULL DEFAULT '[]',
+    two_factor_confirmed_at TEXT
+);
+CREATE TABLE sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    remote_address TEXT,
+    user_agent TEXT
+);
+CREATE INDEX ix_sessions_expires_at ON sessions(expires_at);
+CREATE TABLE session_reload_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    user_agent_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX ix_session_reload_tokens_expires_at ON session_reload_tokens(expires_at);
+CREATE TABLE security_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    user_id INTEGER,
+    username TEXT,
+    event TEXT NOT NULL,
+    remote_address TEXT,
+    detail TEXT
+);
+CREATE INDEX ix_security_events_created_at ON security_events(created_at);
+CREATE TABLE login_rate_limits (
+    bucket_key TEXT PRIMARY KEY,
+    window_started_at TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    blocked_until TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX ix_login_rate_limits_updated_at ON login_rate_limits(updated_at);
+CREATE TABLE secrets (
+    scope TEXT NOT NULL,
+    name TEXT NOT NULL,
+    encrypted_value TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(scope, name)
+);
+CREATE INDEX ix_secrets_scope ON secrets(scope);
+CREATE TABLE host_ssh_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    encrypted_command TEXT NOT NULL,
+    timeout_seconds INTEGER NOT NULL DEFAULT 300,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(host_id, name)
+);
+CREATE INDEX ix_security_host_ssh_actions_host_id ON host_ssh_actions(host_id);
+"""
+
+SECURITY_REQUIRED_SCHEMA = {
+    "users": {
+        "id", "username", "password_hash", "role", "enabled",
+        "must_change_password", "failed_attempts", "locked_until",
+        "created_at", "updated_at", "last_login_at", "language",
+        "appearance", "two_factor_enabled", "two_factor_secret",
+        "two_factor_recovery_codes_json", "two_factor_confirmed_at",
+    },
+    "sessions": {
+        "id", "token_hash", "user_id", "created_at", "expires_at",
+        "last_seen_at", "remote_address", "user_agent",
+    },
+    "session_reload_tokens": {
+        "id", "token_hash", "session_id", "user_agent_hash",
+        "created_at", "expires_at",
+    },
+    "security_events": {
+        "id", "created_at", "user_id", "username", "event",
+        "remote_address", "detail",
+    },
+    "login_rate_limits": {
+        "bucket_key", "window_started_at", "attempts",
+        "blocked_until", "updated_at",
+    },
+    "secrets": {"scope", "name", "encrypted_value", "created_at", "updated_at"},
+    "host_ssh_actions": {
+        "id", "host_id", "name", "encrypted_command",
+        "timeout_seconds", "enabled", "created_at", "updated_at",
+    },
+}
+
+SECURITY_REQUIRED_INDEXES = {
+    "ix_sessions_expires_at",
+    "ix_session_reload_tokens_expires_at",
+    "ix_security_events_created_at",
+    "ix_login_rate_limits_updated_at",
+    "ix_secrets_scope",
+    "ix_security_host_ssh_actions_host_id",
+}
+
+
+def _security_user_tables(connection: sqlite3.Connection) -> set[str]:
+    return {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+
+
+def _security_schema_state(connection: sqlite3.Connection) -> dict[str, Any]:
+    existing_tables = _security_user_tables(connection)
+    expected_tables = set(SECURITY_REQUIRED_SCHEMA)
+    missing_tables = sorted(expected_tables - existing_tables)
+    extra_tables = sorted(existing_tables - expected_tables)
+    missing_columns: dict[str, list[str]] = {}
+    extra_columns: dict[str, list[str]] = {}
+    table_columns: dict[str, list[str]] = {}
+    for table in sorted(existing_tables):
+        columns = [str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()]
+        table_columns[table] = columns
+    for table, required_columns in SECURITY_REQUIRED_SCHEMA.items():
+        if table not in existing_tables:
+            continue
+        columns = set(table_columns[table])
+        missing = sorted(required_columns - columns)
+        extra = sorted(columns - required_columns)
+        if missing:
+            missing_columns[table] = missing
+        if extra:
+            extra_columns[table] = extra
+    existing_indexes = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    missing_indexes = sorted(SECURITY_REQUIRED_INDEXES - existing_indexes)
+    plaintext_command = "command" in set(table_columns.get("host_ssh_actions", []))
+    return {
+        "missing_tables": missing_tables,
+        "extra_tables": extra_tables,
+        "missing_columns": missing_columns,
+        "extra_columns": extra_columns,
+        "missing_indexes": missing_indexes,
+        "table_columns": table_columns,
+        "plaintext_command": plaintext_command,
+    }
+
+
+def _security_table_digest(connection: sqlite3.Connection, table: str, columns: list[str]) -> tuple[int, str]:
+    quoted = ",".join('"' + column.replace('"', '""') + '"' for column in columns)
+    order = '"' + columns[0].replace('"', '""') + '"'
+    digest = hashlib.sha256()
+    count = 0
+    cursor = connection.execute(f'SELECT {quoted} FROM "{table}" ORDER BY {order}')
+    while True:
+        rows = cursor.fetchmany(1000)
+        if not rows:
+            break
+        for row in rows:
+            digest.update(json.dumps(list(row), ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8"))
+            digest.update(b"\n")
+            count += 1
+    return count, digest.hexdigest()
+
+
+def _security_baseline_error(state: dict[str, Any]) -> RuntimeError:
+    details: list[str] = []
+    if state["missing_tables"]:
+        details.append("fehlende Tabellen: " + ", ".join(state["missing_tables"]))
+    if state["missing_columns"]:
+        formatted = [
+            f"{table}.{column}"
+            for table, columns in state["missing_columns"].items()
+            for column in columns
+        ]
+        details.append("fehlende Spalten: " + ", ".join(formatted))
+    if state["missing_indexes"]:
+        details.append("fehlende Indizes: " + ", ".join(state["missing_indexes"]))
+    return RuntimeError(
+        "Der Security-Datenbankstand ist älter als die unterstützte Baseline BorgBackup Manager v1.3.5 ("
+        + "; ".join(details)
+        + "). Aktualisieren Sie zuerst auf v1.3.5 oder verwenden Sie eine Neuinstallation mit einem "
+          "unterstützten v1.3.5+-Manager-Backup."
+    )
+
+
+def _validate_current_security_schema(connection: sqlite3.Connection) -> None:
+    state = _security_schema_state(connection)
+    if state["plaintext_command"]:
+        raise RuntimeError(
+            "Die Security-Datenbank enthält noch die nicht unterstützte Klartextspalte "
+            "host_ssh_actions.command. Die Sicherheitsbereinigung unter v1.3.5 muss vollständig abgeschlossen sein."
         )
-        user_columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(users)").fetchall()}
-        if "language" not in user_columns:
-            connection.execute("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'de'")
-        if "appearance" not in user_columns:
-            connection.execute("ALTER TABLE users ADD COLUMN appearance TEXT NOT NULL DEFAULT 'auto'")
-        if "two_factor_enabled" not in user_columns:
-            connection.execute("ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER NOT NULL DEFAULT 0")
-        if "two_factor_secret" not in user_columns:
-            connection.execute("ALTER TABLE users ADD COLUMN two_factor_secret TEXT")
-        if "two_factor_recovery_codes_json" not in user_columns:
-            connection.execute("ALTER TABLE users ADD COLUMN two_factor_recovery_codes_json TEXT NOT NULL DEFAULT '[]'")
-        if "two_factor_confirmed_at" not in user_columns:
-            connection.execute("ALTER TABLE users ADD COLUMN two_factor_confirmed_at TEXT")
+    if state["missing_tables"] or state["missing_columns"] or state["missing_indexes"]:
+        raise _security_baseline_error(state)
+    if state["extra_tables"] or state["extra_columns"]:
+        raise RuntimeError(
+            "Die Security-Datenbank enthält noch nicht normalisierte v1.3.5-Altobjekte: "
+            + ", ".join(state["extra_tables"] or sorted(state["extra_columns"]))
+        )
+
+
+def _rebuild_security_database_baseline(state: dict[str, Any]) -> str:
+    source_path = Path(SECURITY_DATABASE_PATH)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = source_path.with_name(source_path.name + ".baseline-new")
+    backup_dir = Path(SECURITY_DIR).parent / "maintenance-backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        backup_dir.chmod(0o700)
+    except OSError:
+        pass
+    stamp = _utcnow().strftime("%Y%m%dT%H%M%SZ")
+    backup_path = backup_dir / f"security-before-baseline-v137-{stamp}.sqlite3"
+    for candidate in (temporary_path, Path(str(temporary_path) + "-wal"), Path(str(temporary_path) + "-shm")):
+        candidate.unlink(missing_ok=True)
+
+    source = sqlite3.connect(source_path, timeout=60)
+    try:
+        source.execute("PRAGMA busy_timeout=60000")
+        source.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        backup = sqlite3.connect(backup_path)
+        try:
+            source.backup(backup)
+            check = backup.execute("PRAGMA quick_check").fetchone()
+            if not check or str(check[0]).casefold() != "ok":
+                raise RuntimeError("Die Baseline-Sicherheitskopie der Security-Datenbank ist nicht konsistent")
+        finally:
+            backup.close()
+    finally:
+        source.close()
+    try:
+        backup_path.chmod(0o600)
+    except OSError:
+        pass
+
+    source = sqlite3.connect(source_path, timeout=60)
+    destination = sqlite3.connect(temporary_path, timeout=60)
+    try:
+        source.row_factory = sqlite3.Row
+        destination.row_factory = sqlite3.Row
+        destination.executescript(SECURITY_SCHEMA_SQL)
+        destination.execute("PRAGMA foreign_keys=OFF")
+        for table in SECURITY_REQUIRED_SCHEMA:
+            columns = [str(row["name"]) for row in destination.execute(f"PRAGMA table_info({table})").fetchall()]
+            quoted = ",".join('"' + column.replace('"', '""') + '"' for column in columns)
+            placeholders = ",".join("?" for _ in columns)
+            cursor = source.execute(f'SELECT {quoted} FROM "{table}"')
+            while True:
+                rows = cursor.fetchmany(1000)
+                if not rows:
+                    break
+                destination.executemany(
+                    f'INSERT INTO "{table}" ({quoted}) VALUES ({placeholders})',
+                    [tuple(row[column] for column in columns) for row in rows],
+                )
+        destination.commit()
+        destination.execute("PRAGMA foreign_keys=ON")
+        violations = destination.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                f"Die v1.3.5-Security-Baseline-Übernahme erzeugte {len(violations)} Fremdschlüsselverletzungen"
+            )
+        check = destination.execute("PRAGMA quick_check").fetchone()
+        if not check or str(check[0]).casefold() != "ok":
+            raise RuntimeError("Die neu aufgebaute Security-Datenbank ist nicht konsistent")
+        for table in SECURITY_REQUIRED_SCHEMA:
+            columns = [str(row["name"]) for row in destination.execute(f"PRAGMA table_info({table})").fetchall()]
+            if _security_table_digest(source, table, columns) != _security_table_digest(destination, table, columns):
+                raise RuntimeError(f"Datenvergleich für Security-Tabelle {table} ist fehlgeschlagen")
+    finally:
+        destination.close()
+        source.close()
+
+    for suffix in ("-wal", "-shm"):
+        Path(str(source_path) + suffix).unlink(missing_ok=True)
+    temporary_path.replace(source_path)
+    try:
+        source_path.chmod(0o600)
+    except OSError:
+        pass
+    backups = sorted(
+        backup_dir.glob("security-before-baseline-v*.sqlite3"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    for old in backups[2:]:
+        old.unlink(missing_ok=True)
+    return str(backup_path)
+
+
+def initialize_security_store() -> dict[str, Any]:
+    baseline_backup = None
+    with _connect() as connection:
+        existing_tables = _security_user_tables(connection)
+        if not existing_tables:
+            connection.executescript(SECURITY_SCHEMA_SQL)
+            connection.commit()
+            state = _security_schema_state(connection)
+        else:
+            state = _security_schema_state(connection)
+            if state["plaintext_command"]:
+                raise RuntimeError(
+                    "Die Security-Datenbank enthält noch die nicht unterstützte Klartextspalte "
+                    "host_ssh_actions.command. Die Sicherheitsbereinigung unter v1.3.5 muss vollständig abgeschlossen sein."
+                )
+            if state["missing_tables"] or state["missing_columns"] or state["missing_indexes"]:
+                raise _security_baseline_error(state)
+
+    if state["extra_tables"] or state["extra_columns"]:
+        baseline_backup = _rebuild_security_database_baseline(state)
+
+    with _connect() as connection:
+        _validate_current_security_schema(connection)
         connection.execute("UPDATE users SET language='de' WHERE language NOT IN ('de','en') OR language IS NULL")
         connection.execute("UPDATE users SET appearance='auto' WHERE appearance NOT IN ('auto','light','dark') OR appearance IS NULL")
         count = int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
@@ -243,8 +489,12 @@ def initialize_security_store() -> dict[str, Any]:
         os.chmod(SECURITY_DATABASE_PATH, 0o600)
     except OSError:
         pass
-    return {"created": created, "source": source, "users": count + (1 if created else 0)}
-
+    return {
+        "created": created,
+        "source": source,
+        "users": count + (1 if created else 0),
+        "baseline_backup": baseline_backup,
+    }
 
 def validate_username(username: str) -> str:
     value = username.strip()
@@ -1142,60 +1392,3 @@ def delete_orphan_host_ssh_actions(valid_host_ids: set[int]) -> int:
     return int(cursor.rowcount or 0)
 
 
-def import_legacy_host_ssh_actions(rows: list[dict[str, Any]]) -> int:
-    """Import manager.db SSH actions without deleting the legacy source.
-
-    The caller may remove the old table only after this transaction succeeds.
-    Repeated imports are idempotent and verify that an existing destination row
-    represents exactly the same action before accepting it.
-    """
-    if not rows:
-        return 0
-    prepared: list[tuple[Any, ...]] = []
-    for row in rows:
-        prepared.append((
-            int(row["id"]), int(row["host_id"]), str(row["name"]),
-            encrypt_value(str(row["command"])), int(row.get("timeout_seconds") or 300),
-            int(bool(row.get("enabled", True))), str(row.get("created_at") or _iso()),
-            str(row.get("updated_at") or row.get("created_at") or _iso()),
-        ))
-    with _connect() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        try:
-            for source, values in zip(rows, prepared, strict=True):
-                existing = connection.execute(
-                    "SELECT * FROM host_ssh_actions WHERE id=?", (values[0],)
-                ).fetchone()
-                if existing is None:
-                    connection.execute(
-                        """
-                        INSERT INTO host_ssh_actions(
-                          id,host_id,name,encrypted_command,timeout_seconds,enabled,created_at,updated_at
-                        ) VALUES(?,?,?,?,?,?,?,?)
-                        """,
-                        values,
-                    )
-                else:
-                    existing_command = decrypt_value(str(existing["encrypted_command"]))
-                    expected = (values[1], values[2], values[4], bool(values[5]), values[6], values[7])
-                    actual = (
-                        int(existing["host_id"]), str(existing["name"]), int(existing["timeout_seconds"]),
-                        bool(existing["enabled"]), str(existing["created_at"]), str(existing["updated_at"]),
-                    )
-                    if existing_command != str(source["command"]) or actual != expected:
-                        raise ValueError(f"Konflikt bei migrierter SSH-Aktion #{values[0]}")
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-    # Verify every source row can be decrypted and matches after commit.
-    for source in rows:
-        action = get_host_ssh_action(int(source["id"]))
-        if action is None or (
-            action.host_id != int(source["host_id"]) or action.name != str(source["name"])
-            or action.command != str(source["command"])
-            or action.timeout_seconds != int(source.get("timeout_seconds") or 300)
-            or action.enabled != bool(source.get("enabled", True))
-        ):
-            raise ValueError(f"SSH-Aktion #{source['id']} wurde nicht vollständig migriert")
-    return len(rows)

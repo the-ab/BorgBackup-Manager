@@ -1,12 +1,26 @@
 from __future__ import annotations
 
+import json
 import os
+import zipfile
 from pathlib import Path
 import shutil
 import subprocess
 
+from app import backups
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+TEST_BACKUP_PASSPHRASE = "current baseline backup passphrase"
+
+
+def _encrypt_test_backup(plain_zip: Path, encrypted: Path) -> Path:
+    with zipfile.ZipFile(plain_zip) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    backups._encrypt_backup(plain_zip, encrypted, manifest, TEST_BACKUP_PASSPHRASE)
+    return encrypted
 
 
 def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -149,17 +163,16 @@ def test_install_rejects_invalid_timezone_without_unbound_variable(tmp_path: Pat
 
 
 def test_restore_rejects_permission_path_traversal_before_prompt(tmp_path: Path):
-    import json
-    import zipfile
-
-    backup = tmp_path / "unsafe.zip"
-    with zipfile.ZipFile(backup, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"format": "borgbackup-manager-full-backup", "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
+    plain = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(plain, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"format": "borgbackup-manager-full-backup", "format_version": 7, "backup_type": "manager", "app_version": "1.3.5"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"db")
         archive.writestr("permissions.json", json.dumps({"../outside": 0o600}))
 
-    result = _run(["bash", str(PROJECT_ROOT / "restore-backup.sh"), str(backup)], cwd=tmp_path)
+    backup = _encrypt_test_backup(plain, tmp_path / "unsafe.bbm")
+    env = {**os.environ, "BBM_RESTORE_BACKUP_PASSPHRASE": TEST_BACKUP_PASSPHRASE}
+    result = _run(["bash", str(PROJECT_ROOT / "restore-backup.sh"), str(backup)], cwd=tmp_path, env=env)
     assert result.returncode != 0
     assert "Unsicherer Berechtigungspfad" in result.stdout
 
@@ -187,14 +200,14 @@ def test_posix_wrappers_fail_cleanly_without_runtime_environment(tmp_path: Path)
     assert "cannot create" not in borg_serve.stdout.lower()
     assert "unbound variable" not in borg_serve.stdout.lower()
 
-def test_release_build_context_contains_current_v110_plus_update_files(tmp_path: Path):
-    """The supported v1.1.0+ updater file set must leave a buildable project."""
+def test_release_build_context_contains_current_baseline_files(tmp_path: Path):
+    """The supported v1.3.5+ updater file set must leave a buildable project."""
     target = tmp_path / "supported-updater-target"
     target.mkdir()
     supported_allowed = (
         ".dockerignore", ".env.example", ".gitattributes", ".gitignore",
         "compose.yaml", "Dockerfile", "install.sh", "update.sh", "recovery.sh",
-        "restore-backup.sh", "INSTALLATION.md", "README.md", "RELEASE_NOTES.md",
+        "restore-backup.sh", "INSTALLATION.md", "README.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
         "VERSION", "requirements.txt", "requirements-dev.txt", "app", "docker", "tests",
     )
     for name in supported_allowed:
@@ -206,8 +219,8 @@ def test_release_build_context_contains_current_v110_plus_update_files(tmp_path:
             shutil.copy2(source, destination)
 
     assert not (target / "RELEASE_NOTES.en.md").exists()
-    assert (target / "app/RELEASE_NOTES.md").is_file()
-    assert (target / "app/RELEASE_NOTES.de.md").is_file()
+    assert not (target / "app/RELEASE_NOTES.md").exists()
+    assert not (target / "app/RELEASE_NOTES.de.md").exists()
 
     dockerfile = (target / "Dockerfile").read_text(encoding="utf-8")
     copy_line = next(line for line in dockerfile.splitlines() if line.startswith("COPY README.md"))
@@ -218,17 +231,16 @@ def test_release_build_context_contains_current_v110_plus_update_files(tmp_path:
 
 
 def test_restore_rejects_archive_entry_limit_before_prompt(tmp_path: Path):
-    import json
-    import zipfile
-
-    backup = tmp_path / "too-many.zip"
-    with zipfile.ZipFile(backup, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"format": "borgbackup-manager-full-backup", "format_version": 6, "backup_type": "manager", "app_version": "1.1.0"}))
+    plain = tmp_path / "too-many.zip"
+    with zipfile.ZipFile(plain, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"format": "borgbackup-manager-full-backup", "format_version": 7, "backup_type": "manager", "app_version": "1.3.5"}))
         archive.writestr("migration.env", "TZ=Europe/Berlin\n")
         archive.writestr("data/manager.db", b"db")
 
+    backup = _encrypt_test_backup(plain, tmp_path / "too-many.bbm")
     env = os.environ.copy()
     env["BBM_BACKUP_MAX_ENTRIES"] = "2"
+    env["BBM_RESTORE_BACKUP_PASSPHRASE"] = TEST_BACKUP_PASSPHRASE
     result = _run(["bash", str(PROJECT_ROOT / "restore-backup.sh"), str(backup)], cwd=tmp_path, env=env)
     assert result.returncode != 0
     assert "mehr als 2 ZIP-Einträge" in result.stdout

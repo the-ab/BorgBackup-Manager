@@ -56,22 +56,22 @@ def test_settings_session_idle_timeout_must_not_exceed_absolute_session_ttl(monk
     assert response.status_code == 400
     assert "maximale Sitzungsdauer" in response.json()["detail"]
 
-def test_health_is_public(monkeypatch):
+def test_strict_health_is_public_and_old_compatibility_route_is_removed(monkeypatch):
     monkeypatch.setattr(main_module, "repository_sshd_listening", lambda: True)
     with TestClient(app) as client:
-        response = client.get("/api/health")
-        assert response.status_code == 200
-        assert response.json()["status"] == "ok"
+        response = client.get("/api/health/strict")
+        obsolete = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert obsolete.status_code == 404
 
 
 def test_operational_health_reports_repository_sshd_failure_even_when_strict_probe_allows_it(monkeypatch):
     monkeypatch.setattr(main_module, "HEALTH_REQUIRE_SSHD", False)
     monkeypatch.setattr(main_module, "repository_sshd_listening", lambda: False)
     with TestClient(app) as client:
-        compatible = client.get("/api/health")
         strict = client.get("/api/health/strict")
         detail = client.get("/api/system/health", headers=AUTH)
-    assert compatible.status_code == 200 and compatible.json() == {"status": "degraded"}
     assert strict.status_code == 200 and strict.json() == {"status": "degraded"}
     assert detail.status_code == 200
     assert detail.json()["status"] == "degraded"
@@ -82,12 +82,9 @@ def test_health_is_degraded_when_repository_sshd_is_required_but_missing(monkeyp
     monkeypatch.setattr(main_module, "HEALTH_REQUIRE_SSHD", True)
     monkeypatch.setattr(main_module, "repository_sshd_listening", lambda: False)
     with TestClient(app) as client:
-        compatible = client.get("/api/health")
         strict = client.get("/api/health/strict")
         unauthorized_detail = client.get("/api/system/health")
         detail = client.get("/api/system/health", headers=AUTH)
-    assert compatible.status_code == 200
-    assert compatible.json() == {"status": "degraded"}
     assert strict.status_code == 503
     assert strict.json() == {"status": "degraded"}
     assert unauthorized_detail.status_code == 401
@@ -518,74 +515,11 @@ def test_restart_marks_active_runs_as_failed():
         assert recovered.finished_at is not None
 
 
-def test_repository_access_can_be_bootstrapped_from_webui(monkeypatch, tmp_path: Path):
-    host_key = tmp_path / "ssh_host_ed25519_key.pub"
-    host_key.write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEUdWrG3dnKa9pj3X6CSpTSHZ2jwzp1UgSyGgtyY+XJfHostKey manager\n", encoding="utf-8")
-    authorized_keys = tmp_path / "authorized_keys"
-    authorized_keys.write_text(
-        'restrict,command="/usr/local/bin/bbm-borg-serve" ssh-ed25519 AAAALEGACY legacy\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(service, "REPOSITORY_HOST_KEY_PUBLIC_PATH", host_key)
-    monkeypatch.setattr(service, "REPOSITORY_AUTHORIZED_KEYS_PATH", authorized_keys)
-
-    repository_id = 0
-
-    async def successful_bootstrap(command):
-        assert "bbm_repository_${repository_id}_ed25519" in command.argv[-1]
-        assert command.argv[-1].rstrip().endswith(str(repository_id))
-        return 0, (
-            f"BBM_REPOSITORY_KEY {repository_id} "
-            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDeviceKey backup@test\n"
-        ), ""
-
-    monkeypatch.setattr(service, "execute", successful_bootstrap)
-
+def test_device_wide_repository_bootstrap_route_is_removed():
     with TestClient(app) as client:
-        host = client.post(
-            "/api/hosts", headers=AUTH,
-            json={
-                "name": "bootstrap-server", "address": "10.0.0.8", "port": 22,
-                "username": "backup", "host_key": HOST_KEY, "enabled": True,
-            },
-        )
-        with SessionLocal() as db:
-            repository = Repository(
-                name="bootstrap-repository",
-                location="ssh://borg@manager:2222/./bootstrap-repo",
-                storage_path="/repositories/bootstrap-repo",
-                initialized=True,
-                encryption_mode="none",
-                extra_env_json="{}",
-            )
-            db.add(repository); db.flush()
-            repository_id = repository.id
-            job = Job(
-                name="bootstrap-job",
-                host_id=host.json()["id"],
-                repository_id=repository.id,
-                source_paths_json='["/srv"]',
-                exclude_patterns_json="[]",
-                archive_prefix="bbm-bootstrap-",
-                create_options_json="{}",
-            )
-            db.add(job); db.commit()
-        service.sync_repository_access_assignments()
-        response = client.post(
-            f"/api/hosts/{host.json()['id']}/bootstrap-repository", headers=AUTH,
-        )
-        refreshed = client.get("/api/hosts", headers=AUTH).json()
+        response = client.post("/api/hosts/1/bootstrap-repository", headers=AUTH)
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "ready"
-    assert response.json()["configured"] == 1
-    content = authorized_keys.read_text(encoding="utf-8")
-    assert "AAAAC3NzaC1lZDI1NTE5AAAAIDeviceKey" in content
-    assert "AAAALEGACY" not in content
-    assert 'command="/usr/local/bin/bbm-borg-serve --repository /repositories/bootstrap-repo"' in content
-    assert f"bbm-access-h{host.json()['id']}-r{repository_id}" in content
-    assert next(item for item in refreshed if item["id"] == host.json()["id"])["repository_ready"] is True
-
+    assert response.status_code == 404
 
 
 def test_managed_repository_allows_assignment_to_multiple_devices(monkeypatch):
@@ -993,7 +927,7 @@ def test_session_cookie_survives_reload_on_http_proxy_origin(monkeypatch):
         id=record["id"], username=record["username"], role=record["role"],
         enabled=record["enabled"], must_change_password=record["must_change_password"],
     )
-    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: user)
+    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: (user, "ok"))
     with TestClient(app, base_url="http://testserver") as client:
         response = client.post("/api/auth/login", headers=BROWSER, json={"username": "admin", "password": "irrelevant"})
         assert response.status_code == 200
@@ -1012,7 +946,7 @@ def test_untrusted_forwarded_http_cannot_weaken_secure_cookie(monkeypatch):
         id=record["id"], username=record["username"], role=record["role"],
         enabled=record["enabled"], must_change_password=record["must_change_password"],
     )
-    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: user)
+    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: (user, "ok"))
     with TestClient(app, base_url="https://internal-container") as client:
         response = client.post(
             "/api/auth/login",
@@ -1032,7 +966,7 @@ def test_secure_cookie_is_forced_even_for_http_upstream(monkeypatch):
         id=record["id"], username=record["username"], role=record["role"],
         enabled=record["enabled"], must_change_password=record["must_change_password"],
     )
-    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: user)
+    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: (user, "ok"))
     with TestClient(app, base_url="http://internal-container") as client:
         response = client.post(
             "/api/auth/login",
@@ -1799,7 +1733,6 @@ def test_repository_cache_endpoint_is_explicit_and_records_management_activity(m
         return {
             "repository_borg_id": "d" * 64,
             "cache_removed": True,
-            "legacy_cache_removed": True,
             "removed_bytes": 4096,
         }
 
@@ -1828,7 +1761,6 @@ def test_repository_cache_endpoint_is_explicit_and_records_management_activity(m
             )
 
     assert response.status_code == 200, response.text
-    assert response.json()["legacy_cache_removed"] is True
     assert response.json()["removed_bytes"] == 4096
     assert run is not None
     assert run.status == "success"
@@ -2132,7 +2064,7 @@ def test_tab_reload_token_restores_authentication_without_cookie(monkeypatch):
         id=record["id"], username=record["username"], role=record["role"],
         enabled=record["enabled"], must_change_password=record["must_change_password"],
     )
-    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: user)
+    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: (user, "ok"))
     headers = {"user-agent": "BBM-Browser-Test/1.0"}
     with TestClient(app, base_url="https://testserver", headers=headers) as client:
         login = client.post("/api/auth/login", headers=BROWSER, json={"username": "admin", "password": "irrelevant"})
@@ -2152,7 +2084,7 @@ def test_tab_reload_token_is_bound_to_user_agent(monkeypatch):
         id=record["id"], username=record["username"], role=record["role"],
         enabled=record["enabled"], must_change_password=record["must_change_password"],
     )
-    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: user)
+    monkeypatch.setattr(main_module, "authenticate_user", lambda *_args, **_kwargs: (user, "ok"))
     with TestClient(app, base_url="https://testserver", headers={"user-agent": "Original-Browser"}) as client:
         login = client.post("/api/auth/login", headers=BROWSER, json={"username": "admin", "password": "irrelevant"})
         reload_token = login.json()["reload_token"]
@@ -2899,11 +2831,12 @@ def test_manager_backup_can_be_uploaded_as_raw_body(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(backups_module, "BACKUP_DIR", backup_dir)
     monkeypatch.setattr(backups_module, "DATA_DIR", data_dir)
 
-    name = "borgbackup-manager-backup-v1.1.0-20260719-123000-upload-api.bbm"
+    name = "borgbackup-manager-backup-v1.3.5-20260719-123000-upload-api.bbm"
     header = {
         "format": backups_module.BACKUP_ENVELOPE_FORMAT,
         "format_version": 2,
-        "app_version": "1.1.0",
+        "backup_type": "manager",
+        "app_version": "1.3.5",
         "created_at": "2026-07-19T12:30:00+00:00",
         "label": "upload-api",
         "encrypted": True,

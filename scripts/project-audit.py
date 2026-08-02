@@ -586,19 +586,128 @@ def audit_release_layout() -> None:
     legacy = ROOT / "RELEASE_NOTES.en.md"
     if legacy.exists():
         error(f"Legacy release-notes file present: {legacy.name}")
-    pairs = (
-        (ROOT / "RELEASE_NOTES.md", APP / "RELEASE_NOTES.md"),
-        (ROOT / "RELEASE_NOTES.de.md", APP / "RELEASE_NOTES.de.md"),
-    )
-    for source, compatibility_copy in pairs:
+    for source in (ROOT / "RELEASE_NOTES.md", ROOT / "RELEASE_NOTES.de.md"):
         if not source.is_file():
             error(f"Missing release notes: {source.name}")
-            continue
-        if not compatibility_copy.is_file():
-            error(f"Missing old-updater compatibility copy: {compatibility_copy.relative_to(ROOT)}")
-        elif source.read_bytes() != compatibility_copy.read_bytes():
-            error(f"Release-note compatibility copy differs: {compatibility_copy.relative_to(ROOT)}")
+    for obsolete_copy in (APP / "RELEASE_NOTES.md", APP / "RELEASE_NOTES.de.md", APP / "RELEASE_NOTES.en.md"):
+        if obsolete_copy.exists():
+            error(f"Obsolete application release-note copy present: {obsolete_copy.relative_to(ROOT)}")
 
+
+
+
+def audit_baseline_cutoff() -> None:
+    """Enforce the one-time v1.3.5 baseline and reject old BBM transition code."""
+    database = _read(APP / "database.py")
+    security = _read(APP / "security_store.py")
+    main_source = _read(APP / "main.py")
+    backups = _read(APP / "backups.py")
+    update = _read(ROOT / "update.sh")
+    restore = _read(ROOT / "restore-backup.sh")
+    docs = "\n".join(_read(path) for path in (
+        ROOT / "README.md", ROOT / "README.de.md",
+        ROOT / "INSTALLATION.md", ROOT / "INSTALLATION.de.md",
+        STATIC / "help.en.html", STATIC / "help.de.html",
+    ))
+    required = (
+        (database, 'MINIMUM_BASELINE_VERSION = "1.3.5"', "manager schema baseline"),
+        (update, 'MIN_SUPPORTED_VERSION="1.3.5"', "update baseline"),
+        (restore, 'MIN_SUPPORTED_BACKUP_VERSION="1.3.5"', "restore baseline"),
+        (backups, 'MIN_SUPPORTED_BACKUP_VERSION = "1.3.5"', "backup baseline"),
+    )
+    for text, marker, label in required:
+        if marker not in text:
+            error(f"Missing {label}: {marker}")
+    forbidden_source = {
+        "app/host_ssh_actions.py": APP / "host_ssh_actions.py",
+        "app/ssh_history_cleanup.py": APP / "ssh_history_cleanup.py",
+    }
+    for label, path in forbidden_source.items():
+        if path.exists():
+            error(f"Obsolete BBM migration module remains: {label}")
+    for marker, label in (
+        ('@app.get("/api/health")', "old public health endpoint"),
+        ('@app.post("/api/backups", status_code=201', "synchronous backup compatibility endpoint"),
+        ("migrate_schema", "additive manager schema migration"),
+        ("migrate_legacy_host_ssh_actions", "legacy SSH migration"),
+        ("sanitize_legacy_ssh_run_history", "legacy SSH history migration"),
+    ):
+        if marker in main_source or marker in database or marker in security:
+            error(f"Obsolete BBM compatibility marker remains: {label}")
+    forbidden_docs = (
+        "One-time transition from",
+        "Einmaliger Übergang von",
+        "Direct updates from releases older than",
+        "Direkte Updates von Versionen vor",
+        "On the first v1.3.5 start",
+        "Beim ersten Start von v1.3.5",
+        "Since v1.",
+        "Seit v1.",
+        "Ab Version 0.",
+    )
+    for marker in forbidden_docs:
+        if marker in docs:
+            error(f"Historical transition documentation remains: {marker}")
+
+    service = _read(APP / "service.py")
+    cache = _read(APP / "repository_cache.py")
+    api_js = _read(STATIC / "app.js")
+    strict_markers = (
+        (security, "if not existing_tables:", "fresh-only security schema creation"),
+        (security, "_rebuild_security_database_baseline", "verified v1.3.5 security baseline adoption"),
+        (security, "_validate_current_security_schema(connection)", "normalized security schema validation"),
+        (database, "_rebuild_manager_database_baseline", "verified v1.3.5 manager baseline adoption"),
+        (database, "extra_tables = sorted(actual_tables - set(expected_tables))", "manager surplus-object detection"),
+        (update, 'MIN_SUPPORTED_VERSION="1.3.5"', "strict updater source baseline"),
+        (update, "nicht unterstützte .env-Schlüssel verworfen", "current-only environment merge"),
+    )
+    for text, marker, label in strict_markers:
+        if marker not in text:
+            error(f"Missing {label}: {marker}")
+
+    forbidden_runtime_markers = (
+        (security, "ALTER TABLE", "additive security schema migration"),
+        (security, "CREATE TABLE IF NOT EXISTS", "schema completion in an existing security database"),
+        (main_source, '@app.post("/api/hosts/{host_id}/bootstrap-repository")', "device-wide bootstrap compatibility endpoint"),
+        (service, "repository_ids: list[int] | None", "optional repository bootstrap fallback"),
+        (update, "repository_relative", "nested repository-path update compatibility"),
+        (update, "legacy_github", "old GitHub cleanup compatibility"),
+        (cache, "legacy_cache_removed", "old shared-cache response compatibility"),
+        (cache, "legacy_cache_error", "old shared-cache error compatibility"),
+        (api_js, "legacy_cache_removed", "old shared-cache UI compatibility"),
+    )
+    for text, marker, label in forbidden_runtime_markers:
+        if marker in text:
+            error(f"Obsolete BBM compatibility marker remains: {label}")
+
+    current_version = _read(ROOT / "VERSION").strip()
+    release_notes = (_read(ROOT / "RELEASE_NOTES.md"), _read(ROOT / "RELEASE_NOTES.de.md"))
+    for notes in release_notes:
+        headings = re.findall(r"^## v(\d+\.\d+\.\d+)\b", notes, re.MULTILINE)
+        if not headings or headings[0] != current_version:
+            error(f"Release notes must start with current v{current_version}, found: {headings[:3]}")
+        if len(headings) != len(set(headings)):
+            error(f"Release notes contain duplicate version blocks: {headings}")
+        required_history = {"1.3.7", "1.3.6", "1.3.5", "1.3.4"}
+        missing_history = sorted(required_history - set(headings))
+        if missing_history:
+            error(f"Release-note history is incomplete; missing: {', '.join(missing_history)}")
+        versions = [tuple(int(part) for part in heading.split('.')) for heading in headings]
+        if versions != sorted(versions, reverse=True):
+            error(f"Release-note blocks are not in descending version order: {headings}")
+
+    historical_version = re.compile(r"\bv(?:0\.\d+\.\d+|1\.(?:0|1|2)\.\d+|1\.3\.[0-4])\b")
+    doc_paths = (
+        ROOT / "README.md", ROOT / "README.de.md",
+        ROOT / "INSTALLATION.md", ROOT / "INSTALLATION.de.md",
+        ROOT / "SECURITY.md", ROOT / "RELEASE_CHECKLIST.md", ROOT / "RELEASE_CHECKLIST.de.md",
+        STATIC / "help.en.html", STATIC / "help.de.html",
+        ROOT / "docker-compose" / "README.md", ROOT / "docker-compose" / "README.de.md",
+    )
+    for path in doc_paths:
+        match = historical_version.search(_read(path))
+        if match:
+            error(f"Historical BBM version remains in current documentation {path.relative_to(ROOT)}: {match.group(0)}")
 
 
 def audit_standalone_image_deployment(version: str) -> None:
@@ -771,6 +880,7 @@ def main() -> int:
     audit_docker_sources()
     audit_markdown_links()
     audit_release_layout()
+    audit_baseline_cutoff()
     if ERRORS:
         print("Project audit failed:", file=sys.stderr)
         for item in ERRORS:

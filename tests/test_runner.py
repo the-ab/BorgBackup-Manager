@@ -17,7 +17,6 @@ from app.runner import (
     archive_info_command,
     backup_command,
     browse_archive_command,
-    delete_archive_command,
     delete_archives_command,
     diff_archives_command,
     host_repository_bootstrap_command,

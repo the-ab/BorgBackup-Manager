@@ -18,14 +18,14 @@ Diese Checkliste ist bei jeder Version vollständig abzuarbeiten. Nicht zutreffe
 - [ ] Paket-, ZIP-, SHA-256- und GHCR-Tag-Beispiele auf die neue Version umgestellt.
 - [ ] Keine veralteten Versionsmarker mehr im Projekt vorhanden.
 
-## 3. Code, Datenmodell und Migrationen
+## 3. Code und aktuelles Datenmodell
 
 - [ ] Neue und geänderte Abläufe besitzen Regressionstests.
-- [ ] Bestehende Installationen werden automatisch und idempotent migriert.
-- [ ] Migrationen kopieren und prüfen Daten vor dem Entfernen alter Strukturen.
-- [ ] Abbruch-, Neustart- und Wiederholungsfälle einer Migration sind abgesichert.
-- [ ] SQLite-WAL/SHM-, Freelist- und Klartextreste wurden bei sicherheitsrelevanten Migrationen berücksichtigt.
-- [ ] Vertrauliche Altdaten wurden in aktiven Tabellen, historischen Laufvorschauen, Ausgabe-/Fehler-/Logfeldern, Benachrichtigungsdetails, dateibasierten Laufprotokollen und Wartungskopien geprüft.
+- [ ] Nur die dokumentierte v1.3.5-Baseline und das aktuelle Schema werden akzeptiert; nicht unterstützte ältere Schemata brechen eindeutig ab.
+- [ ] Manager- und Security-Schema entsprechen für alle unterstützten Daten der v1.3.5-Baseline.
+- [ ] Es wurde kein historisches BBM-Migrationsmodul, kein additives Schema-Hilfswerkzeug, kein API-Alias und keine veraltete Paketkopie erneut eingeführt.
+- [ ] Ablehnungen nicht unterstützter Schemata verweisen eindeutig auf die v1.3.5-Bereinigung oder eine Neuinstallation.
+- [ ] Vertrauliche Daten fehlen in manager.db, WAL/SHM, Laufvorschauen, Logs, Benachrichtigungen und Wartungskopien.
 - [ ] Lösch-, Geräte-, Repository-, Backup- und Wartungsabläufe berücksichtigen das neue Datenmodell.
 - [ ] Keine ungenutzten Module, Importe, Routen oder Frontend-Handler zurückgelassen.
 
@@ -57,7 +57,7 @@ Diese Checkliste ist bei jeder Version vollständig abzuarbeiten. Nicht zutreffe
 - [ ] Integrierte WebUI-Hilfe `help.de.html` und `help.en.html` aktualisiert.
 - [ ] `SECURITY.md`, `THIRD-PARTY-NOTICES.md` und Compose-Dokumentation bei Bedarf aktualisiert.
 - [ ] Root- und App-Kopien der Release Notes aktualisiert und byte-identisch.
-- [ ] Update-, Restore-, Migrations- und Sicherheitshinweise enthalten konkrete Pfade und Auswirkungen.
+- [ ] Update-, Restore-, Baseline- und Sicherheitshinweise enthalten konkrete Pfade und Auswirkungen.
 
 ## 7. Automatisierte und statische Prüfungen
 

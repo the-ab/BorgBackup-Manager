@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.3.5
+# Installation und Betrieb – BorgBackup Manager 1.3.8
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.3.5.zip
+BorgBackup-Manager-1.3.8.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.3.5.zip
+unzip /pfad/BorgBackup-Manager-1.3.8.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -75,7 +75,7 @@ Das Skript erzeugt `.env` und die persistenten Verzeichnisse. Beim ersten Contai
 
 Passwörter werden als scrypt-Prüfwerte gespeichert. Controller-, Repository-SSH- und TLS-Privatschlüssel, Repository-Passphrasen sowie Borg-Keyfiles werden verschlüsselt in `security.db` abgelegt. `master.key` ist der einzige externe Vertrauensanker und besitzt Modus `0600`. Laufzeitdateien werden ausschließlich unter `/run/bbm-secrets` materialisiert.
 
-Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.3.5` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
+Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.3.8` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
 
 ### Installation ausschließlich mit dem GHCR-Image
 
@@ -109,7 +109,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.3.5` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
+`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.3.8` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
 
 Beim ersten Start prüft der Entrypoint den Mount `/repositories` mit der konfigurierten `BBM_BORG_UID` und `BBM_BORG_GID`. Ist der Mount leer und nur wegen der automatischen Docker-Anlage `root` zugeordnet, wird ausschließlich das Stammverzeichnis auf die konfigurierte UID/GID gesetzt und für den Eigentümer lesbar, beschreibbar und betretbar gemacht. Es erfolgt ausdrücklich kein `chown -R`. Enthält das Verzeichnis bereits Daten, werden keine Eigentümer automatisch geändert. In diesem Fall müssen die Rechte oder ACLs auf dem Host passend korrigiert werden. Bei NFS mit `root_squash` ist die Berechtigung serverseitig beziehungsweise über passende numerische UID/GID zu setzen.
 
@@ -188,15 +188,15 @@ BBM_LOG_ROTATIONS=5
 
 `BBM_SESSION_COOKIE_SECURE=always` ist der empfohlene und voreingestellte Wert. Der Manager wird selbst per HTTPS ausgeliefert. `auto` und insbesondere `never` sind nur für ausdrücklich geprüfte Sonderfälle vorgesehen. Proxy-Header beeinflussen Scheme, Client-IP oder Origin ausschließlich, wenn die unmittelbare Proxy-Adresse in `BBM_TRUSTED_PROXY_CIDRS` liegt. Bei einem separaten Docker-Reverse-Proxy muss dessen festes Container-Netz dort ausdrücklich ergänzt werden; eingehende Forwarded-Header sind am Proxy zu überschreiben.
 
-Bei einem Update ab v1.1.0 baut `update.sh` die vorhandene `.env` anhand der aktuellen Vorlage neu auf. Unterstützte eigene Werte bleiben erhalten, fehlende aktuelle Werte werden ergänzt und obsolete Einträge wie `COMPOSE_FILE`, alte Token-/Secret-Variablen, interne Archiv-Mount-Schalter, `BBM_DEBUG_LOG_LEVEL`, `BBM_HTTP_PORT` und alte TLS-Dateipfade werden entfernt. Die Datei bleibt mit Modus `0600` geschützt.
+Bei einem unterstützten Update ab der v1.3.5-Baseline baut `update.sh` die vorhandene `.env` anhand der aktuellen Vorlage neu auf. Werte aktueller dokumentierter Variablen bleiben erhalten, fehlende aktuelle Werte werden ergänzt und nicht mehr unterstützte Schlüssel werden verworfen. Die Datei bleibt mit Modus `0600` geschützt.
 
 `BBM_APPEARANCE` ist der Startwert für Konten ohne persönliche Darstellung. Danach gilt das benutzerbezogene Farbschema aus **Profil → Darstellung & Sprache**. `BBM_REPOSITORY_SIZE_AFTER_RUN` bestimmt den Anfangswert der systemweiten Größenaktualisierung, solange noch keine `settings.json` vorhanden ist.
 
-Daten- und Repository-Pfad dürfen nicht identisch sein. Die neuen Standardpfade liegen als getrennte Geschwisterverzeichnisse unter `/docker_data/borgbackup-manager`: Managerdaten unter `data`, Repositories unter `repositories`. Abweichende Bestandsinstallationen bleiben unterstützt; liegt das Repository-Verzeichnis innerhalb des Datenpfads, schließt der Updater es bei der Managersicherung gezielt aus. Host-Port und Hostpfade werden zusätzlich als reine Metadaten in den Container übergeben, damit ein Manager-Backup sie vollständig in `migration.env` aufnehmen kann; die tatsächlichen Mounts bleiben unverändert durch Compose definiert.
+Daten- und Repository-Pfad dürfen nicht identisch sein. Die neuen Standardpfade liegen als getrennte Geschwisterverzeichnisse unter `/docker_data/borgbackup-manager`: Managerdaten unter `data`, Repositories unter `repositories`. Host-Port und Hostpfade werden zusätzlich als reine Metadaten in den Container übergeben, damit ein Manager-Backup sie vollständig im aktuellen Umgebungsabbild `migration.env` aufnehmen kann; die tatsächlichen Mounts bleiben unverändert durch Compose definiert.
 
-## 4. Bestehende Installation ab v1.1.0 übernehmen
+## 4. Bestehende v1.3.5-Installation übernehmen
 
-Direkte Updates werden ausschließlich von BorgBackup Manager v1.1.0 oder neuer unterstützt. Bei älteren Installationen ist eine Neuinstallation erforderlich; vor-v1.1.0-Datenbank-, Token-, Secret- und Mount-Kompatibilität wurde entfernt.
+Direkte Updates auf v1.3.8 werden von jeder regulär gestarteten v1.3.5-Installation unterstützt. Harmlose zusätzliche Tabellen oder Spalten aus früheren Updates werden automatisch verlustfrei normalisiert. Frühere Versionen können möglicherweise nicht mehr direkt aktualisiert werden, weil historische Übergangspfade nicht Bestandteil des aktuellen Pakets sind.
 
 Für eine unterstützte Bestandsinstallation müssen `.env`, das persistente Datenverzeichnis und der Repository-Pfad unverändert weiterverwendet werden. Niemals `docker compose down -v` oder das Löschen von `/docker_data/borgbackup-manager` verwenden. Der normale Weg ist das geprüfte `update.sh`; es sichert den Zustand, bereinigt `.env`, baut das Image neu und führt bei einem fehlgeschlagenen Start soweit möglich ein Rollback aus.
 
@@ -272,7 +272,7 @@ sudo -n mount /mnt/offline-backup
 sudo -n umount /mnt/offline-backup
 ```
 
-Die WebUI besitzt keine freie SSH-Konsole. Nur gespeicherte Aktionen können gestartet werden und jeder Start wird vorher bestätigt. Name, Befehl, Zielgerät, Aktivstatus und Zeitlimit werden mit dem vorhandenen Master-Key geschützt; der Befehlsinhalt liegt authentifiziert verschlüsselt in `/data/security/security.db`. Beim ersten Start von v1.3.5 werden vorhandene Klartexteinträge aus `manager.db` zunächst vollständig importiert und durch erneutes Entschlüsseln verifiziert. Erst danach wird die alte Tabelle entfernt. Auch eine leere oder nach einem früheren Abbruch verbliebene Alttabelle wird erkannt. Zusätzlich redigiert der Start alle historischen SSH-Aktionsläufe aus Versionen vor v1.3.3, deren vollständiger Befehl noch in `runs.command_preview` gespeichert wurde. Dabei bleiben Status, Zeitstempel und Bezeichnung erhalten; Vorschau, Ausgabe-, Fehler-, Log- und Warnungsfelder sowie das dateibasierte SSH-Laufprotokoll werden entfernt. Die Datenbank einschließlich WAL wird vor Freigabe der WebUI per Checkpoint und `VACUUM` bereinigt; danach kontrolliert BBM zusätzlich, dass kein migrierter Befehl mehr in `manager.db`, `manager.db-wal` oder `manager.db-shm` enthalten ist. Schlägt ein Schritt fehl, bleibt der Vorgang wiederholbar und der Manager startet nicht mit einer nur teilweise migrierten Aktion. Neue Laufvorschauen nennen nur Aktion und Zielgerät. Interaktive Passwortabfragen funktionieren weiterhin nicht; benötigte Root-Rechte sind über eine eng begrenzte sudoers-Regel und `sudo -n` bereitzustellen. Ausgabe und Fehler erscheinen bei neuen Läufen weiterhin als reguläres Ausführungsprotokoll und der Lauf kann über das Live-Log gestoppt werden.
+Die WebUI besitzt keine freie SSH-Konsole. Nur gespeicherte Aktionen können gestartet werden und jeder Start wird vorher bestätigt. Name, Befehl, Zielgerät, Aktivstatus und Zeitlimit werden mit dem vorhandenen Master-Key geschützt; der Befehlsinhalt liegt ausschließlich authentifiziert verschlüsselt in `/data/security/security.db`. `manager.db` enthält weder die Aktionsdefinition noch den Klartextbefehl. Laufvorschauen nennen nur Aktion und Zielgerät. Interaktive Passwortabfragen funktionieren nicht; benötigte Root-Rechte sind über eine eng begrenzte sudoers-Regel und `sudo -n` bereitzustellen. Ausgabe und Fehler erscheinen als reguläres Ausführungsprotokoll und der Lauf kann über das Live-Log gestoppt werden.
 
 Warnstufen:
 
@@ -327,7 +327,7 @@ Nach erfolgreicher Prüfung kann **Größe berechnen** verwendet werden. Für ex
 
 Für Backup und Restore werden SSH-Schlüssel, `known_hosts`, Passphrase und Keyfile nur für die Dauer des Borg-Aufrufs an den jeweiligen Client übertragen. Sie werden dort mit Modus `0600` in einem temporären Verzeichnis abgelegt und anschließend entfernt. Eine dauerhafte Storage-Box-Schlüsseldatei auf jedem Client ist nicht erforderlich.
 
-Bei unterstützten Updates ab v1.1.0 bleiben externe Repository-Einträge und ihre zentral verwalteten SSH-Daten erhalten.
+Externe Repository-Einträge und ihre zentral verwalteten, verschlüsselten SSH-Daten sind Bestandteil des aktuellen Managerzustands und des Manager-Backups.
 
 ### Vorhandenes Repository importieren
 
@@ -680,13 +680,13 @@ Ein Borg-Rückgabecode `1` bedeutet, dass der Vorgang sein normales Ende erreich
 
 Bei nutzbarer Quellenbasis friert der Backup-Lauf beim Einreihen die zuletzt bekannte Quellengröße und Dateianzahl ein. Borg O/N werden direkt davon abgezogen. Die Restzeit wird rein rechnerisch aus den verbleibenden Bytes mit einer festen 1-Gbit/s-Annahme und 80 % nutzbarem Durchsatz (effektiv 100 MB/s) bestimmt; die verbleibende Dateianzahl ergänzt lediglich den festen Korrekturfaktor für viele kleine Dateien. Gemessener Netzwerkdurchsatz, kurzfristige Borg-Raten, Files-Cache-Phasen und frühere Gesamtlaufzeiten fließen nicht ein. Wird die eingefrorene Byte-Basis überschritten, bleibt die Restzeit leer statt einen falschen Null- oder Negativwert anzuzeigen.
 
-Ab Version 0.8.7 liegen vollständige neue Laufprotokolle unter:
+Vollständige Laufprotokolle liegen unter:
 
 ```text
 /data/run-logs/run-ID.log
 ```
 
-SQLite speichert nur Metadaten sowie feste, von Borg-Dateistatus bereinigte Vorschauen von maximal 4 KiB stdout, 32 KiB gefilterte Fehler-/Warnungsausgabe und 16 KiB Bedienprotokoll. Normale Dateipfade liegen ausschließlich in `/data/run-logs`; nur konkret betroffene Warnungspfade werden begrenzt in der strukturierten Warnungszusammenfassung gespeichert. Beim Start werden größere oder ältere Rohinhalte bei Bedarf zuerst nach `/data/run-logs` migriert und anschließend aus der Datenbank entfernt. Unter **System → Einstellungen → Ausführungs- und Benachrichtigungsprotokolle** werden Anzahl, Dateigröße, Datenbankanteil und Benachrichtigungszustellungen angezeigt. Die Fristbereinigung entfernt abgelaufene Ausführungsprotokolle und Zustellungsprotokolle, bewahrt aber für jeden noch vorhandenen Backup-Job ausschließlich den neuesten erfolgreichen beziehungsweise mit Warnung abgeschlossenen Backup-Lauf als belastbaren letzten Sicherungsstand. Fehlgeschlagene oder abgebrochene Backup-Läufe sind nicht geschützt und unterliegen der normalen Aufbewahrung beziehungsweise können einzeln gelöscht werden. Die gespeicherte Quellenstatistik vorhandener Jobs bleibt ebenfalls erhalten. **Alle Protokolle löschen** ist die einzige Gesamtbereinigung, die auch diese geschützten letzten Stände, alle Benachrichtigungszustellungen und die gespeicherten Quellenstatistiken entfernt. Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin nach der konfigurierten Aufbewahrungsdauer. Aktive und wartende Läufe bleiben immer erhalten.
+SQLite speichert nur Metadaten sowie feste, von Borg-Dateistatus bereinigte Vorschauen von maximal 4 KiB stdout, 32 KiB gefilterte Fehler-/Warnungsausgabe und 16 KiB Bedienprotokoll. Normale Dateipfade liegen ausschließlich in `/data/run-logs`; nur konkret betroffene Warnungspfade werden begrenzt in der strukturierten Warnungszusammenfassung gespeichert. Unter **System → Einstellungen → Ausführungs- und Benachrichtigungsprotokolle** werden Anzahl, Dateigröße, Datenbankanteil und Benachrichtigungszustellungen angezeigt. Die Fristbereinigung entfernt abgelaufene Ausführungsprotokolle und Zustellungsprotokolle, bewahrt aber für jeden noch vorhandenen Backup-Job ausschließlich den neuesten erfolgreichen beziehungsweise mit Warnung abgeschlossenen Backup-Lauf als belastbaren letzten Sicherungsstand. Fehlgeschlagene oder abgebrochene Backup-Läufe sind nicht geschützt und unterliegen der normalen Aufbewahrung beziehungsweise können einzeln gelöscht werden. Die gespeicherte Quellenstatistik vorhandener Jobs bleibt ebenfalls erhalten. **Alle Protokolle löschen** ist die einzige Gesamtbereinigung, die auch diese geschützten letzten Stände, alle Benachrichtigungszustellungen und die gespeicherten Quellenstatistiken entfernt. Die automatische Bereinigung läuft täglich um 03:30 Uhr Europe/Berlin nach der konfigurierten Aufbewahrungsdauer. Aktive und wartende Läufe bleiben immer erhalten.
 
 ## 17. Benachrichtigungszentrale einrichten
 
@@ -708,19 +708,19 @@ Warnungsbenachrichtigungen übernehmen aus der strukturierten Borg-Warnungszusam
 
 ## 18. Manager-Backup, Cache-Backup und Sicherheitsdaten
 
-Seit v1.0.77 sind Managerdaten und Borg-Caches zwei getrennte Sicherungstypen. Neue Manager-Backups enthalten keinen Borg-Cache mehr. Dadurch wächst die für eine eigentliche BBM-Wiederherstellung benötigte Datei nicht mit den Cache-Daten mehrerer TiB-Repositories oder vieler Clients.
+Managerdaten und Borg-Caches sind getrennte Sicherungstypen. Manager-Backups enthalten keinen Borg-Cache. Dadurch wächst die für eine eigentliche BBM-Wiederherstellung benötigte Datei nicht mit den Cache-Daten mehrerer TiB-Repositories oder vieler Clients.
 
 ### Manager-Backup erstellen
 
 Das Manager-Backup enthält Manager-Datenbank, Sicherheitsdatenbank, Master-Key, Einstellungen, Benachrichtigungskonfiguration und `migration.env`. Controller-Schlüssel, Repository-SSH-Hostschlüssel, Borg-Keyfiles/Passphrasen, TLS-Material und Benachrichtigungsgeheimnisse sind verschlüsselt in der Sicherheitsdatenbank gespeichert; der Master-Key ist der zwingende Entschlüsselungsanker. `authorized_keys` und die Klartextdateien unter `/run/bbm-secrets` werden nach dem Restore aus den Datenbanken neu erzeugt. Vor dem Speichern prüft BBM beide SQLite-Datenbanken, die Vollständigkeit der Security-Tabellen, den Master-Key und die Entschlüsselbarkeit sämtlicher gespeicherter Geheimnisse. Fehlt ein Bestandteil oder passt der Master-Key nicht zur Sicherheitsdatenbank, wird kein erfolgreiches Backup erzeugt. Repository-Nutzdaten, vorhandene Backup-Artefakte, Exporte, vollständige Lauf-/Debug-Protokolle, `/data/borg-cache`, `/data/borg-security` und Client-Borg-Caches sind nicht enthalten.
 
-Neue Manager-Backups werden ausschließlich als AES-256-GCM-verschlüsselte `.bbm`-Dateien erzeugt. Die eigene Passphrase muss mindestens zwölf Zeichen lang sein und wird nicht gespeichert. Die Kompression ist wählbar zwischen keine, Deflate 1, Deflate 6 (Standard) und Deflate 9. Import und Wiederherstellung setzen eine Metadatenversion v1.1.0 oder neuer voraus.
+Neue Manager-Backups werden ausschließlich als AES-256-GCM-verschlüsselte `.bbm`-Dateien erzeugt. Die eigene Passphrase muss mindestens zwölf Zeichen lang sein und wird nicht gespeichert. Die Kompression ist wählbar zwischen keine, Deflate 1, Deflate 6 (Standard) und Deflate 9. Import und Wiederherstellung setzen eine Metadatenversion v1.3.5 oder neuer voraus.
 
 Während der Erstellung zeigt die WebUI Phase, Fortschrittsbalken und ein Live-Protokoll. Ein Seiten-Reload nimmt den aktiven Backup-Task wieder auf.
 
 ### Getrennte Cache-Artefakte erstellen
 
-Ab v1.3.0 erzeugt ein Cache-Backup-Lauf keine große Sammeldatei mehr. Stattdessen entstehen unabhängig voneinander:
+Ein Cache-Backup-Lauf erzeugt getrennte, unabhängig wiederherstellbare Artefakte:
 
 - `borgbackup-manager-cache-manager-v...` für `/data/borg-cache` und `/data/borg-security`
 - `borgbackup-manager-cache-client-<Gerätename>-h<ID>-v...` für jedes ausgewählte Gerät
@@ -753,7 +753,7 @@ Dateityp, Dateiname, Größe und Struktur werden geprüft, vorhandene Dateien we
 5. Ersetzungsbestätigung aktivieren.
 6. Wiederherstellung starten.
 
-Der Manager prüft Sicherungstyp und Mindestversion v1.1.0, erstellt ein verschlüsseltes lokales Sicherheitsbackup und ersetzt anschließend Manager- und Sicherheitsdatenbank, Master-Key, Einstellungen sowie SSH-/TLS-/Repository-Schlüssel. Ein separates Cache-Backup kann nicht als Managerzustand wiederhergestellt werden. Der Container startet neu; bestehende Browser-Sitzungen müssen sich danach neu anmelden.
+Der Manager prüft Sicherungstyp und Mindestversion v1.3.5, erstellt ein verschlüsseltes lokales Sicherheitsbackup und ersetzt anschließend Manager- und Sicherheitsdatenbank, Master-Key, Einstellungen sowie SSH-/TLS-/Repository-Schlüssel. Ein separates Cache-Backup kann nicht als Managerzustand wiederhergestellt werden. Der Container startet neu; bestehende Browser-Sitzungen müssen sich danach neu anmelden.
 
 ### Cache-Backup gezielt wiederherstellen
 
@@ -764,7 +764,7 @@ Der Manager prüft Sicherungstyp und Mindestversion v1.1.0, erstellt ein verschl
 
 Die Wiederherstellung ist nur ohne laufende oder wartende Ausführungen möglich. Beim Manager-Cache werden vorhandene `/data/borg-cache`-/`/data/borg-security`-Stände vor dem Austausch als zeitgestempelte `pre-bbm-restore`-Sicherheitskopien erhalten. Bei Client-Caches müssen Gerät und Repository weiterhin gemeinsam einem aktuellen Backup-Job zugeordnet sein und das Gerät muss aktiviert sein. Ein vorhandener Zielcache wird als `repository-<ID>.pre-bbm-restore-<Zeit>` erhalten. Unerwartete TAR-Pfade, symbolische Links und alte Lockartefakte werden nicht aktiviert.
 
-Cache-Backups werden nur akzeptiert, wenn ihre Metadatenversion v1.1.0 oder neuer ist.
+Cache-Backups werden nur akzeptiert, wenn ihre Metadatenversion v1.3.5 oder neuer ist.
 
 ### Serverwechsel
 
@@ -780,7 +780,7 @@ apt install python3-cryptography
 bash restore-backup.sh /pfad/manager-backup.bbm
 ```
 
-Für einen Serverwechsel werden ausschließlich Manager- und Cache-Backups mit Metadatenversion v1.1.0 oder neuer unterstützt. Repository-Verzeichnisse müssen separat übertragen oder wieder eingebunden werden.
+Für einen Serverwechsel werden ausschließlich Manager- und Cache-Backups mit Metadatenversion v1.3.5 oder neuer unterstützt. Repository-Verzeichnisse müssen separat übertragen oder wieder eingebunden werden.
 
 ## 19. Zeitzone, Dashboard und Systembereich
 
@@ -847,49 +847,19 @@ Das unter **Einstellungen** konfigurierbare Aktualisierungsintervall ist nur ein
 
 ## 22. Update
 
-### Unterstützte Updates ab Version 1.1.0
+### Unterstützte Baseline
 
-Direkte Updates von Versionen vor v1.1.0 werden ausdrücklich abgelehnt. Solche Installationen müssen neu eingerichtet werden. Dadurch entfallen frühere Sonderpfade für alte Updater, Token, Secrets, Client-Mounts und Datenbankschemata.
+v1.3.8 behält v1.3.5 als einmalige Rückwärtskompatibilitätsgrenze bei. Jede regulär gestartete v1.3.5-Installation kann direkt aktualisiert werden. Historische Updatehilfen, additive Vor-v1.3.5-Schemamigrationen, alte API-Aliase und veraltete Backupformate sind nicht mehr enthalten.
 
-### Einmaliger Übergang von v1.2.4 auf v1.2.5
-
-Der Updater aus v1.2.4 verlangt noch die inzwischen entfernte Datei `compose.archive-mounts.yaml` im Release-ZIP. Deshalb muss für genau diesen Übergang zuerst der neue Updater sicher aus dem bereits verifizierten v1.2.5-ZIP übernommen werden:
+Vor dem Update ein frisches verschlüsseltes Manager-Backup erstellen und prüfen sowie das neue ZIP mit der SHA-256-Datei verifizieren. Für eine regulär gestartete v1.3.5-Installation ist keine zusätzliche Bereinigung und kein manueller SQLite-Befehl erforderlich. Anschließend ausführen:
 
 ```bash
-cd /opt/BorgBackup-Manager
-unzip -p updates/BorgBackup-Manager-1.2.5.zip BorgBackup-Manager/update.sh > update.sh.new
-bash -n update.sh.new
-chmod 755 update.sh.new
-mv update.sh.new update.sh
+bash update.sh \
+  --file updates/BorgBackup-Manager-1.3.8.zip \
+  --sha256 <SHA-256>
 ```
 
-Danach den normalen v1.2.5-Updatebefehl ausführen. Der neue Updater entfernt die alte Override-Datei und bereinigt `COMPOSE_FILE` sowie weitere obsolete Werte aus `.env`.
-
-### Normale Updates ab Version 1.1.0
-
-```bash
-cd /opt/BorgBackup-Manager
-cp /pfad/BorgBackup-Manager-NEUE-VERSION.zip updates/
-bash update.sh --file updates/BorgBackup-Manager-NEUE-VERSION.zip --sha256 VERÖFFENTLICHTE_SHA256
-```
-
-Das Update-Skript:
-
-1. verifiziert das ZIP vor dem Einlesen gegen `--sha256`, `BBM_UPDATE_SHA256` oder eine gleichnamige `.sha256`-Datei und prüft anschließend die Paketstruktur einschließlich `recovery.sh`.
-2. sichert Projektdateien einschließlich `recovery.sh`.
-3. sichert persistente Manager-Daten, schließt aber `BBM_REPOSITORY_PATH`, `/data/borg-cache` und den regenerierbaren Archivlisten-Cache `/data/archive-cache` aus.
-4. schreibt das Manager-Datenbackup zunächst als `.partial` und veröffentlicht es erst nach erfolgreichem Abschluss.
-5. übernimmt neue Projektdateien einschließlich `recovery.sh` und setzt die Ausführungsrechte.
-6. ergänzt fehlende `.env`-Werte einschließlich der zugehörigen Kommentare.
-7. validiert das vollständige Release-Paket einschließlich `.env.example`, Dokumentation und Recovery-Skripten.
-8. baut `borgbackup-manager:latest`.
-9. stoppt den Container erst unmittelbar vor der konsistenten Managersicherung.
-10. startet den vorherigen Container bei Abbruch oder Sicherungsfehler automatisch wieder.
-11. startet den neuen Container und prüft `/api/ready`.
-12. zeigt einen eingeschränkten Komponentenstatus nur als Warnung.
-13. führt nur bei nicht erreichbarer WebUI einen Rollback aus.
-
-Repository-Nutzdaten werden beim Update weder kopiert noch verändert. Das Datenbackup verwendet zusätzlich `--one-file-system`, sodass unerwartete weitere Unter-Mounts im Manager-Datenpfad nicht traversiert werden. Der Borg-Cache ist regenerierbar und wird ebenfalls nicht in das Update-Backup aufgenommen. Sicherheitsdatenbank, Master-Key, Einstellungen, SSH-/TLS-Schlüssel und Borg-Sicherheitsstatus bleiben Bestandteil der persistenten Managersicherung.
+Der Updater lehnt Quellversionen unter v1.3.5 ab. Beim Start akzeptiert v1.3.8 jedes vollständige v1.3.5-Manager- und Security-Schema, erstellt geschützte Sicherheitskopien, kopiert sämtliche aktuellen Tabellen in das exakte aktuelle Schema und vergleicht Zeilenzahlen, SHA-256-Inhalte, Fremdschlüssel und SQLite-Integrität. Erst danach werden ungenutzte Zusatzobjekte wie `archive_mounts` entfernt. Fehlende aktuelle Tabellen oder Spalten kennzeichnen weiterhin einen tatsächlich älteren, nicht unterstützten Stand. Kann eine ältere Installation nicht zuerst v1.3.5 erreichen, wird v1.3.8 sauber neu installiert und ein unterstütztes Manager-Backup ab v1.3.5 wiederhergestellt.
 
 ## 23. Healthchecks
 
@@ -982,7 +952,7 @@ Die Archivübersicht zeigt erkannte Checkpoint-Archive automatisch und kennzeich
 
 ## Lokale Kontowiederherstellung
 
-Seit Version 1.0.3 bündelt `recovery.sh` alle bisherigen Recovery-Befehle. Version 1.0.5 stellt sicher, dass das Skript auch bei Updates in den Projektordner übernommen wird:
+`recovery.sh` bündelt die lokale Kontowiederherstellung und liegt im aktuellen Projektordner:
 
 ```bash
 cd /opt/BorgBackup-Manager
@@ -1071,4 +1041,4 @@ Das Access-Log enthält keine Passwörter, TOTP-/Wiederherstellungscodes oder Si
 
 ## Manager-Datenbank warten
 
-Unter **System → Systemdiagnose → Manager-Datenbank bereinigen** zuerst **Datenbank prüfen** ausführen. Die Vorschau nennt technisch veraltete oder verwaiste Einträge und zeigt zusätzlich historische SSH-Aktionsläufe mit früher gespeicherten Klartextbefehlen sowie betroffene Wartungskopien an. **Sicher bereinigen** redigiert bei diesen Alt-Läufen Befehlsvorschau, Ausgabe, Fehler, Datenbank-Logfelder und dateibasierte SSH-Laufprotokolle. Unsichere ältere Wartungskopien werden entfernt; erst danach wird eine neue geprüfte Kopie unter `/data/maintenance-backups` erstellt. Der SQLite-Neuaufbau läuft beim nächsten Start vor Freigabe der WebUI. Während aktiver/wartender Läufe oder Manager-/Cache-Backups bleibt die Funktion gesperrt.
+Unter **System → Systemdiagnose → Manager-Datenbank bereinigen** zuerst **Datenbank prüfen** ausführen. Die Vorschau nennt verwaiste oder nicht mehr benötigte aktuelle Datensätze sowie freigebbare SQLite-Seiten. **Sicher bereinigen** erstellt zunächst eine geprüfte Wartungskopie unter `/data/maintenance-backups`, bereinigt ausschließlich die angezeigten Datensätze und führt `PRAGMA optimize` aus. Ein erforderlicher SQLite-Neuaufbau läuft beim nächsten Start vor Freigabe der WebUI. Während aktiver oder wartender Läufe sowie während Manager- oder Cache-Backups bleibt die Funktion gesperrt.

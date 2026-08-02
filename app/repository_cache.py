@@ -52,24 +52,6 @@ def _path_size(path: Path) -> int:
     return total
 
 
-def _remove_cache_entry(root: Path, repository_id: str) -> tuple[bool, int]:
-    root = root.resolve()
-    target = root / repository_id
-    # The repository ID is validated to one hexadecimal path component. Keep an
-    # explicit containment check as defence in depth before recursive deletion.
-    resolved_parent = target.parent.resolve()
-    if resolved_parent != root:
-        raise ValueError("Unsafe Borg cache path")
-    if not target.exists() and not target.is_symlink():
-        return False, 0
-    size = _path_size(target)
-    if target.is_symlink() or target.is_file():
-        target.unlink()
-    else:
-        shutil.rmtree(target)
-    return True, size
-
-
 
 def manager_repository_cache_dir(repository: Repository) -> Path:
     """Return the manager-private Borg cache root for one repository record.
@@ -135,49 +117,18 @@ def clear_repository_manager_cache_locks(repository: Repository) -> dict[str, in
         "lock_files_removed": removed_files,
     }
 
-def clear_repository_manager_cache(repository: Repository) -> dict[str, int | bool | str]:
-    """Remove only manager-private cache data for one repository record.
-
-    The repository itself and Borg security metadata are never touched. Legacy
-    shared cache locations are cleaned for managed repositories when their Borg
-    repository ID can be read locally; external legacy cache entries remain
-    unused after the repository-scoped cache migration.
-    """
+def clear_repository_manager_cache(repository: Repository) -> dict[str, int | bool]:
+    """Remove only the current manager-private cache for one repository record."""
     scoped = manager_repository_cache_dir(repository)
-    scoped_removed = scoped.exists() or scoped.is_symlink()
-    scoped_bytes = _path_size(scoped) if scoped_removed else 0
-    if scoped_removed:
+    removed = scoped.exists() or scoped.is_symlink()
+    removed_bytes = _path_size(scoped) if removed else 0
+    if removed:
         if scoped.is_symlink() or scoped.is_file():
             scoped.unlink()
         else:
             shutil.rmtree(scoped)
-
-    repository_id = "external"
-    shared_removed = False
-    shared_bytes = 0
-    legacy_removed = False
-    legacy_bytes = 0
-    legacy_error = ""
-    if repository.storage_path:
-        try:
-            repository_id = managed_repository_id(repository)
-            shared_removed, shared_bytes = _remove_cache_entry(MANAGER_BORG_CACHE_DIR, repository_id)
-            legacy_root = REPOSITORY_ROOT / ".cache" / "borg"
-            legacy_removed, legacy_bytes = _remove_cache_entry(legacy_root, repository_id)
-        except OSError as exc:
-            legacy_error = str(exc)
-
     return {
-        "repository_borg_id": repository_id,
-        "cache_removed": scoped_removed or shared_removed,
-        "legacy_cache_removed": legacy_removed,
-        "legacy_cache_error": legacy_error,
-        "removed_bytes": scoped_bytes + shared_bytes + legacy_bytes,
+        "cache_removed": removed,
+        "removed_bytes": removed_bytes,
     }
 
-
-def clear_managed_repository_cache(repository: Repository) -> dict[str, int | bool | str]:
-    """Backward-compatible alias for repository-scoped manager cache cleanup."""
-    if not repository.storage_path:
-        raise ValueError("Repository is not managed locally")
-    return clear_repository_manager_cache(repository)

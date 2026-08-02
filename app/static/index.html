@@ -6,27 +6,27 @@
 <meta content="width=device-width,initial-scale=1" name="viewport"/>
 <title>BorgBackup Manager</title>
 <meta content="#174c46" name="theme-color"/>
-<link href="/static/favicon.svg?v=1.3.5" rel="icon" type="image/svg+xml"/>
-<script src="/static/theme-init.js?v=1.3.5"></script>
-<link href="/static/style.css?v=1.3.5" rel="stylesheet"/>
+<link href="/static/favicon.svg?v=1.3.8" rel="icon" type="image/svg+xml"/>
+<script src="/static/theme-init.js?v=1.3.8"></script>
+<link href="/static/style.css?v=1.3.8" rel="stylesheet"/>
 </head>
 <body>
 <div class="login-shell" id="login">
 <form class="login-card" id="login-form">
-<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.3.5"/>
+<img alt="" class="brand-mark" src="/static/favicon.svg?v=1.3.8"/>
 <p class="eyebrow">BorgBackup Manager</p>
 <h1>Zentrale für deine Backups.</h1>
 <label>Benutzername<input autocomplete="username" autofocus="" id="login-username" required="" type="text"/></label>
 <label>Passwort<input autocomplete="current-password" id="login-password" required="" type="password"/></label>
 <label class="hidden" id="login-second-factor-field">2FA-Code oder Wiederherstellungscode<input autocomplete="one-time-code" id="login-second-factor" maxlength="32" type="text"/><small>Authenticator-Code oder einmaligen Wiederherstellungscode eingeben.</small></label>
 <button type="submit">Verwaltung öffnen</button>
-<p class="login-version">Version <b id="login-version">v1.3.5</b></p>
+<p class="login-version">Version <b id="login-version">v1.3.8</b></p>
 <p class="error" id="login-error"></p>
 </form>
 </div>
 <div class="app-shell hidden" id="app">
 <aside>
-<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.3.5"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
+<div class="brand"><img alt="" class="brand-mark small" src="/static/favicon.svg?v=1.3.8"/><span>Borg<br/><b>Manager</b></span><button aria-controls="main-navigation" aria-expanded="false" class="mobile-nav-toggle" id="mobile-nav-toggle" type="button">Menü</button></div>
 <nav id="main-navigation">
 <span class="nav-label">Betrieb</span>
 <button class="active" data-view="dashboard">Übersicht</button>
@@ -372,7 +372,7 @@
 <div class="form-actions"><button class="secondary" disabled="" id="manager-cache-restore-submit" type="button">Manager-Cache wiederherstellen</button><button type="submit">Client-Caches anzeigen</button></div>
 <div class="persistent-info hidden" id="client-cache-restore-status"></div>
 <div id="client-cache-restore-list"></div>
-<p class="hint">Ein vorhandener Manager-Cache beziehungsweise Client-Cache wird vor dem Einspielen als lokale Sicherheitskopie erhalten. Bei Gerätearchiven kann als Ziel auch ein anderes verbundenes Gerät gewählt werden, sofern es demselben Repository zugeordnet ist. Ein bereits vorhandener Borg-Sicherheitsstatus des Clients wird aus Sicherheitsgründen nicht durch einen älteren Backup-Stand überschrieben. Backup-Metadaten müssen BorgBackup Manager v1.1.0 oder neuer ausweisen. Die Wiederherstellung ist nur ohne laufende oder wartende Ausführungen möglich.</p>
+<p class="hint">Ein vorhandener Manager-Cache beziehungsweise Client-Cache wird vor dem Einspielen als lokale Sicherheitskopie erhalten. Bei Gerätearchiven kann als Ziel auch ein anderes verbundenes Gerät gewählt werden, sofern es demselben Repository zugeordnet ist. Ein bereits vorhandener Borg-Sicherheitsstatus des Clients wird aus Sicherheitsgründen nicht durch einen älteren Backup-Stand überschrieben. Backup-Metadaten müssen BorgBackup Manager v1.3.5 oder neuer ausweisen. Die Wiederherstellung ist nur ohne laufende oder wartende Ausführungen möglich.</p>
 </form>
 </div>
 <div class="panel"><div class="panel-head"><div><h2>Manager-Backups</h2><span id="backup-path"></span></div></div><div class="bounded-list" id="backup-list"></div></div>
@@ -575,6 +575,6 @@
 </dialog>
 </main>
 </div>
-<script src="/static/i18n.js?v=1.3.5"></script><script src="/static/app.js?v=1.3.5"></script>
+<script src="/static/i18n.js?v=1.3.8"></script><script src="/static/app.js?v=1.3.8"></script>
 </body>
 </html>

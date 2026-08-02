@@ -29,31 +29,31 @@ def reset_cache(monkeypatch, tmp_path: Path) -> Path:
 
 
 def test_version_tuple_accepts_release_tags():
-    assert update_check.version_tuple("1.0.73") == (1, 0, 73)
+    assert update_check.version_tuple("1.3.8") == (1, 3, 8)
     assert update_check.version_tuple("v2.3.4") == (2, 3, 4)
 
 
 def test_update_check_detects_newer_release_and_persists(monkeypatch, tmp_path):
     status_path = reset_cache(monkeypatch, tmp_path)
-    monkeypatch.setattr(update_check, "urlopen", lambda request, timeout: FakeResponse({"tag_name": "v1.0.74"}))
+    monkeypatch.setattr(update_check, "urlopen", lambda request, timeout: FakeResponse({"tag_name": "v1.3.8"}))
 
-    result = update_check.check_latest_release("1.0.73")
+    result = update_check.check_latest_release("1.3.6")
 
     assert result["update_available"] is True
-    assert result["latest_version"] == "1.0.74"
-    assert result["release_url"] == "https://github.com/the-ab/BorgBackup-Manager/releases/tag/v1.0.74"
+    assert result["latest_version"] == "1.3.8"
+    assert result["release_url"] == "https://github.com/the-ab/BorgBackup-Manager/releases/tag/v1.3.8"
     assert result["checked_at"]
-    assert json.loads(status_path.read_text(encoding="utf-8"))["latest_version"] == "1.0.74"
+    assert json.loads(status_path.read_text(encoding="utf-8"))["latest_version"] == "1.3.8"
 
 
 def test_update_check_marks_same_version_current(monkeypatch, tmp_path):
     reset_cache(monkeypatch, tmp_path)
-    monkeypatch.setattr(update_check, "urlopen", lambda request, timeout: FakeResponse({"tag_name": "v1.0.73"}))
+    monkeypatch.setattr(update_check, "urlopen", lambda request, timeout: FakeResponse({"tag_name": "v1.3.8"}))
 
-    result = update_check.check_latest_release("1.0.73")
+    result = update_check.check_latest_release("1.3.8")
 
     assert result["update_available"] is False
-    assert result["latest_version"] == "1.0.73"
+    assert result["latest_version"] == "1.3.8"
 
 
 def test_settings_have_safe_update_defaults():

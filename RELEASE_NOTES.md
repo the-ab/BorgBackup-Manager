@@ -1,5 +1,108 @@
 # Release Notes
 
+## v1.3.8 — Release notes history restored
+Released: August 2, 2026
+
+### Complete version history restored
+
+- The cleanup in v1.3.6 and v1.3.7 incorrectly reduced the release notes to the current entry only.
+- `RELEASE_NOTES.md` and `RELEASE_NOTES.de.md` once again contain the complete version history. Existing entries are no longer removed.
+- README files, installation guides, integrated help, and operations documentation remain limited to the current feature and update state. Historical update instructions are retained only in the release notes.
+
+### German release notes fixed in the container
+
+- The Dockerfile previously copied only `RELEASE_NOTES.md` into the image. With German selected, the WebUI therefore could not find `RELEASE_NOTES.de.md` inside the container.
+- The image now contains both language files. The WebUI displays the complete German or English release notes according to the selected language.
+- Package, API, and regression tests verify both files and the retention of multiple historical release blocks.
+
+## v1.3.7 — Reliable v1.3.5 baseline
+Released: August 2, 2026
+
+### Update from v1.3.5 fixed
+
+- Every regularly started v1.3.5 installation already contains all currently required manager and security tables and columns. Earlier updates could nevertheless leave unused surplus objects such as the old `archive_mounts` table.
+- The previous baseline check incorrectly classified those harmless surplus objects as an outdated database schema and therefore blocked a valid update path from v1.3.5.
+- v1.3.7 automatically adopts every complete v1.3.5 database into the exact current schema. No manual SQLite intervention is required.
+
+### Lossless baseline adoption
+
+- A consistent SQLite safety copy with restricted file permissions is created before adoption.
+- All current tables and columns are copied into a new database.
+- Row counts and SHA-256 content digests for every production table are compared before and after copying.
+- Foreign-key validation and `PRAGMA quick_check` must succeed before the database is atomically replaced.
+- Unused surplus objects and additional old columns are removed only after the data comparison succeeds.
+- The same procedure applies to `security.db`, so unused v1.3.5 remnants there no longer block an update.
+
+### Security boundary retained
+
+- Missing current tables or columns still identify a genuinely older unsupported state and are not guessed or completed.
+- Remaining plaintext SSH actions or unsanitized historical SSH commands are still rejected instead of being silently adopted.
+- Manager backup, restore, devices, repositories, jobs, schedules, source statistics and stored backup sizes remain unchanged.
+
+### Regression coverage
+
+- Real v1.3.5 structures containing `archive_mounts` are normalized automatically.
+- Other unused surplus objects in `manager.db` and `security.db` are removed without losing current data.
+- Current records are proven complete and identical after baseline adoption.
+- Incomplete pre-v1.3.5 schemas and confidential SSH remnants remain safely rejected.
+
+## v1.3.6 — Clean baseline
+Released: August 2, 2026
+
+## Clean baseline
+
+v1.3.6 introduces a one-time compatibility boundary. Direct updates are supported only from a fully cleaned v1.3.5 installation. Older BBM releases, older database schemas, and older manager/cache backup formats are no longer migrated automatically.
+
+Before updating from v1.3.5:
+
+1. Run **System → System diagnostics → Clean manager database**.
+2. Complete any requested restart.
+3. Create and verify a new encrypted manager backup.
+4. Only then install v1.3.6 with `update.sh`.
+
+Installations below v1.3.5 must first reach the final v1.3.5 state and be cleaned there. If that is not possible, deploy a clean v1.3.6 installation; only a supported manager backup created by v1.3.5 or newer can be restored.
+
+## Removed BBM compatibility code
+
+- removed additive schema migrations and automatic creation of columns or tables from old releases
+- removed historical SSH-action and run-cleanup migration modules from runtime code
+- removed unused API aliases and transition endpoints
+- removed the old device-wide repository bootstrap; repository access is configured only through the current job-scoped workflow
+- removed obsolete package-copy and transition cleanup logic from the updater
+- unknown or obsolete `.env` keys are no longer carried as supported configuration
+- old manager and cache backup formats are rejected
+- manager and security databases must match the current v1.3.5 baseline schema; mismatches produce a clear startup error instead of a guessed migration
+
+## Preserved data and functionality
+
+The compatibility boundary does not change the current business data model. A supported update and a supported manager-backup restore continue to preserve:
+
+- devices and repository assignments
+- repositories and encrypted credentials
+- backup jobs and schedules
+- users, roles, preferences, and two-factor authentication
+- latest source statistics including size and file count
+- original, compressed, and deduplicated size of completed backups
+- archive metadata, run status, and notification configuration
+- encrypted stored SSH actions in `security.db`
+
+Operational Borg compatibility remains unchanged. Supported Borg 1.x clients, existing Borg archives, assigned archive series, external repositories, and Borg-cache management are current runtime functions rather than BBM release migrations and remain available.
+
+## Documentation cleanup
+
+README files, installation guides, integrated help, Compose documentation, security documentation, and the release checklist now describe only the current product state. Historical one-time transitions and old release instructions were removed. The only remaining version boundary is the one-time v1.3.5 minimum baseline for update and restore.
+
+## Release checks
+
+The project audit now prevents, among other things:
+
+- reintroduction of historical BBM migration modules
+- additive schema compatibility
+- return of removed API aliases
+- duplicate or historical release-note copies
+- historical transition instructions in current documentation
+- release packaging without current baseline, backup/restore, translation, and package checks
+
 ## v1.3.5 – 02.08.2026
 
 ### Historical SSH plaintext details fully scrubbed

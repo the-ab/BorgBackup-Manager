@@ -18,14 +18,14 @@ Complete this checklist for every release. Mark non-applicable items explicitly 
 - [ ] Updated package, ZIP, SHA-256 and GHCR tag examples.
 - [ ] Confirmed that no stale version marker remains in the project.
 
-## 3. Code, data model and migrations
+## 3. Code and current data model
 
 - [ ] Added regression tests for new and changed behavior.
-- [ ] Existing installations migrate automatically and idempotently.
-- [ ] Migrations copy and verify data before removing legacy structures.
-- [ ] Interruption, restart and repeated migration cases are safe.
-- [ ] Considered SQLite WAL/SHM, freelist and plaintext remnants for security-sensitive migrations.
-- [ ] Checked confidential legacy data in active tables, historical run previews, output/error/log fields, notification details, file-backed run logs and maintenance copies.
+- [ ] Only the documented v1.3.5 baseline and the current schema are accepted; unsupported older schemas fail clearly.
+- [ ] The current manager and security schemas match the v1.3.5 baseline exactly enough for all supported data.
+- [ ] No historical BBM migration module, additive schema helper, API alias or obsolete package copy was reintroduced.
+- [ ] Schema rejection messages clearly direct unsupported installations to the v1.3.5 cleanup path or a clean deployment.
+- [ ] Security-sensitive data is absent from manager.db, WAL/SHM, run previews, logs, notifications and maintenance copies.
 - [ ] Delete, device, repository, backup and maintenance workflows use the new data model.
 - [ ] No unused modules, imports, routes or frontend handlers remain.
 
@@ -57,7 +57,7 @@ Complete this checklist for every release. Mark non-applicable items explicitly 
 - [ ] Updated integrated `help.de.html` and `help.en.html`.
 - [ ] Updated `SECURITY.md`, `THIRD-PARTY-NOTICES.md` and Compose documentation where applicable.
 - [ ] Updated root and application release notes and confirmed byte identity.
-- [ ] Documented update, restore, migration and security effects with concrete paths.
+- [ ] Documented update, restore, baseline and security effects with concrete paths.
 
 ## 7. Automated and static checks
 

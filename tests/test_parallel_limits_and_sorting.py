@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, inspect
 os.environ.setdefault("BBM_DATABASE_URL", "sqlite://")
 
 from app import service
-from app.database import Base, SessionLocal, engine, migrate_schema
+from app.database import Base, SessionLocal, engine, validate_current_schema
 from app.models import Repository, Run
 from app.runner import Command
 
@@ -517,11 +517,11 @@ def test_non_backup_repository_action_remains_exclusive(monkeypatch):
     assert any(kind == "start" and count == 1 for kind, count in timeline)
 
 
-def test_parallel_limit_columns_are_added_by_migration(tmp_path):
+def test_current_baseline_contains_parallel_and_maintenance_columns(tmp_path):
     database = tmp_path / "manager.db"
     target = create_engine(f"sqlite:///{database}")
     Base.metadata.create_all(target)
-    migrate_schema(target)
+    validate_current_schema(target)
     inspector = inspect(target)
     repositories = {column["name"] for column in inspector.get_columns("repositories")}
     schedules = {column["name"] for column in inspector.get_columns("backup_schedules")}

@@ -3,22 +3,22 @@ import json
 import pytest
 
 from app.borg_stats import merge_archive_statistics, parse_borg_info
-from app.repository_sizes import repository_size_from_borg_info, repository_statistics_from_borg_info
+from app.repository_sizes import repository_statistics_from_borg_info
 
 
 def test_repository_size_uses_unique_compressed_chunks_from_borg_12_json():
     output = json.dumps({"cache": {"stats": {"unique_csize": 4223, "unique_size": 8812}}})
-    assert repository_size_from_borg_info(output) == 4223
+    assert repository_statistics_from_borg_info(output)["deduplicated_size"] == 4223
 
 
 def test_repository_size_accepts_repository_stats_variant():
     output = json.dumps({"repository": {"stats": {"unique_csize": 987654}}})
-    assert repository_size_from_borg_info(output) == 987654
+    assert repository_statistics_from_borg_info(output)["deduplicated_size"] == 987654
 
 
 def test_repository_size_rejects_missing_statistics():
     with pytest.raises(ValueError, match="keine repositoryweite"):
-        repository_size_from_borg_info(json.dumps({"repository": {"id": "abc"}}))
+        repository_statistics_from_borg_info(json.dumps({"repository": {"id": "abc"}}))
 
 
 def test_repository_statistics_expose_original_compressed_and_deduplicated_sizes():

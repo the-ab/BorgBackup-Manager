@@ -52,7 +52,7 @@ def _prepare_complete_state(monkeypatch, tmp_path: Path) -> tuple[Path, bytes]:
 
 def test_manager_backup_contains_complete_recovery_pair(monkeypatch, tmp_path: Path):
     _prepare_complete_state(monkeypatch, tmp_path)
-    backup = backups.create_full_backup("1.3.1", "complete", "correct horse battery staple")
+    backup = backups.create_full_backup("1.3.5", "complete", "correct horse battery staple")
 
     with backups.plain_backup_file(backup, "correct horse battery staple") as plain:
         with zipfile.ZipFile(plain) as archive:
@@ -83,7 +83,7 @@ def test_manager_backup_refuses_missing_master_key(monkeypatch, tmp_path: Path):
     data, _key = _prepare_complete_state(monkeypatch, tmp_path)
     (data / "security" / "master.key").unlink()
     with pytest.raises(ValueError, match="Master-Key fehlt"):
-        backups.create_full_backup("1.3.1", "broken", "correct horse battery staple")
+        backups.create_full_backup("1.3.5", "broken", "correct horse battery staple")
     assert not list((data / "backups").glob("*.bbm"))
 
 
@@ -91,13 +91,13 @@ def test_manager_backup_refuses_mismatched_master_key(monkeypatch, tmp_path: Pat
     data, _key = _prepare_complete_state(monkeypatch, tmp_path)
     (data / "security" / "master.key").write_bytes(Fernet.generate_key() + b"\n")
     with pytest.raises(ValueError, match="nicht entschlüsselt"):
-        backups.create_full_backup("1.3.1", "broken", "correct horse battery staple")
+        backups.create_full_backup("1.3.5", "broken", "correct horse battery staple")
 
 
 def test_restore_rejects_manager_backup_without_security_pair(monkeypatch, tmp_path: Path):
     data, _key = _prepare_complete_state(monkeypatch, tmp_path)
     source = tmp_path / "complete.zip"
-    backups._write_plain_backup(source, "1.3.1", "complete")
+    backups._write_plain_backup(source, "1.3.5", "complete")
     broken = tmp_path / "broken.zip"
     with zipfile.ZipFile(source) as input_archive, zipfile.ZipFile(broken, "w", zipfile.ZIP_DEFLATED) as output_archive:
         for item in input_archive.infolist():

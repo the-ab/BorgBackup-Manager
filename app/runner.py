@@ -542,10 +542,7 @@ def _manager_repository_command(repository: Repository, parts: list[str], *, ver
     )
 
 
-def repository_access_command(repository: Repository, parts: list[str], *, fallback_host: Host | None = None, verbose_ssh: bool = False) -> Command:
-    # Repository administration is always executed by the Manager. fallback_host
-    # remains in the signature for compatibility with older callers but is no
-    # longer used for external repositories.
+def repository_access_command(repository: Repository, parts: list[str], *, verbose_ssh: bool = False) -> Command:
     return _manager_repository_command(repository, parts, verbose_ssh=verbose_ssh)
 
 
@@ -2025,11 +2022,6 @@ def delete_archives_command(
         ])
     script_lines.append('exit "$bbm_result"')
     return repository_access_command(repository, ["sh", "-c", "\n".join(script_lines)])
-
-
-def delete_archive_command(job: Job, archive: str, compact_after: bool = True) -> Command:
-    """Backward-compatible job wrapper for repository-wide archive deletion."""
-    return delete_archives_command(job.repository, [archive], compact_after)
 
 
 def rename_archive_command(job: Job, archive: str, new_name: str) -> Command:

@@ -218,6 +218,8 @@ BBM_ARCHIVE_MOUNT_PATH="$(absolute_directory "$BBM_ARCHIVE_MOUNT_PATH" "Archiv-M
   || fail "Daten- und Repository-Verzeichnis dürfen nicht identisch sein"
 [[ "$BBM_DATA_PATH/" != "$BBM_REPOSITORY_PATH/"* ]] \
   || fail "Das Manager-Datenverzeichnis darf nicht innerhalb des Repository-Verzeichnisses liegen"
+[[ "$BBM_REPOSITORY_PATH/" != "$BBM_DATA_PATH/"* ]] \
+  || fail "Das Repository-Verzeichnis darf nicht innerhalb des Manager-Datenverzeichnisses liegen"
 [[ "$BBM_ARCHIVE_MOUNT_PATH" != "$BBM_DATA_PATH" && "$BBM_ARCHIVE_MOUNT_PATH" != "$BBM_REPOSITORY_PATH" ]] \
   || fail "Das Archiv-Mount-Verzeichnis muss von Daten- und Repository-Verzeichnis getrennt sein"
 [[ "$BBM_ARCHIVE_MOUNT_PATH/" != "$BBM_REPOSITORY_PATH/"* ]] \
@@ -305,19 +307,7 @@ BBM_HEALTH_REQUIRE_SSHD=$BBM_HEALTH_REQUIRE_SSHD
 BBM_LOG_MAX_BYTES=$BBM_LOG_MAX_BYTES
 BBM_LOG_ROTATIONS=$BBM_LOG_ROTATIONS
 EOF
-# Unbekannte/erweiterte Schlüssel einer vorhandenen .env bleiben erhalten.
-# Veraltete Migrationsschalter werden bewusst nicht erneut übernommen.
-if [[ -f .env ]]; then
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ "$line" == *=* ]] || continue
-    key="${line%%=*}"
-    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-    case "$key" in
-      COMPOSE_FILE|BBM_ARCHIVE_MOUNTS_ENABLED|BBM_ARCHIVE_MOUNT_ROOT|BBM_ARCHIVE_MOUNT_HOST_PATH|BBM_ADMIN_TOKEN|BBM_SECRET_KEY|BBM_ALLOW_LEGACY_TOKEN_AUTH|BBM_DEBUG_LOG_LEVEL|BBM_HTTP_PORT|BBM_TLS_CERT_FILE|BBM_TLS_KEY_FILE) continue ;;
-    esac
-    grep -qE "^${key}=" "$env_tmp" || printf '%s\n' "$line" >> "$env_tmp"
-  done < .env
-fi
+# Die erzeugte .env enthält ausschließlich dokumentierte aktuelle Schlüssel.
 mv -f -- "$env_tmp" .env
 trap - EXIT
 chmod 600 .env

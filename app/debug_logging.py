@@ -32,9 +32,8 @@ _EXCEPTION_LINE = re.compile(r"(?:^|\n)[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception
 def _level() -> int:
     """Return the fixed incident-log threshold.
 
-    ``debug.log`` is an incident log, not a verbose application log. Legacy
-    ``BBM_DEBUG_LOG_LEVEL`` settings therefore no longer lower or raise this
-    threshold.
+    ``debug.log`` is an incident log, not a verbose application log. Its
+    threshold is fixed and cannot be lowered through runtime configuration.
     """
     return logging.ERROR
 

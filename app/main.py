@@ -52,7 +52,6 @@ from app.borg_warnings import (
     warning_diagnosis,
     warning_summary_from_json,
 )
-from app.backup_stats import parse_backup_statistics
 from app.borg_stats import parse_archive_listing, parse_borg_info
 from app.config import (
     BACKUP_DIR,
@@ -84,7 +83,7 @@ from app.backups import (
     restore_manager_borg_cache_from_backup,
     store_uploaded_backup, cleanup_stale_security_snapshots,
 )
-from app.database import Base, SessionLocal, engine, migrate_schema
+from app.database import SessionLocal, engine, initialize_manager_database
 from app.database_maintenance import cleanup_manager_database, database_cleanup_preview
 from app.external_repository import (
     external_filesystem_parallel_identity, fingerprint_known_hosts, generate_ed25519_keypair, normalize_known_hosts,
@@ -108,12 +107,6 @@ from app.repository_state import managed_repository_present
 from app.release import APP_RELEASE_DATE
 from app.log_filter import extract_error_output
 from app.models import BackupSchedule, Host, HostRepositoryAccess, Job, JobIdReservation, ManagerArchiveMount, NotificationDelivery, Repository, Run
-from app.host_ssh_actions import migrate_legacy_host_ssh_actions
-from app.ssh_history_cleanup import (
-    purge_sensitive_maintenance_backups,
-    sanitize_legacy_ssh_run_history,
-    verify_no_legacy_ssh_plaintext_markers,
-)
 from app.sqlite_maintenance import run_pending_manager_vacuum
 from app.runner import (
     archive_export_command,
@@ -134,7 +127,6 @@ from app.runner import (
     scan_host_key,
 )
 from app.schemas import (
-    ArchiveDeleteIn,
     ArchiveBulkDeleteIn,
     ArchiveExportIn,
     ArchiveDiffIn,
@@ -401,32 +393,6 @@ async def prepare_external_repository_credentials(data, existing: Repository | N
         "external_known_hosts": known_hosts,
         "external_host_fingerprint": fingerprint,
     }
-
-
-def migrate_repository_validation_diagnostics() -> None:
-    """Condense verbose legacy SSH/Borg errors while retaining copyable details."""
-    with SessionLocal() as db:
-        changed = False
-        for row in db.scalars(select(Repository).where(Repository.validation_error.is_not(None))):
-            raw = (row.validation_details or row.validation_error or "").strip()
-            if not raw:
-                continue
-            if (
-                not row.validation_details
-                and len(raw) <= 600
-                and not re.search(r"(?:Remote:\s*)?debug\d+:|KEX algorithms:|SSH2_MSG_KEXINIT", raw, re.IGNORECASE)
-            ):
-                # Already actionable legacy text, for example a migration hint.
-                row.validation_details = raw
-                changed = True
-                continue
-            summary, details = compact_repository_diagnostic("", raw, 2)
-            if row.validation_error != summary or row.validation_details != details:
-                row.validation_error = summary
-                row.validation_details = details
-                changed = True
-        if changed:
-            db.commit()
 
 
 def repository_slug(name: str) -> str:
@@ -758,7 +724,6 @@ def apply_job(row: Job, data: JobIn) -> None:
     row.source_paths_json = source_paths_json
     row.exclude_patterns_json = exclude_patterns_json
     row.archive_template = data.archive_template
-    row.schedule = None
     row.compression = data.compression
     row.prune_options_json = json.dumps(data.prune_options)
     row.create_options_json = create_options_json
@@ -771,62 +736,6 @@ def apply_job(row: Job, data: JobIn) -> None:
         row.source_stats_checked_at = None
         row.source_stats_origin = None
         row.source_stats_detail_json = "{}"
-
-
-def repair_invalid_stored_borg_versions() -> int:
-    """Remove impossible values produced by the old free-form log parser."""
-    repaired = 0
-    with SessionLocal() as db:
-        for host in db.scalars(select(Host).where(Host.borg_version.is_not(None))):
-            if version_tuple(host.borg_version) is None:
-                host.borg_version = None
-                host.borg_version_status = "unknown"
-                host.borg_checked_at = None
-                repaired += 1
-        for run in db.scalars(select(Run).where(Run.borg_version.is_not(None))):
-            if version_tuple(run.borg_version) is None:
-                run.borg_version = None
-                repaired += 1
-        if repaired:
-            db.commit()
-    return repaired
-
-
-def sync_job_archive_prefixes() -> None:
-    with SessionLocal() as db:
-        changed = False
-        reserved_ids = set(db.scalars(select(JobIdReservation.id)))
-        historical_ids = {
-            value for value in db.scalars(select(Run.job_id).where(Run.job_id.is_not(None))) if value is not None
-        }
-        jobs = list(db.scalars(select(Job)))
-        for job_id in sorted(historical_ids | {row.id for row in jobs}):
-            if job_id not in reserved_ids:
-                db.add(JobIdReservation(id=job_id))
-                reserved_ids.add(job_id)
-                changed = True
-        for row in jobs:
-            compact_prefix = f"bbm-{row.id}-"
-            current_prefix = row.archive_prefix or f"bbm-job-{row.id}-"
-            try:
-                history = json.loads(row.archive_prefix_history_json or "[]")
-            except (TypeError, json.JSONDecodeError):
-                history = []
-            if not isinstance(history, list):
-                history = []
-            history = [value for value in history if isinstance(value, str) and value]
-            if current_prefix != compact_prefix and current_prefix not in history:
-                history.append(current_prefix)
-                changed = True
-            if row.archive_prefix != compact_prefix:
-                row.archive_prefix = compact_prefix
-                changed = True
-            serialized = json.dumps(history)
-            if row.archive_prefix_history_json != serialized:
-                row.archive_prefix_history_json = serialized
-                changed = True
-        if changed:
-            db.commit()
 
 
 def allocate_job_id(db) -> int:
@@ -1082,16 +991,11 @@ async def lifespan(_: FastAPI):
     # Build a fresh instance for every application lifecycle so reloads and
     # clean restarts never reuse a scheduler attached to a closed loop.
     scheduler = AsyncIOScheduler(timezone=APP_TIMEZONE)
-    Base.metadata.create_all(engine)
+    initialize_manager_database()
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    migrate_schema()
     reconcile_manager_archive_mounts()
     initialize_security_store()
-    migrate_legacy_host_ssh_actions()
-    sanitize_legacy_ssh_run_history(engine)
-    purge_sensitive_maintenance_backups()
     run_pending_manager_vacuum(engine)
-    verify_no_legacy_ssh_plaintext_markers(engine)
     cleanup_stale_security_snapshots()
     # The container entrypoint materializes runtime TLS and SSH material as root
     # before dropping privileges.  Do not repeat that privileged operation in
@@ -1099,10 +1003,7 @@ async def lifespan(_: FastAPI):
     # bootstrap normally when the marker is absent.
     if os.getenv("BBM_RUNTIME_SECURITY_PREPARED") != "1":
         bootstrap_security_material()
-    migrate_repository_validation_diagnostics()
     sync_managed_repository_locations()
-    sync_job_archive_prefixes()
-    repair_invalid_stored_borg_versions()
     with SessionLocal() as db:
         cleanup_orphan_run_logs(set(db.scalars(select(Run.id))))
     sync_repository_access_assignments()
@@ -1254,16 +1155,10 @@ def login(data: LoginIn, request: Request, response: Response):
             headers={"Retry-After": str(retry_after)},
         )
     second_factor = data.second_factor.get_secret_value() if data.second_factor else None
-    authentication = authenticate_user(
+    user, auth_status = authenticate_user(
         data.username, data.password.get_secret_value(), remote_address, second_factor,
         return_status=True,
     )
-    if isinstance(authentication, tuple):
-        user, auth_status = authentication
-    else:
-        # Test doubles and integrations written against the pre-2FA helper may
-        # still return only the user object.
-        user, auth_status = authentication, "ok" if authentication is not None else "invalid_credentials"
     if auth_status == "two_factor_required":
         write_access_event("login_two_factor_required", remote_address=remote_address, username=data.username, status="challenge", user_agent=user_agent)
         return JSONResponse({"status": "two-factor-required", "detail": "Zwei-Faktor-Code erforderlich"}, status_code=202)
@@ -1433,19 +1328,9 @@ def users_list() -> list[dict]:
 @app.get("/api/users/security-status", dependencies=admin_protected)
 def users_security_status() -> dict:
     status = security_status()
-    obsolete_private_files = []
-    for path in (
-        DATA_DIR / "ssh" / "id_ed25519",
-        DATA_DIR / "repository-ssh" / "ssh_host_ed25519_key",
-        DATA_DIR / "tls" / "privkey.pem",
-    ):
-        if path.is_file():
-            obsolete_private_files.append(str(path))
     status.update({
-        "obsolete_private_files": obsolete_private_files,
-        "sensitive_storage_ok": not obsolete_private_files,
         "secret_database": status.get("database"),
-        "master_key_note": "Der Master-Key bleibt als einziges externes Vertrauensanker-Geheimnis unter /data/security/master.key.",
+        "master_key_note": "Der Master-Key bleibt als einziger externer Vertrauensanker unter /data/security/master.key.",
     })
     return status
 
@@ -1563,9 +1448,8 @@ def component_health_payload() -> tuple[dict, bool]:
     sshd = repository_sshd_listening()
     scheduler_running = bool(scheduler.running)
     # The visible/notification status evaluates every BBM core component.
-    # HEALTH_REQUIRE_SSHD only controls whether the strict HTTP probe must fail
-    # for update/compatibility purposes; it does not hide an SSH service fault
-    # from administrators or system-health notifications.
+    # HEALTH_REQUIRE_SSHD controls whether the public strict probe also fails
+    # when the repository SSH service is unavailable.
     operational_healthy = database and authentication and scheduler_running and sshd
     strict_healthy = database and authentication and scheduler_running and (sshd or not HEALTH_REQUIRE_SSHD)
     return {
@@ -1576,19 +1460,6 @@ def component_health_payload() -> tuple[dict, bool]:
         "repository_sshd": sshd,
         "repository_sshd_required": bool(HEALTH_REQUIRE_SSHD),
     }, strict_healthy
-
-
-@app.get("/api/health")
-def health():
-    """Public compatibility probe without internal component disclosure.
-
-    This endpoint intentionally returns HTTP 200 even for a degraded
-    repository-SSH probe because older update scripts treat every non-2xx
-    response as a failed installation. Detailed diagnostics require an
-    administrator session at `/api/system/health`.
-    """
-    payload, _strict_healthy = component_health_payload()
-    return {"status": payload["status"]}
 
 
 @app.get("/api/health/strict")
@@ -1912,12 +1783,10 @@ def delete_notification_deliveries() -> dict:
 def release_notes(language: str = "en") -> dict:
     german = language == "de"
     filename = "RELEASE_NOTES.de.md" if german else "RELEASE_NOTES.md"
-    candidates = [Path(__file__).parent / filename, Path(__file__).parent.parent / filename]
-    fallback = Path(__file__).parent / "RELEASE_NOTES.md"
-    path = next((candidate for candidate in candidates if candidate.is_file()), fallback)
+    path = Path(__file__).parent.parent / filename
     return {
         "version": APP_VERSION,
-        "language": "de" if german and path.name.endswith(".de.md") else "en",
+        "language": "de" if german else "en",
         "content": path.read_text(encoding="utf-8") if path.is_file() else "",
     }
 
@@ -2116,7 +1985,7 @@ async def system_diagnostics() -> dict:
     # The production API already runs as the unprivileged ``borg`` user.
     # Only a root caller may use runuser; manager_borg_argv therefore executes
     # these access checks directly in production and retains root-side
-    # compatibility for development and maintenance contexts.
+    # support for privileged development and maintenance contexts.
     for name, parts in {
         "repository_readable_as_borg": ["test", "-r", str(REPOSITORY_ROOT)],
         "repository_writable_as_borg": ["test", "-w", str(REPOSITORY_ROOT)],
@@ -2362,17 +2231,6 @@ async def check_host_version(host_id: int) -> dict:
         "version": compatibility.version, "supported": compatibility.supported,
         "level": compatibility.level, "title": compatibility.title, "message": compatibility.message,
     }
-
-
-@app.post("/api/hosts/{host_id}/bootstrap-repository", dependencies=admin_protected)
-async def bootstrap_repository(host_id: int) -> dict:
-    try:
-        keys = await bootstrap_host_repository(host_id)
-        return {"status": "ready", "repository_keys": sorted(keys), "configured": len(keys)}
-    except LookupError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/jobs/{job_id}/bootstrap-repository", dependencies=admin_protected)
@@ -3450,38 +3308,6 @@ async def archive_info(job_id: int, archive: str) -> dict:
     return {"archive": details[0], "repository_statistics": normalized.get("repository", {})}
 
 
-@app.post("/api/jobs/{job_id}/archive-delete", status_code=202, dependencies=admin_protected)
-async def delete_archive(job_id: int, data: ArchiveDeleteIn) -> dict:
-    """Backward-compatible single-delete endpoint using repository administration."""
-    with SessionLocal() as db:
-        job = load_job_with_connections(db, job_id, require_client_access=False)
-        repository_id = job.repository_id
-        subject = f"Gerät: {job.host.name}"
-        if db.scalar(
-            select(ManagerArchiveMount.id).where(
-                ManagerArchiveMount.repository_id == repository_id,
-                ManagerArchiveMount.archive == data.archive,
-                ManagerArchiveMount.status.in_(["mounting", "mounted"]),
-            )
-        ):
-            raise HTTPException(409, "Archive is currently mounted and must be unmounted first")
-    if not await archive_exists(job, data.archive):
-        raise HTTPException(404, "Archive not found in this repository")
-    try:
-        return {
-            "run_id": queue_repository_action(
-                repository_id,
-                "delete-archive",
-                {"archives": [data.archive], "compact_after": data.compact_after},
-                subject=subject,
-            )
-        }
-    except LookupError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except ValueError as exc:
-        status = 409 if "queued or running" in str(exc) else 400
-        raise HTTPException(status, str(exc)) from exc
-
 
 @app.post("/api/jobs/{job_id}/archive-rename", status_code=202, dependencies=admin_protected)
 async def rename_archive(job_id: int, data: ArchiveRenameIn) -> dict:
@@ -4165,22 +3991,6 @@ def run_json(
 
     bbm_network = sample_manager_network() if active and log_offset is not None else None
 
-    backup_statistics = {}
-    if (
-        row.action == "backup"
-        and log_offset is None
-        and (
-            not row.archive_name_snapshot
-            or row.backup_original_size_bytes is None
-            or row.backup_compressed_size_bytes is None
-            or row.backup_deduplicated_size_bytes is None
-            or row.backup_file_count is None
-        )
-    ):
-        # Current runs persist parsed backup statistics in dedicated columns.
-        # Only legacy/incomplete rows need the comparatively expensive fallback
-        # parser over the bounded log preview.
-        backup_statistics = parse_backup_statistics(combined)
     return {
         "id": row.id, "job_id": row.job_id, "retention_protected": bool(retention_protected),
         "job_name": (
@@ -4202,11 +4012,11 @@ def run_json(
         "warning_summary": warning_summary,
         "trigger_type": row.trigger_type or "manual",
         "schedule_name": row.schedule_name_snapshot,
-        "archive_name": row.archive_name_snapshot or backup_statistics.get("archive_name"),
-        "backup_original_size_bytes": row.backup_original_size_bytes if row.backup_original_size_bytes is not None else backup_statistics.get("original_size_bytes"),
-        "backup_compressed_size_bytes": row.backup_compressed_size_bytes if row.backup_compressed_size_bytes is not None else backup_statistics.get("compressed_size_bytes"),
-        "backup_deduplicated_size_bytes": row.backup_deduplicated_size_bytes if row.backup_deduplicated_size_bytes is not None else backup_statistics.get("deduplicated_size_bytes"),
-        "backup_file_count": row.backup_file_count if row.backup_file_count is not None else backup_statistics.get("file_count"),
+        "archive_name": row.archive_name_snapshot,
+        "backup_original_size_bytes": row.backup_original_size_bytes,
+        "backup_compressed_size_bytes": row.backup_compressed_size_bytes,
+        "backup_deduplicated_size_bytes": row.backup_deduplicated_size_bytes,
+        "backup_file_count": row.backup_file_count,
         "backup_progress": backup_progress,
         "restore_progress": restore_progress,
         "restore_total_size_bytes": row.restore_total_size_bytes,
@@ -4477,19 +4287,6 @@ def _cache_backup_task_worker(
             f"Cache backup task {task_id} failed", exc=exc, logger_name="bbm.background",
         )
         fail_manager_backup_task(task_id, public_error_message(error_id))
-
-
-@app.post("/api/backups", status_code=201, dependencies=admin_protected)
-def create_backup(data: ManagerBackupCreateIn) -> dict:
-    """Synchronous manager-only backup endpoint for API compatibility."""
-    try:
-        if current_manager_backup_task(include_last=False):
-            raise HTTPException(409, "Es wird bereits ein Backup erstellt")
-        passphrase = data.passphrase.get_secret_value() if data.passphrase else None
-        path = create_full_backup(APP_VERSION, data.label, passphrase, compression=data.compression)
-        return next(item for item in list_full_backups() if item["name"] == path.name)
-    except (OSError, ValueError) as exc:
-        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/backups/start", status_code=202, dependencies=admin_protected)
