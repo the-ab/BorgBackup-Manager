@@ -2,6 +2,8 @@
 
 Thank you for helping improve the project.
 
+[Deutsche Version](CONTRIBUTING.de.md)
+
 ## Before opening a change
 
 - Use a public issue for normal bugs and feature proposals.
@@ -12,8 +14,7 @@ Thank you for helping improve the project.
 
 ## Development setup
 
-BorgBackup Manager targets Python 3.13 and the pinned dependencies in
-`requirements.txt`.
+BorgBackup Manager targets Python 3.13 and the pinned dependencies in `requirements.txt`.
 
 ```bash
 python3.13 -m venv .venv
@@ -24,7 +25,7 @@ python -m pip install pytest==9.0.2 httpx==0.28.1 pytest-asyncio==1.4.0
 python -m pytest -q
 ```
 
-Also complete `RELEASE_CHECKLIST.md` (or the equivalent German `RELEASE_CHECKLIST.de.md`) and run the repository checks:
+Run the local repository checks as well:
 
 ```bash
 bash scripts/release-check.sh
@@ -42,8 +43,6 @@ A pull request should:
 - avoid database migrations unless they are necessary and documented;
 - pass the local syntax checks and the complete automated test suite.
 
-Substantial use of AI-assisted coding should be disclosed in the pull request.
-AI-generated changes must be reviewed, adapted and tested by the contributor.
+Substantial use of AI-assisted coding should be disclosed in the pull request. AI-generated changes must be reviewed, adapted and tested by the contributor.
 
-By submitting a contribution, you confirm that you have the right to provide it
-and agree that it is licensed under the Apache License 2.0.
+By submitting a contribution, you confirm that you have the right to provide it and agree that it is licensed under the Apache License 2.0.
