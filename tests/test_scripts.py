@@ -282,3 +282,39 @@ def test_update_rejects_wrong_checksum_before_opening_release(tmp_path: Path):
     assert result.returncode == 1
     assert "SHA-256-Prüfung fehlgeschlagen" in result.stdout
     assert "VERSION im ZIP" not in result.stdout
+
+def test_updater_copies_and_backs_up_bilingual_public_documentation(tmp_path: Path):
+    names = [
+        ".env.example", "VERSION", "compose.yaml", "docker-compose", "Dockerfile",
+        "requirements.in", "requirements.txt", "app", "docker", "install.sh",
+        "update.sh", "recovery.sh", "restore-backup.sh", "LICENSE", "NOTICE",
+        "SECURITY.md", "CONTRIBUTING.md", "THIRD-PARTY-NOTICES.md",
+        "README.md", "README.de.md", "INSTALLATION.md", "INSTALLATION.de.md",
+        "RELEASE_NOTES.md", "RELEASE_NOTES.de.md", "RELEASE_CHECKLIST.md",
+        "RELEASE_CHECKLIST.de.md", "CONTRIBUTING.de.md", "SECURITY.de.md",
+        "THIRD-PARTY-NOTICES.de.md", "docs",
+    ]
+    archive = tmp_path / "release.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        for name in names:
+            source = PROJECT_ROOT / name
+            if source.is_dir():
+                for item in source.rglob("*"):
+                    if item.is_file() and "__pycache__" not in item.parts:
+                        package.write(item, "BorgBackup-Manager/" + str(item.relative_to(PROJECT_ROOT)))
+            else:
+                package.write(source, "BorgBackup-Manager/" + name)
+    script = (PROJECT_ROOT / "update.sh").read_text()
+    apply_function = "apply_zip() {" + script.split("apply_zip() {", 1)[1].split("\nprobe_https_endpoint()", 1)[0]
+    items_function = "project_items() {" + script.split("project_items() {", 1)[1].split("\nensure_supported_source_version()", 1)[0]
+    target = tmp_path / "installed"
+    target.mkdir()
+    result = _run(["bash", "-ec", 'PROJECT_DIR="$1"\n' + apply_function + '\napply_zip "$2"\n' + items_function + "\nproject_items",
+                   "--", str(target), str(archive)], cwd=tmp_path)
+    assert result.returncode == 0, result.stdout
+    for name in ["CONTRIBUTING.de.md", "SECURITY.de.md", "THIRD-PARTY-NOTICES.de.md", "docs"]:
+        assert name in result.stdout.splitlines()
+        if (PROJECT_ROOT / name).is_file():
+            assert (target / name).read_bytes() == (PROJECT_ROOT / name).read_bytes()
+    assert (target / "docs/README.md").read_bytes() == (PROJECT_ROOT / "docs/README.md").read_bytes()
+    assert (target / "docs/README.de.md").is_file()

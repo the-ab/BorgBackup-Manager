@@ -3,6 +3,7 @@
 ## v1.3.9 — Reliability and release-package compatibility
 Unreleased quality-update candidate
 
+- The updater now copies and backs up the bilingual contribution/security/license notices and the public documentation index. The updater shipped in 1.3.8 does not copy these supplementary files: for a complete offline documentation set on that first update, copy `CONTRIBUTING.de.md`, `SECURITY.de.md`, `THIRD-PARTY-NOTICES.de.md` and `docs/` from the verified ZIP into the installation directory. This does not affect application data.
 - Manager restore prepares all incoming files before replacing live components and restores the previous files, including SQLite sidecars, after a copy or rename error. Failed rollback preserves the original files for recovery. This is not a power-loss-safe transaction and still requires exclusive access during restore.
 - Blocking Borg and permission probes in system diagnostics run outside the API event loop.
 - Concurrent header-network requests share one measurement; interface or connection changes invalidate the relevant cached sample. The configured polling interval now controls sample reuse.
