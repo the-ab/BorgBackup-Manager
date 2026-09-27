@@ -1,7 +1,7 @@
 # Release Notes
 
 ## v1.3.9 — Zuverlässigkeit und kompatible Releasepakete
-Noch nicht veröffentlichter Kandidat für das Qualitätsupdate
+Veröffentlicht: 27. September 2026
 
 - Der Docker-Build stellt Leserechte für den öffentlichen Anwendungscode im Image sicher. Damit startet der eingeschränkte Anwendungsbenutzer auch dann, wenn ZIP oder Buildverzeichnis mit restriktiver umask beziehungsweise ACL angelegt wurden. Rechte an persistenten Daten und Geheimnissen werden dadurch nicht erweitert.
 - Der Updater übernimmt und sichert jetzt auch die zweisprachigen Beitrags-/Sicherheits-/Lizenzhinweise und den öffentlichen Dokumentationsindex. Der in 1.3.8 enthaltene Updater kopiert diese ergänzenden Dateien noch nicht: Für vollständige Offline-Dokumentation beim ersten Update `CONTRIBUTING.de.md`, `SECURITY.de.md`, `THIRD-PARTY-NOTICES.de.md` und `docs/` aus dem geprüften ZIP in das Installationsverzeichnis kopieren. Anwendungsdaten sind davon nicht betroffen.
