@@ -1,5 +1,14 @@
 # Release Notes
 
+## v1.3.9 — Reliability and release-package compatibility
+Unreleased quality-update candidate
+
+- Manager restore prepares all incoming files before replacing live components and restores the previous files, including SQLite sidecars, after a copy or rename error. Failed rollback preserves the original files for recovery. This is not a power-loss-safe transaction and still requires exclusive access during restore.
+- Blocking Borg and permission probes in system diagnostics run outside the API event loop.
+- Concurrent header-network requests share one measurement; interface or connection changes invalidate the relevant cached sample. The configured polling interval now controls sample reuse.
+- Public technical package checklists are included again so existing ZIP updaters accept the package. Repository audits report missing files instead of crashing.
+- Local tests isolate runtime paths and explicitly model privileged and unprivileged execution. Database schema and encrypted backup format are unchanged.
+
 ## v1.3.8 — Release notes history restored
 Released: August 2, 2026
 

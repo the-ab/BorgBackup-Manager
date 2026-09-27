@@ -1442,38 +1442,74 @@ def prepare_full_backup_restore(path: Path, passphrase: str | None = None) -> tu
 
 
 def apply_prepared_restore(staging: Path) -> None:
+    """Apply a prepared backup, rolling back filesystem errors.
+
+    The caller must quiesce database users before applying. This protects
+    against copy/rename failures, not power loss or concurrent writers.
+    """
     source = staging / "data"
     if not source.is_dir():
         raise ValueError("Vorbereitete Wiederherstellung enthält keine Daten")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    for component in RESTORE_COMPONENTS:
-        incoming = source / component
-        target = DATA_DIR / component
-        if not incoming.exists():
-            # Optional current configuration files that are absent in the
-            # backup must not survive from the replaced installation.
-            if component == "notifications.json":
-                target.unlink(missing_ok=True)
-            continue
-        temporary_target = DATA_DIR / f".{component}.restore-new"
-        if temporary_target.exists():
-            if temporary_target.is_dir():
-                shutil.rmtree(temporary_target)
+    transaction = Path(mkdtemp(prefix=".restore-transaction-", dir=DATA_DIR))
+    incoming_root = transaction / "new"
+    original_root = transaction / "old"
+    incoming_root.mkdir()
+    original_root.mkdir()
+    changed: list[str] = []
+    installed: set[str] = set()
+    keep_transaction = False
+    try:
+        # Finish every potentially expensive copy before touching live data.
+        components = []
+        for component in RESTORE_COMPONENTS:
+            incoming = source / component
+            if not incoming.exists():
+                if component == "notifications.json":
+                    components.append(component)
+                continue
+            prepared = incoming_root / component
+            if incoming.is_dir():
+                shutil.copytree(incoming, prepared, copy_function=shutil.copy2)
             else:
-                temporary_target.unlink()
-        if incoming.is_dir():
-            shutil.copytree(incoming, temporary_target, copy_function=shutil.copy2)
-        else:
-            shutil.copy2(incoming, temporary_target)
-        if component == "manager.db":
-            Path(str(target) + "-wal").unlink(missing_ok=True)
-            Path(str(target) + "-shm").unlink(missing_ok=True)
-        if target.exists():
-            if target.is_dir():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-        temporary_target.replace(target)
+                shutil.copy2(incoming, prepared)
+            components.append(component)
+        # Preserve SQLite sidecars together with the original database until
+        # the entire exchange succeeds, including optional-file removals.
+        if "manager.db" in components:
+            components.extend(("manager.db-wal", "manager.db-shm"))
+        try:
+            for component in components:
+                target = DATA_DIR / component
+                prepared = incoming_root / component
+                if target.exists() or target.is_symlink():
+                    target.replace(original_root / component)
+                changed.append(component)
+                if prepared.exists():
+                    prepared.replace(target)
+                    installed.add(component)
+        except BaseException:
+            rollback_errors = []
+            for component in reversed(changed):
+                target = DATA_DIR / component
+                original = original_root / component
+                try:
+                    if component in installed:
+                        target.replace(incoming_root / component)
+                    if original.exists() or original.is_symlink():
+                        original.replace(target)
+                except OSError as exc:
+                    rollback_errors.append(exc)
+            if rollback_errors:
+                keep_transaction = True
+                raise RuntimeError(
+                    "Wiederherstellung und Rücksetzen fehlgeschlagen; "
+                    f"gesicherte Originaldateien unter {original_root}"
+                ) from rollback_errors[0]
+            raise
+    finally:
+        if not keep_transaction:
+            shutil.rmtree(transaction, ignore_errors=True)
     shutil.rmtree(staging, ignore_errors=True)
 
 

@@ -12,6 +12,8 @@ _TEST_RUNTIME = Path(tempfile.mkdtemp(prefix="bbm-pytest-runtime-"))
 os.environ.setdefault("BBM_DATA_DIR", str(_TEST_RUNTIME))
 os.environ.setdefault("BBM_DATABASE_URL", f"sqlite:///{_TEST_RUNTIME / 'manager.db'}")
 os.environ.setdefault("BBM_UPDATE_CHECK_ENABLED", "0")
+os.environ.setdefault("BBM_RUNTIME_SECRET_DIR", str(_TEST_RUNTIME / "secrets"))
+os.environ.setdefault("BBM_ARCHIVE_MOUNT_PATH", str(_TEST_RUNTIME / "archive-mounts"))
 
 
 def _cleanup_test_runtime() -> None:

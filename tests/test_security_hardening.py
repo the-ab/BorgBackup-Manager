@@ -251,6 +251,16 @@ def test_unprivileged_runtime_bootstrap_preserves_root_owned_host_key(monkeypatc
     private_key.write_text("root-prepared-private-key\n", encoding="utf-8")
     os.chmod(private_key, 0o600)
 
+    original_stat = Path.stat
+    def root_owned_stat(path, *args, **kwargs):
+        info = original_stat(path, *args, **kwargs)
+        if path == private_key:
+            values = list(info)
+            values[4] = 0  # st_uid: simulate the root-owned entrypoint output.
+            return os.stat_result(values)
+        return info
+    monkeypatch.setattr(Path, "stat", root_owned_stat)
+
     original_read_text = Path.read_text
 
     def guarded_read_text(path: Path, *args, **kwargs):

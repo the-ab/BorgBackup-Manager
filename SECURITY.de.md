@@ -2,9 +2,9 @@
 
 ## Unterstützte Version
 
-Sicherheitskorrekturen werden ausschließlich für die aktuelle BorgBackup-Manager-Version veröffentlicht. Der gepflegte Produktstand ist BorgBackup Manager v1.3.8.
+Sicherheitskorrekturen werden ausschließlich für die aktuelle BorgBackup-Manager-Version veröffentlicht. Der gepflegte Produktstand ist BorgBackup Manager v1.3.9.
 
-v1.3.8 behält v1.3.5 als einmalige Kompatibilitätsgrenze bei. Jede regulär gestartete v1.3.5-Installation kann direkt aktualisiert werden; harmlose zusätzliche Datenbankobjekte werden erst nach einer geprüften verlustfreien Übernahme normalisiert. Frühere Versionen werden nicht gepflegt und können eine Neuinstallation von v1.3.8 erfordern. Manager- und Cache-Backups müssen der unterstützten Baseline v1.3.5 oder neuer entsprechen.
+v1.3.9 behält v1.3.5 als einmalige Kompatibilitätsgrenze bei. Jede regulär gestartete v1.3.5-Installation kann direkt aktualisiert werden; harmlose zusätzliche Datenbankobjekte werden erst nach einer geprüften verlustfreien Übernahme normalisiert. Frühere Versionen werden nicht gepflegt und können eine Neuinstallation von v1.3.9 erfordern. Manager- und Cache-Backups müssen der unterstützten Baseline v1.3.5 oder neuer entsprechen.
 
 [English version](SECURITY.md)
 

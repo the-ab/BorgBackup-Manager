@@ -3,12 +3,12 @@
 ## Supported version
 
 Security fixes are released only for the current BorgBackup Manager release.
-BorgBackup Manager v1.3.8 is the maintained product version.
+BorgBackup Manager v1.3.9 is the maintained product version.
 
-v1.3.8 keeps v1.3.5 as the one-time compatibility boundary. Every regularly
+v1.3.9 keeps v1.3.5 as the one-time compatibility boundary. Every regularly
 started v1.3.5 installation can update directly; harmless surplus database
 objects are normalized only after verified lossless copying. Earlier releases
-are not maintained and may require a clean v1.3.8 deployment. Manager and cache
+are not maintained and may require a clean v1.3.9 deployment. Manager and cache
 backups must use the supported v1.3.5-or-newer backup baseline.
 
 ## Reporting a vulnerability

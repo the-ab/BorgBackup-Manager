@@ -1,5 +1,14 @@
 # Release Notes
 
+## v1.3.9 — Zuverlässigkeit und kompatible Releasepakete
+Noch nicht veröffentlichter Kandidat für das Qualitätsupdate
+
+- Die Manager-Wiederherstellung bereitet alle eingehenden Dateien vor dem Austausch vor und setzt bei Kopier- oder Umbenennungsfehlern den bisherigen Dateistand einschließlich SQLite-Begleitdateien zurück. Scheitert das Zurücksetzen, bleiben Originaldateien zur Rettung erhalten. Dies ist keine stromausfallsichere Transaktion und erfordert weiterhin exklusiven Zugriff während der Wiederherstellung.
+- Blockierende Borg- und Berechtigungsprüfungen der Systemdiagnose laufen außerhalb der API-Ereignisschleife.
+- Gleichzeitige Kopfzeilen-Netzwerkabfragen teilen eine Messung; Interface- oder Verbindungsänderungen verwerfen den betreffenden Zwischenspeicher. Das konfigurierte Abfrageintervall bestimmt jetzt die Wiederverwendung einer Messung.
+- Öffentliche technische Paketchecklisten sind wieder enthalten, damit bereits installierte ZIP-Updater das Paket akzeptieren. Das Projektaudit meldet fehlende Dateien, statt abzubrechen.
+- Lokale Tests isolieren Laufzeitpfade und bilden privilegierte sowie unprivilegierte Ausführung ausdrücklich ab. Datenbankschema und verschlüsseltes Backupformat bleiben unverändert.
+
 ## v1.3.8 — Release-Notes-Historie wiederhergestellt
 Veröffentlicht: 2. August 2026
 

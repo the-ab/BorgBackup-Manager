@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from concurrent.futures import Future
 from pathlib import Path
 from threading import Lock
 
@@ -25,9 +26,10 @@ class InterfaceCounter:
 
 
 _lock = Lock()
-_previous: dict[str, dict[str, tuple[int, int, float]]] = {}
-_last_sample: dict[str, tuple[float, list[dict]]] = {}
+_previous: dict[tuple, dict[str, tuple[int, int, float]]] = {}
+_last_sample: dict[tuple, tuple[float, list[dict]]] = {}
 
+_inflight: dict[tuple, Future] = {}
 
 def _safe_interface_names(values: list[str] | tuple[str, ...] | None) -> list[str]:
     result: list[str] = []
@@ -270,41 +272,60 @@ def sample_interfaces(
     maximum: int = 3,
     minimum_interval: float = 0.75,
 ) -> list[dict]:
+    # Selection and connection changes must not reuse stale measurements.
+    names = tuple(_safe_interface_names(selected))
+    connection = (host.address, host.port, host.username, host.host_key) if host is not None else None
+    key = (sample_key, names, maximum, connection)
     now = time.monotonic()
     with _lock:
-        cached = _last_sample.get(sample_key)
+        cached = _last_sample.get(key)
         if cached is not None and now - cached[0] < max(0.2, minimum_interval):
             return [dict(item) for item in cached[1]]
+        pending = _inflight.get(key)
+        owner = pending is None
+        if owner:
+            pending = Future()
+            _inflight[key] = pending
+    if not owner:
+        return [dict(item) for item in pending.result()]
 
-    if host is not None:
-        counters = _remote_counters(host, selected, maximum=maximum)
-        scope = "host"
-    else:
-        counters, scope = _local_counters(selected, maximum=maximum)
-    sampled_at = time.monotonic()
-    with _lock:
-        previous = _previous.setdefault(sample_key, {})
-        result: list[dict] = []
-        current_names: set[str] = set()
-        for item in counters:
-            current_names.add(item.interface)
-            download = upload = None
-            old = previous.get(item.interface)
-            if old is not None:
-                old_rx, old_tx, old_at = old
-                delta = sampled_at - old_at
-                if delta > 0 and item.rx_bytes >= old_rx and item.tx_bytes >= old_tx:
-                    download = ((item.rx_bytes - old_rx) * 8.0) / delta
-                    upload = ((item.tx_bytes - old_tx) * 8.0) / delta
-            previous[item.interface] = (item.rx_bytes, item.tx_bytes, sampled_at)
-            result.append({
-                "interface": item.interface,
-                "ip_address": item.ip_address,
-                "download_bits_per_second": download,
-                "upload_bits_per_second": upload,
-                "scope": scope,
-            })
-        for stale in set(previous) - current_names:
-            previous.pop(stale, None)
-        _last_sample[sample_key] = (sampled_at, result)
+    try:
+        if host is not None:
+            counters = _remote_counters(host, selected, maximum=maximum)
+            scope = "host"
+        else:
+            counters, scope = _local_counters(selected, maximum=maximum)
+        sampled_at = time.monotonic()
+        with _lock:
+            previous = _previous.setdefault(key, {})
+            result: list[dict] = []
+            current_names: set[str] = set()
+            for item in counters:
+                current_names.add(item.interface)
+                download = upload = None
+                old = previous.get(item.interface)
+                if old is not None:
+                    old_rx, old_tx, old_at = old
+                    delta = sampled_at - old_at
+                    if delta > 0 and item.rx_bytes >= old_rx and item.tx_bytes >= old_tx:
+                        download = ((item.rx_bytes - old_rx) * 8.0) / delta
+                        upload = ((item.tx_bytes - old_tx) * 8.0) / delta
+                previous[item.interface] = (item.rx_bytes, item.tx_bytes, sampled_at)
+                result.append({
+                    "interface": item.interface,
+                    "ip_address": item.ip_address,
+                    "download_bits_per_second": download,
+                    "upload_bits_per_second": upload,
+                    "scope": scope,
+                })
+            for stale in set(previous) - current_names:
+                previous.pop(stale, None)
+            _last_sample[key] = (sampled_at, result)
+        pending.set_result(result)
         return [dict(item) for item in result]
+    except BaseException as exc:
+        pending.set_exception(exc)
+        raise
+    finally:
+        with _lock:
+            _inflight.pop(key, None)

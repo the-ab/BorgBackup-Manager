@@ -1,4 +1,4 @@
-# BorgBackup Manager 1.3.8
+# BorgBackup Manager 1.3.9
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -17,7 +17,7 @@ German documentation is available in [`README.de.md`](README.de.md). Installatio
 - Managed-repository service: integrated OpenSSH with restricted `borg serve`
 - Persistent application data: `/docker_data/borgbackup-manager/data` by default
 - Persistent managed repositories: `/docker_data/borgbackup-manager/repositories` by default
-- Published GHCR image: `ghcr.io/the-ab/borgbackup-manager:latest` or pinned `ghcr.io/the-ab/borgbackup-manager:v1.3.8`
+- Published GHCR image: `ghcr.io/the-ab/borgbackup-manager:latest` or pinned `ghcr.io/the-ab/borgbackup-manager:v1.3.9`
 - Local source build: `borgbackup-manager:latest`
 - Default timezone: `Europe/Berlin`
 - Container name: `borgbackup-manager`
@@ -40,7 +40,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.3.8.zip
+BorgBackup-Manager-1.3.9.zip
 ```
 
 The documentation naming convention is:
@@ -417,7 +417,7 @@ Two separate deployment paths are provided.
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.3.8.zip
+unzip /path/BorgBackup-Manager-1.3.9.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -465,7 +465,7 @@ docker compose up -d
 
 `/data/exports` remains reserved for temporary TAR.GZ downloads; real mounts are kept separately below `/archive-mounts` and propagated to the host path.
 
-The standalone Compose file uses `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` follows the current published image; pin the current release as `v1.3.8` for reproducible deployments. On first start the entrypoint safely initializes a fresh empty repository mount that Docker created as `root`. Existing non-empty repository data is never recursively re-owned automatically; correct host ownership, group permissions or ACLs instead. See [`INSTALLATION.md`](INSTALLATION.md) for the complete procedure.
+The standalone Compose file uses `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` follows the current published image; pin the current release as `v1.3.9` for reproducible deployments. On first start the entrypoint safely initializes a fresh empty repository mount that Docker created as `root`. Existing non-empty repository data is never recursively re-owned automatically; correct host ownership, group permissions or ACLs instead. See [`INSTALLATION.md`](INSTALLATION.md) for the complete procedure.
 
 Default endpoints and paths:
 
@@ -475,23 +475,23 @@ Repository SSH:  SERVER:2222
 Data:            /docker_data/borgbackup-manager/data
 Repositories:    /docker_data/borgbackup-manager/repositories
 Local build:     borgbackup-manager:latest
-GHCR:            ghcr.io/the-ab/borgbackup-manager:latest or :v1.3.8
+GHCR:            ghcr.io/the-ab/borgbackup-manager:latest or :v1.3.9
 Container:       borgbackup-manager
 ```
 
 ## Update
 
-BorgBackup Manager v1.3.8 keeps v1.3.5 as the one-time compatibility boundary. Every regularly started v1.3.5 installation is accepted directly. Harmless surplus tables or columns left by earlier upgrades, including the old `archive_mounts` table, are normalized automatically and no manual SQLite intervention is required. Very old installations may no longer update directly because historical database, API, updater and file-format migrations are no longer shipped.
+BorgBackup Manager v1.3.9 keeps v1.3.5 as the one-time compatibility boundary. Every regularly started v1.3.5 installation is accepted directly. Harmless surplus tables or columns left by earlier upgrades, including the old `archive_mounts` table, are normalized automatically and no manual SQLite intervention is required. Very old installations may no longer update directly because historical database, API, updater and file-format migrations are no longer shipped.
 
 Before updating from v1.3.5, create and verify a fresh encrypted manager backup, verify the release ZIP and SHA-256 file, then run the normal updater. A separate database cleanup or manual table removal is not required for a normally running v1.3.5 installation:
 
 ```bash
 bash update.sh \
-  --file updates/BorgBackup-Manager-1.3.8.zip \
+  --file updates/BorgBackup-Manager-1.3.9.zip \
   --sha256 <SHA-256>
 ```
 
-An installation below v1.3.5 must first be brought to the final v1.3.5 state. If that is not possible, use a clean v1.3.8 installation and restore a supported manager backup created by v1.3.5 or newer. v1.3.8 accepts complete v1.3.5 schemas and removes unused surplus objects only after every current table has been copied and verified; genuinely missing current tables or columns remain unsupported.
+An installation below v1.3.5 must first be brought to the final v1.3.5 state. If that is not possible, use a clean v1.3.9 installation and restore a supported manager backup created by v1.3.5 or newer. v1.3.9 accepts complete v1.3.5 schemas and removes unused surplus objects only after every current table has been copied and verified; genuinely missing current tables or columns remain unsupported.
 
 ## Recovery
 
