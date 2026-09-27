@@ -29,6 +29,7 @@ RUN groupadd --gid 1000 borg \
     && mkdir -p /data /repositories /archive-mounts /run/sshd \
     && printf '%s\n' 'user_allow_other' > /etc/fuse.conf \
     && chmod 644 /etc/fuse.conf \
+    && chmod -R a+rX /app \
     && chmod 755 /usr/local/bin/bbm-entrypoint /usr/local/bin/bbm-borg-serve
 
 EXPOSE 8443 2222

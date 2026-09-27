@@ -1,4 +1,4 @@
-# Installation und Betrieb – BorgBackup Manager 1.3.8
+# Installation und Betrieb – BorgBackup Manager 1.3.9
 
 Die englische Standardanleitung befindet sich in `INSTALLATION.md`. Diese Datei ist die deutsche Ausgabe gemäß der einheitlichen `.de.md`-Namenskonvention.
 
@@ -20,7 +20,7 @@ Der Container selbst basiert auf Debian 13 Trixie und installiert Borg 1.4.x.
 Der ZIP-Dateiname enthält die Version, der enthaltene Hauptordner jedoch nicht:
 
 ```text
-BorgBackup-Manager-1.3.8.zip
+BorgBackup-Manager-1.3.9.zip
 └── BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Installation unter `/opt`:
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.3.8.zip
+unzip /pfad/BorgBackup-Manager-1.3.9.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh restore-backup.sh recovery.sh
 ```
@@ -75,7 +75,7 @@ Das Skript erzeugt `.env` und die persistenten Verzeichnisse. Beim ersten Contai
 
 Passwörter werden als scrypt-Prüfwerte gespeichert. Controller-, Repository-SSH- und TLS-Privatschlüssel, Repository-Passphrasen sowie Borg-Keyfiles werden verschlüsselt in `security.db` abgelegt. `master.key` ist der einzige externe Vertrauensanker und besitzt Modus `0600`. Laufzeitdateien werden ausschließlich unter `/run/bbm-secrets` materialisiert.
 
-Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.3.8` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
+Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.3.9` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
 
 ### Installation ausschließlich mit dem GHCR-Image
 
@@ -109,7 +109,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.3.8` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
+`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.3.9` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
 
 Beim ersten Start prüft der Entrypoint den Mount `/repositories` mit der konfigurierten `BBM_BORG_UID` und `BBM_BORG_GID`. Ist der Mount leer und nur wegen der automatischen Docker-Anlage `root` zugeordnet, wird ausschließlich das Stammverzeichnis auf die konfigurierte UID/GID gesetzt und für den Eigentümer lesbar, beschreibbar und betretbar gemacht. Es erfolgt ausdrücklich kein `chown -R`. Enthält das Verzeichnis bereits Daten, werden keine Eigentümer automatisch geändert. In diesem Fall müssen die Rechte oder ACLs auf dem Host passend korrigiert werden. Bei NFS mit `root_squash` ist die Berechtigung serverseitig beziehungsweise über passende numerische UID/GID zu setzen.
 
@@ -196,7 +196,7 @@ Daten- und Repository-Pfad dürfen nicht identisch sein. Die neuen Standardpfade
 
 ## 4. Bestehende v1.3.5-Installation übernehmen
 
-Direkte Updates auf v1.3.8 werden von jeder regulär gestarteten v1.3.5-Installation unterstützt. Harmlose zusätzliche Tabellen oder Spalten aus früheren Updates werden automatisch verlustfrei normalisiert. Frühere Versionen können möglicherweise nicht mehr direkt aktualisiert werden, weil historische Übergangspfade nicht Bestandteil des aktuellen Pakets sind.
+Direkte Updates auf v1.3.9 werden von jeder regulär gestarteten v1.3.5-Installation unterstützt. Harmlose zusätzliche Tabellen oder Spalten aus früheren Updates werden automatisch verlustfrei normalisiert. Frühere Versionen können möglicherweise nicht mehr direkt aktualisiert werden, weil historische Übergangspfade nicht Bestandteil des aktuellen Pakets sind.
 
 Für eine unterstützte Bestandsinstallation müssen `.env`, das persistente Datenverzeichnis und der Repository-Pfad unverändert weiterverwendet werden. Niemals `docker compose down -v` oder das Löschen von `/docker_data/borgbackup-manager` verwenden. Der normale Weg ist das geprüfte `update.sh`; es sichert den Zustand, bereinigt `.env`, baut das Image neu und führt bei einem fehlgeschlagenen Start soweit möglich ein Rollback aus.
 
@@ -849,17 +849,17 @@ Das unter **Einstellungen** konfigurierbare Aktualisierungsintervall ist nur ein
 
 ### Unterstützte Baseline
 
-v1.3.8 behält v1.3.5 als einmalige Rückwärtskompatibilitätsgrenze bei. Jede regulär gestartete v1.3.5-Installation kann direkt aktualisiert werden. Historische Updatehilfen, additive Vor-v1.3.5-Schemamigrationen, alte API-Aliase und veraltete Backupformate sind nicht mehr enthalten.
+v1.3.9 behält v1.3.5 als einmalige Rückwärtskompatibilitätsgrenze bei. Jede regulär gestartete v1.3.5-Installation kann direkt aktualisiert werden. Historische Updatehilfen, additive Vor-v1.3.5-Schemamigrationen, alte API-Aliase und veraltete Backupformate sind nicht mehr enthalten.
 
 Vor dem Update ein frisches verschlüsseltes Manager-Backup erstellen und prüfen sowie das neue ZIP mit der SHA-256-Datei verifizieren. Für eine regulär gestartete v1.3.5-Installation ist keine zusätzliche Bereinigung und kein manueller SQLite-Befehl erforderlich. Anschließend ausführen:
 
 ```bash
 bash update.sh \
-  --file updates/BorgBackup-Manager-1.3.8.zip \
+  --file updates/BorgBackup-Manager-1.3.9.zip \
   --sha256 <SHA-256>
 ```
 
-Der Updater lehnt Quellversionen unter v1.3.5 ab. Beim Start akzeptiert v1.3.8 jedes vollständige v1.3.5-Manager- und Security-Schema, erstellt geschützte Sicherheitskopien, kopiert sämtliche aktuellen Tabellen in das exakte aktuelle Schema und vergleicht Zeilenzahlen, SHA-256-Inhalte, Fremdschlüssel und SQLite-Integrität. Erst danach werden ungenutzte Zusatzobjekte wie `archive_mounts` entfernt. Fehlende aktuelle Tabellen oder Spalten kennzeichnen weiterhin einen tatsächlich älteren, nicht unterstützten Stand. Kann eine ältere Installation nicht zuerst v1.3.5 erreichen, wird v1.3.8 sauber neu installiert und ein unterstütztes Manager-Backup ab v1.3.5 wiederhergestellt.
+Der Updater lehnt Quellversionen unter v1.3.5 ab. Beim Start akzeptiert v1.3.9 jedes vollständige v1.3.5-Manager- und Security-Schema, erstellt geschützte Sicherheitskopien, kopiert sämtliche aktuellen Tabellen in das exakte aktuelle Schema und vergleicht Zeilenzahlen, SHA-256-Inhalte, Fremdschlüssel und SQLite-Integrität. Erst danach werden ungenutzte Zusatzobjekte wie `archive_mounts` entfernt. Fehlende aktuelle Tabellen oder Spalten kennzeichnen weiterhin einen tatsächlich älteren, nicht unterstützten Stand. Kann eine ältere Installation nicht zuerst v1.3.5 erreichen, wird v1.3.9 sauber neu installiert und ein unterstütztes Manager-Backup ab v1.3.5 wiederhergestellt.
 
 ## 23. Healthchecks
 

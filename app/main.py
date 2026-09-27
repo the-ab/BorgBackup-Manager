@@ -1665,7 +1665,7 @@ def get_header_network() -> dict:
             host=host,
             selected=settings.header_network_interfaces,
             maximum=settings.header_network_max_interfaces,
-            minimum_interval=max(0.75, min(2.0, settings.header_network_interval_seconds / 2.0)),
+            minimum_interval=float(settings.header_network_interval_seconds),
         )
     except RuntimeError as exc:
         payload["error"] = str(exc)[:1000]
@@ -1835,9 +1835,10 @@ def _group_external_repository_filesystems(rows: list[dict]) -> list[dict]:
 @app.get("/api/system/diagnostics", dependencies=admin_protected)
 async def system_diagnostics() -> dict:
     try:
-        borg_version = subprocess.run(
+        borg_version = (await asyncio.to_thread(
+            subprocess.run,
             ["borg", "--version"], capture_output=True, text=True, timeout=10, check=False,
-        ).stdout.strip() or "nicht verfügbar"
+        )).stdout.strip() or "nicht verfügbar"
     except (OSError, subprocess.TimeoutExpired):
         borg_version = "nicht verfügbar"
     settings = load_settings()
@@ -1995,9 +1996,10 @@ async def system_diagnostics() -> dict:
         "authorized_keys_readable_as_borg": ["test", "-r", str(REPOSITORY_AUTHORIZED_KEYS_PATH)],
     }.items():
         try:
-            checks[name] = subprocess.run(
+            checks[name] = (await asyncio.to_thread(
+                subprocess.run,
                 manager_borg_argv(parts), timeout=5, check=False,
-            ).returncode == 0
+            )).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             checks[name] = False
     # sshd -t needs access to the root-owned host private key. The root

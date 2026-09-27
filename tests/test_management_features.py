@@ -133,9 +133,10 @@ def test_full_backup_contains_snapshot_manifest_and_keys(monkeypatch, tmp_path: 
 
 def test_managed_repository_location_is_refreshed_after_endpoint_change(monkeypatch):
     import app.main as main_module
-    from app.database import SessionLocal
+    from app.database import Base, SessionLocal, engine
     from app.models import Repository
 
+    Base.metadata.create_all(engine)
     with SessionLocal() as db:
         row = Repository(
             name="moved-managed-repository",
@@ -159,9 +160,10 @@ def test_managed_repository_location_is_refreshed_after_endpoint_change(monkeypa
 
 def test_nested_managed_repository_location_preserves_relative_path(monkeypatch):
     import app.main as main_module
-    from app.database import SessionLocal
+    from app.database import Base, SessionLocal, engine
     from app.models import Repository
 
+    Base.metadata.create_all(engine)
     with SessionLocal() as db:
         row = Repository(
             name="nested-managed-repository",

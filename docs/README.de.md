@@ -22,3 +22,7 @@ Das öffentliche Repository enthält ausschließlich Dokumentation für Benutzer
 ## Richtlinie zur Repository-Struktur
 
 Dateien, die GitHub, der Docker-Build, der Updater oder veröffentlichte Download-Links direkt benötigen, bleiben im Hauptverzeichnis des Repositorys. Laufzeit- und Paketpfade werden durch diese Dokumentationsbereinigung bewusst nicht verändert.
+
+## Technische Paketprüfungen
+
+[Öffentliche Paketcheckliste](../RELEASE_CHECKLIST.de.md) · [English](../RELEASE_CHECKLIST.md). Diese Kompatibilitätsdateien enthalten ausschließlich technische Paketprüfungen; interne Releasefreigaben bleiben außerhalb des öffentlichen Repositorys.

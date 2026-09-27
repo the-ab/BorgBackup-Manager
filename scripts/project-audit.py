@@ -21,7 +21,11 @@ def error(message: str) -> None:
 
 
 def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace")
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        error(f"Required file is missing or unreadable: {path.relative_to(ROOT)}")
+        return ""
 
 
 def audit_version_consistency(version: str) -> None:

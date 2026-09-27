@@ -22,3 +22,7 @@ The public repository keeps only user-facing and contributor-facing documentatio
 ## Repository layout policy
 
 Files required directly by GitHub, the Docker build, the updater or published download links remain at the repository root. Runtime and packaging paths are intentionally unchanged by this documentation cleanup.
+
+## Technical package checks
+
+[Public package checklist](../RELEASE_CHECKLIST.md) · [Deutsch](../RELEASE_CHECKLIST.de.md). These compatibility files contain technical package checks only; internal release approvals remain outside the public repository.

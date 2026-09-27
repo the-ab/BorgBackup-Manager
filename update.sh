@@ -280,7 +280,7 @@ trap cleanup_on_exit EXIT
 project_items() {
   printf '%s\n' \
     .dockerignore .env.example .gitattributes .gitignore \
-    LICENSE NOTICE SECURITY.md CONTRIBUTING.md THIRD-PARTY-NOTICES.md pytest.ini scripts \
+    LICENSE NOTICE SECURITY.md SECURITY.de.md CONTRIBUTING.md CONTRIBUTING.de.md THIRD-PARTY-NOTICES.md THIRD-PARTY-NOTICES.de.md pytest.ini scripts docs \
     compose.yaml Dockerfile install.sh update.sh recovery.sh restore-backup.sh INSTALLATION.md INSTALLATION.de.md README.md README.de.md \
     RELEASE_NOTES.md RELEASE_NOTES.de.md RELEASE_CHECKLIST.md RELEASE_CHECKLIST.de.md VERSION requirements.in requirements.txt requirements-dev.txt app docker docker-compose tests
 }
@@ -481,7 +481,8 @@ if missing:
     raise SystemExit("Release-ZIP ist unvollstaendig; fehlt: " + ", ".join(missing))
 allowed = [
     ".dockerignore", ".env.example", ".gitattributes", ".gitignore",
-    "LICENSE", "NOTICE", "SECURITY.md", "CONTRIBUTING.md", "THIRD-PARTY-NOTICES.md", "pytest.ini", "scripts",
+    "LICENSE", "NOTICE", "SECURITY.md", "SECURITY.de.md", "CONTRIBUTING.md", "CONTRIBUTING.de.md",
+    "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-NOTICES.de.md", "pytest.ini", "scripts", "docs",
     "compose.yaml", "docker-compose", "Dockerfile", "install.sh", "update.sh", "recovery.sh", "restore-backup.sh", "INSTALLATION.md",
     "INSTALLATION.de.md", "README.md", "README.de.md", "RELEASE_NOTES.md", "RELEASE_NOTES.de.md",
     "RELEASE_CHECKLIST.md", "RELEASE_CHECKLIST.de.md",

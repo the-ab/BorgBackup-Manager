@@ -316,7 +316,8 @@ def test_restore_legacy_archive_requires_explicit_override(job):
     assert "::host-2026" in command.argv[-1]
 
 
-def test_archive_export_runs_locally_and_flattens_selected_parent(job):
+def test_archive_export_runs_locally_and_flattens_selected_parent(job, monkeypatch):
+    monkeypatch.setattr("app.runner.os.geteuid", lambda: 0)
     job.repository.storage_path = "/repositories/main"
     command = archive_export_command(
         job, "bbm-job-42-host-2026", ["home/user/Documents/report.pdf"],
@@ -449,7 +450,8 @@ def test_archive_rename_preserves_exact_names_and_diff_supports_paths(job):
     assert "home/user" in diff.preview
 
 
-def test_managed_archive_management_uses_local_repository_path(job):
+def test_managed_archive_management_uses_local_repository_path(job, monkeypatch):
+    monkeypatch.setattr("app.runner.os.geteuid", lambda: 0)
     job.repository.storage_path = "/repositories/main"
     command = repository_command(job, "list-all")
     assert command.argv[:5] == ["runuser", "-u", "borg", "--", "borg"]
@@ -474,7 +476,8 @@ def test_managed_backup_still_runs_on_source_client(job):
     assert "while IFS= read -r _ <&4" in command.argv[-1]
 
 
-def test_archive_browser_uses_borg_list_without_fuse(job):
+def test_archive_browser_uses_borg_list_without_fuse(job, monkeypatch):
+    monkeypatch.setattr("app.runner.os.geteuid", lambda: 0)
     job.repository.storage_path = "/repositories/main"
     archive = "bbm-job-42-host-2026-07-13T22:00:00"
     command = browse_archive_command(job, archive, "home/user")
@@ -490,7 +493,8 @@ def test_archive_browser_uses_borg_list_without_fuse(job):
         browse_archive_command(job, archive, "../etc")
 
 
-def test_repository_archive_info_command_loads_all_regular_archive_statistics(job):
+def test_repository_archive_info_command_loads_all_regular_archive_statistics(job, monkeypatch):
+    monkeypatch.setattr("app.runner.os.geteuid", lambda: 0)
     from app.runner import repository_archives_info_command
 
     command = repository_archives_info_command(job.repository)
