@@ -392,11 +392,12 @@ function parseHashState() {
 }
 
 class ApiError extends Error {
-  constructor(status, message, path) {
+  constructor(status, message, path, sessionState = '') {
     super(message || `HTTP ${status}`);
     this.name = 'ApiError';
     this.status = Number(status) || 0;
     this.path = path;
+    this.sessionState = sessionState;
   }
 }
 
@@ -442,7 +443,10 @@ async function verifyBrowserSession() {
   let body = {};
   try { body = await response.json(); } catch { /* textlose Antwort */ }
   if (!response.ok) {
-    throw new ApiError(response.status, body.detail || 'Der Browser hat die Sitzung nicht übernommen.', '/auth/status');
+    throw new ApiError(
+      response.status, body.detail || 'Der Browser hat die Sitzung nicht übernommen.',
+      '/auth/status', response.headers.get('X-BBM-Session-State') || '',
+    );
   }
   return body;
 }
@@ -791,7 +795,7 @@ async function loadHelpLanguage(language = currentLanguage()) {
   container.className = 'help-fragment-loading';
   container.textContent = normalized === 'en' ? 'Loading manual …' : 'Anleitung wird geladen …';
   try {
-    const response = await fetch(`/static/help.${normalized}.html?v=1.3.9`);
+    const response = await fetch(`/static/help.${normalized}.html?v=1.3.10`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     container.innerHTML = await response.text();
     container.className = '';
@@ -5615,7 +5619,9 @@ async function restoreBrowserSession() {
     scheduleHeaderNetworkPoll(0);
   } catch (error) {
     if (!loginInProgress && !state.currentUser) {
-      const detail = error instanceof ApiError && error.status === 401
+      // Ohne Cookie und Reload-Token ist die Loginseite der normale Startzustand.
+      // Ungültige Sitzungen und Fehler nach einem Login bleiben sichtbar.
+      const detail = error instanceof ApiError && error.status === 401 && error.sessionState !== 'missing'
         ? `Sitzung konnte nicht wiederhergestellt werden: ${error.message}` : '';
       if (error instanceof ApiError && error.status === 401) storeReloadSessionToken('');
       showLoginScreen(detail);

@@ -1,5 +1,7 @@
 # BorgBackup Manager — `.env` for the GHCR deployment
 
+Version v1.3.10 is published as an update ZIP and a prebuilt GHCR image from the same release commit.
+
 This guide documents the `.env` configuration used together with the `compose.yaml` in this directory for a standalone deployment from the published container image.
 
 ```text
@@ -36,7 +38,7 @@ The `.env` file must remain next to `compose.yaml`. It is mounted read-only into
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `BBM_IMAGE_TAG` | `latest` | GHCR tag to deploy. Pin a release such as `v1.3.9` for reproducible installations. |
+| `BBM_IMAGE_TAG` | `latest` | GHCR tag to deploy. Pin a release such as `v1.3.10` for reproducible installations. |
 | `TZ` | `Europe/Berlin` | Time zone used by the Web UI, schedules, and Borg processes. Use a valid IANA time-zone name. |
 | `BBM_HTTPS_PORT` | `8443` | HTTPS Web UI port published on the Docker host. |
 | `BBM_REPOSITORY_SSH_PORT` | `2222` | SSH port published on the Docker host for Borg repository access. |
@@ -59,13 +61,13 @@ BBM_IMAGE_TAG=latest
 `latest` follows the most recently published image. Prefer a fixed release for controlled deployments:
 
 ```dotenv
-BBM_IMAGE_TAG=v1.3.9
+BBM_IMAGE_TAG=v1.3.10
 ```
 
 This selects:
 
 ```text
-ghcr.io/the-ab/borgbackup-manager:v1.3.9
+ghcr.io/the-ab/borgbackup-manager:v1.3.10
 ```
 
 ## Network and TLS

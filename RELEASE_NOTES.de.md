@@ -1,5 +1,11 @@
 # Release Notes
 
+## v1.3.10 — Sitzungsprüfung auf der Loginseite
+Veröffentlicht: 10. Oktober 2026
+
+- Beim Aktualisieren der Loginseite vor der Anmeldung erscheint das normale Anmeldeformular ohne irreführende Sitzungs-Cookie-Warnung. Ungültige oder abgelaufene Sitzungen und eine nach der Anmeldung vom Browser nicht übernommene Sitzung werden weiterhin verständlich gemeldet. Secure-, HttpOnly- und SameSite-Cookie-Einstellungen bleiben unverändert.
+- Veröffentlichung als Update-ZIP mit SHA-256-Datei und als GHCR-Image mit den Tags `v1.3.10` und `latest`, jeweils aus demselben Releasecommit.
+
 ## v1.3.9 — Zuverlässigkeit und kompatible Releasepakete
 Veröffentlicht: 27. September 2026
 
