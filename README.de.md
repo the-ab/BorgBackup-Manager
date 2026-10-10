@@ -1,6 +1,6 @@
 # BorgBackup Manager 1.3.10
 
-Version 1.3.10 wird als Update-ZIP ausgeliefert. Das zuletzt veröffentlichte vorgefertigte GHCR-Image bleibt v1.3.9.
+Version 1.3.10 steht als Update-ZIP und vorgefertigtes GHCR-Image aus demselben Releasecommit bereit.
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -19,7 +19,7 @@ Die englische Standarddokumentation befindet sich in `README.md`. Die deutschen 
 - Repository-Dienst: integrierter OpenSSH-Dienst mit eingeschränktem `borg serve`
 - Persistente Daten: standardmäßig `/docker_data/borgbackup-manager/data`
 - Persistente Repositories: standardmäßig `/docker_data/borgbackup-manager/repositories`
-- Veröffentlichtes GHCR-Image: `ghcr.io/the-ab/borgbackup-manager:latest` oder versionsfest `ghcr.io/the-ab/borgbackup-manager:v1.3.9`
+- Veröffentlichtes GHCR-Image: `ghcr.io/the-ab/borgbackup-manager:latest` oder versionsfest `ghcr.io/the-ab/borgbackup-manager:v1.3.10`
 - Lokaler Quellcode-Build: `borgbackup-manager:latest`
 - Zeitzone für WebUI, Cron-Zeitpläne und Borg-Läufe: `Europe/Berlin`
 - Containername: `borgbackup-manager`
@@ -789,7 +789,7 @@ docker compose up -d
 
 `/data/exports` bleibt ausschließlich der temporäre TAR.GZ-Exportbereich; echte Mounts werden getrennt unter `/archive-mounts` geführt und über den Hostpfad sichtbar gemacht.
 
-Das Compose-Profil verwendet `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` folgt dem jeweils veröffentlichten aktuellen Image; für reproduzierbare Installationen sollte stattdessen ein fester Tag `v1.3.9` gesetzt werden. Ein frisches, leeres und durch Docker als `root` angelegtes Repository-Verzeichnis wird beim ersten Containerstart sicher für `BBM_BORG_UID:BBM_BORG_GID` initialisiert. Nicht leere Repository-Verzeichnisse werden niemals automatisch rekursiv umgebogen; dort müssen Eigentümer, Gruppenrechte oder ACLs auf dem Host passend gesetzt sein.
+Das Compose-Profil verwendet `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` folgt dem jeweils veröffentlichten aktuellen Image; für reproduzierbare Installationen sollte stattdessen ein fester Tag `v1.3.10` gesetzt werden. Ein frisches, leeres und durch Docker als `root` angelegtes Repository-Verzeichnis wird beim ersten Containerstart sicher für `BBM_BORG_UID:BBM_BORG_GID` initialisiert. Nicht leere Repository-Verzeichnisse werden niemals automatisch rekursiv umgebogen; dort müssen Eigentümer, Gruppenrechte oder ACLs auf dem Host passend gesetzt sein.
 
 ### `.env` und Skriptverhalten
 
@@ -805,7 +805,7 @@ Repository-SSH: SERVER:2222
 Daten:          /docker_data/borgbackup-manager/data
 Repositories:   /docker_data/borgbackup-manager/repositories
 Lokaler Build:  borgbackup-manager:latest
-GHCR:           ghcr.io/the-ab/borgbackup-manager:latest oder :v1.3.9
+GHCR:           ghcr.io/the-ab/borgbackup-manager:latest oder :v1.3.10
 Container:      borgbackup-manager
 ```
 

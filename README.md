@@ -1,6 +1,6 @@
 # BorgBackup Manager 1.3.10
 
-Version 1.3.10 is distributed as an update ZIP. The last published prebuilt GHCR image remains v1.3.9.
+Version 1.3.10 is available as an update ZIP and prebuilt GHCR image from the same release commit.
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -19,7 +19,7 @@ German documentation is available in [`README.de.md`](README.de.md). Installatio
 - Managed-repository service: integrated OpenSSH with restricted `borg serve`
 - Persistent application data: `/docker_data/borgbackup-manager/data` by default
 - Persistent managed repositories: `/docker_data/borgbackup-manager/repositories` by default
-- Published GHCR image: `ghcr.io/the-ab/borgbackup-manager:latest` or pinned `ghcr.io/the-ab/borgbackup-manager:v1.3.9`
+- Published GHCR image: `ghcr.io/the-ab/borgbackup-manager:latest` or pinned `ghcr.io/the-ab/borgbackup-manager:v1.3.10`
 - Local source build: `borgbackup-manager:latest`
 - Default timezone: `Europe/Berlin`
 - Container name: `borgbackup-manager`
@@ -467,7 +467,7 @@ docker compose up -d
 
 `/data/exports` remains reserved for temporary TAR.GZ downloads; real mounts are kept separately below `/archive-mounts` and propagated to the host path.
 
-The standalone Compose file uses `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` follows the current published image; pin the current release as `v1.3.9` for reproducible deployments. On first start the entrypoint safely initializes a fresh empty repository mount that Docker created as `root`. Existing non-empty repository data is never recursively re-owned automatically; correct host ownership, group permissions or ACLs instead. See [`INSTALLATION.md`](INSTALLATION.md) for the complete procedure.
+The standalone Compose file uses `ghcr.io/the-ab/borgbackup-manager:${BBM_IMAGE_TAG}`. `BBM_IMAGE_TAG=latest` follows the current published image; pin the current release as `v1.3.10` for reproducible deployments. On first start the entrypoint safely initializes a fresh empty repository mount that Docker created as `root`. Existing non-empty repository data is never recursively re-owned automatically; correct host ownership, group permissions or ACLs instead. See [`INSTALLATION.md`](INSTALLATION.md) for the complete procedure.
 
 Default endpoints and paths:
 
@@ -477,7 +477,7 @@ Repository SSH:  SERVER:2222
 Data:            /docker_data/borgbackup-manager/data
 Repositories:    /docker_data/borgbackup-manager/repositories
 Local build:     borgbackup-manager:latest
-GHCR:            ghcr.io/the-ab/borgbackup-manager:latest or :v1.3.9
+GHCR:            ghcr.io/the-ab/borgbackup-manager:latest or :v1.3.10
 Container:       borgbackup-manager
 ```
 

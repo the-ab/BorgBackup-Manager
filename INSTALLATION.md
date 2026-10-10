@@ -119,7 +119,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.3.9` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
+`BBM_IMAGE_TAG=latest` selects `ghcr.io/the-ab/borgbackup-manager:latest`. Pin `BBM_IMAGE_TAG=v1.3.10` for a controlled and reproducible release. Update an image-only deployment by changing the tag when required, running `docker compose pull`, and recreating it with `docker compose up -d`; persistent host paths remain unchanged.
 
 During first start the entrypoint checks `/repositories` using `BBM_BORG_UID` and `BBM_BORG_GID`. If the mount is empty and is owned by `root` only because Docker created the host directory, only the mount root is assigned to the configured UID/GID and receives owner read/write/execute access. The entrypoint never runs recursive `chown` on repositories. Existing non-empty data therefore requires correct host ownership, group permissions or ACLs. NFS deployments with `root_squash` must configure matching numeric UID/GID or server-side permissions.
 

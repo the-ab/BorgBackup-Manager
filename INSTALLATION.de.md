@@ -75,7 +75,7 @@ Das Skript erzeugt `.env` und die persistenten Verzeichnisse. Beim ersten Contai
 
 Passwörter werden als scrypt-Prüfwerte gespeichert. Controller-, Repository-SSH- und TLS-Privatschlüssel, Repository-Passphrasen sowie Borg-Keyfiles werden verschlüsselt in `security.db` abgelegt. `master.key` ist der einzige externe Vertrauensanker und besitzt Modus `0600`. Laufzeitdateien werden ausschließlich unter `/run/bbm-secrets` materialisiert.
 
-Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.3.9` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
+Beim geführten Quellcode-Build lautet der lokale Image-Name `borgbackup-manager:latest`. Das veröffentlichte Image steht als `ghcr.io/the-ab/borgbackup-manager:latest` und versionsfest als `ghcr.io/the-ab/borgbackup-manager:v1.3.10` bereit. Containername ist `borgbackup-manager`, interner Hostname `bbm`.
 
 ### Installation ausschließlich mit dem GHCR-Image
 
@@ -109,7 +109,7 @@ docker compose ps
 docker compose logs --tail=200 borg-manager
 ```
 
-`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.3.9` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
+`BBM_IMAGE_TAG=latest` verwendet `ghcr.io/the-ab/borgbackup-manager:latest`. Für einen kontrollierten Versionsstand kann beispielsweise `BBM_IMAGE_TAG=v1.3.10` gesetzt werden. Ein Update des Image-Stacks erfolgt durch Anpassen des Tags beziehungsweise erneutes `docker compose pull` und danach `docker compose up -d`. Die persistenten Hostpfade bleiben dabei erhalten.
 
 Beim ersten Start prüft der Entrypoint den Mount `/repositories` mit der konfigurierten `BBM_BORG_UID` und `BBM_BORG_GID`. Ist der Mount leer und nur wegen der automatischen Docker-Anlage `root` zugeordnet, wird ausschließlich das Stammverzeichnis auf die konfigurierte UID/GID gesetzt und für den Eigentümer lesbar, beschreibbar und betretbar gemacht. Es erfolgt ausdrücklich kein `chown -R`. Enthält das Verzeichnis bereits Daten, werden keine Eigentümer automatisch geändert. In diesem Fall müssen die Rechte oder ACLs auf dem Host passend korrigiert werden. Bei NFS mit `root_squash` ist die Berechtigung serverseitig beziehungsweise über passende numerische UID/GID zu setzen.
 
