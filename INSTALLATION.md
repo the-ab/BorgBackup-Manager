@@ -1,4 +1,4 @@
-# Installation and Operations — BorgBackup Manager 1.3.9
+# Installation and Operations — BorgBackup Manager 1.3.10
 
 German instructions are available in [`INSTALLATION.de.md`](INSTALLATION.de.md).
 
@@ -20,7 +20,7 @@ The container is based on Debian 13 Trixie and includes Borg 1.4.x.
 The ZIP filename contains the version while the directory inside does not:
 
 ```text
-BorgBackup-Manager-1.3.9.zip
+BorgBackup-Manager-1.3.10.zip
 `-- BorgBackup-Manager/
 ```
 
@@ -28,7 +28,7 @@ Install under `/opt`:
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.3.9.zip
+unzip /path/BorgBackup-Manager-1.3.10.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 ```
@@ -36,7 +36,7 @@ chmod +x install.sh update.sh recovery.sh restore-backup.sh
 Verify the checksum before installation:
 
 ```bash
-sha256sum -c /path/BorgBackup-Manager-1.3.9.zip.sha256
+sha256sum -c /path/BorgBackup-Manager-1.3.10.zip.sha256
 ```
 
 ## 3. Guided installation
@@ -556,17 +556,17 @@ System diagnostics include repository filesystem usage, Web-user permissions, SS
 
 ### Supported baseline
 
-v1.3.9 keeps v1.3.5 as the one-time backward-compatibility cutoff. Every regularly started v1.3.5 installation can update directly. Historical update helpers, additive pre-v1.3.5 schema migrations, old public API aliases and obsolete backup formats are no longer included.
+v1.3.10 keeps v1.3.5 as the one-time backward-compatibility cutoff. Every regularly started v1.3.5 installation can update directly. Historical update helpers, additive pre-v1.3.5 schema migrations, old public API aliases and obsolete backup formats are no longer included.
 
 Before updating, create and verify a fresh encrypted manager backup and verify the new ZIP with its SHA-256 file. A separate cleanup or manual SQLite command is not required for a normally running v1.3.5 installation. Then run:
 
 ```bash
 bash update.sh \
-  --file updates/BorgBackup-Manager-1.3.9.zip \
+  --file updates/BorgBackup-Manager-1.3.10.zip \
   --sha256 <SHA-256>
 ```
 
-The updater rejects a source version below v1.3.5. At startup, v1.3.9 accepts every complete v1.3.5 manager and security schema, creates restricted safety copies, copies all current tables into the exact current schema, verifies row counts, SHA-256 content digests, foreign keys and SQLite integrity, and only then removes unused surplus objects such as `archive_mounts`. Missing current tables or columns still identify a genuinely older unsupported structure. If an older installation cannot first reach v1.3.5, deploy v1.3.9 cleanly and restore a supported v1.3.5-or-newer manager backup.
+The updater rejects a source version below v1.3.5. At startup, v1.3.10 accepts every complete v1.3.5 manager and security schema, creates restricted safety copies, copies all current tables into the exact current schema, verifies row counts, SHA-256 content digests, foreign keys and SQLite integrity, and only then removes unused surplus objects such as `archive_mounts`. Missing current tables or columns still identify a genuinely older unsupported structure. If an older installation cannot first reach v1.3.5, deploy v1.3.10 cleanly and restore a supported v1.3.5-or-newer manager backup.
 
 ## 23. Health checks
 

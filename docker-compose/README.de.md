@@ -1,5 +1,7 @@
 # BorgBackup Manager – `.env` für die GHCR-Installation
 
+Version v1.3.10 wird ausschließlich als Update-ZIP ausgeliefert; ein vorgefertigter Image-Tag v1.3.10 ist nicht verfügbar. Dieser Image-Stack verwendet weiterhin das veröffentlichte Image v1.3.9.
+
 Diese Anleitung beschreibt die Konfiguration der Datei `.env`, die zusammen mit `compose.yaml` aus diesem Ordner für eine eigenständige Installation über das veröffentlichte Container-Image verwendet wird.
 
 ```text

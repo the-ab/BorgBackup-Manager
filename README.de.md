@@ -1,4 +1,6 @@
-# BorgBackup Manager 1.3.9
+# BorgBackup Manager 1.3.10
+
+Version 1.3.10 wird als Update-ZIP ausgeliefert. Das zuletzt veröffentlichte vorgefertigte GHCR-Image bleibt v1.3.9.
 
 BorgBackup Manager ist eine zentrale Webverwaltung für BorgBackup-1.x-Clients. Der Manager erstellt und plant Backup-Jobs, verwaltet Repositories und Archive, führt Prüfungen aus und steuert Wiederherstellungen. Auf den Quellgeräten ist kein eigenes Backup-Skript und kein lokaler Cronjob erforderlich.
 
@@ -41,7 +43,7 @@ BorgBackup-Manager/
 Dadurch muss nach einem Update oder einer Neuinstallation kein versionsabhängiger Projektordner umbenannt werden. Der ZIP-Dateiname enthält weiterhin die Version, beispielsweise:
 
 ```text
-BorgBackup-Manager-1.3.9.zip
+BorgBackup-Manager-1.3.10.zip
 ```
 
 ## Sicherheit und Härtung
@@ -136,7 +138,7 @@ Nach der ersten Anmeldung muss das Passwort geändert werden. Danach wird das ve
 
 Administratoren können Benutzer anlegen, bearbeiten, deaktivieren, löschen und Passwörter zurücksetzen. Das eigene Konto und der letzte Administrator können nicht gelöscht werden; der letzte aktive Administrator kann außerdem weder deaktiviert noch herabgestuft werden. Normale Benutzer besitzen eine reine Beobachterrolle: Sie dürfen Dashboard, Listen und zusammengefasste Laufstatus lesen sowie ihre persönliche Sprache und Darstellung ändern. Manuelle Ausführungen, vollständige Logs, Archive, Restore/Export/Mount, Geräte-, Repository-, Job-, Zeitplan-, Manager-Backup-, Einstellungs- und Benutzeränderungen bleiben Administratoren vorbehalten.
 
-BorgBackup Manager v1.3.9 verwendet v1.3.5 als einmalige Mindest-Baseline. Ältere Installationen und Backupformate werden nicht automatisch migriert.
+BorgBackup Manager v1.3.10 verwendet v1.3.5 als einmalige Mindest-Baseline. Ältere Installationen und Backupformate werden nicht automatisch migriert.
 
 ## Navigation und Funktionsbereiche
 
@@ -731,7 +733,7 @@ Es stehen zwei getrennte Installationswege zur Verfügung.
 
 ```bash
 cd /opt
-unzip /pfad/BorgBackup-Manager-1.3.9.zip
+unzip /pfad/BorgBackup-Manager-1.3.10.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -809,9 +811,9 @@ Container:      borgbackup-manager
 
 ## Update
 
-BorgBackup Manager v1.3.9 behält v1.3.5 als einmalige Kompatibilitätsgrenze bei. Jede regulär gestartete v1.3.5-Installation kann direkt aktualisiert werden. Harmlose zusätzliche Tabellen oder Spalten aus früheren Updates, einschließlich der alten Tabelle `archive_mounts`, werden automatisch normalisiert; ein manueller SQLite-Eingriff ist nicht erforderlich. Sehr alte Installationen können weiterhin nicht direkt aktualisiert werden, weil historische Datenbank-, API-, Updater- und Dateiformat-Migrationen nicht mehr enthalten sind.
+BorgBackup Manager v1.3.10 behält v1.3.5 als einmalige Kompatibilitätsgrenze bei. Jede regulär gestartete v1.3.5-Installation kann direkt aktualisiert werden. Harmlose zusätzliche Tabellen oder Spalten aus früheren Updates, einschließlich der alten Tabelle `archive_mounts`, werden automatisch normalisiert; ein manueller SQLite-Eingriff ist nicht erforderlich. Sehr alte Installationen können weiterhin nicht direkt aktualisiert werden, weil historische Datenbank-, API-, Updater- und Dateiformat-Migrationen nicht mehr enthalten sind.
 
-Vor dem Update von v1.3.5 ein frisches verschlüsseltes Manager-Backup erstellen und prüfen. Für eine regulär gestartete v1.3.5-Installation ist keine zusätzliche Datenbankbereinigung und keine manuelle Entfernung alter Tabellen erforderlich. v1.3.9 übernimmt den vollständigen aktuellen Datenbestand automatisch in das exakte neue Schema und entfernt ungenutzte Zusatzobjekte erst nach erfolgreichem Inhaltsvergleich.
+Vor dem Update von v1.3.5 ein frisches verschlüsseltes Manager-Backup erstellen und prüfen. Für eine regulär gestartete v1.3.5-Installation ist keine zusätzliche Datenbankbereinigung und keine manuelle Entfernung alter Tabellen erforderlich. v1.3.10 übernimmt den vollständigen aktuellen Datenbestand automatisch in das exakte neue Schema und entfernt ungenutzte Zusatzobjekte erst nach erfolgreichem Inhaltsvergleich.
 
 ## Sicherheitshinweise
 

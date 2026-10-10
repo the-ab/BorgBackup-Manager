@@ -1230,6 +1230,7 @@ def auth_status(
                 f"Der Browser hat den Sitzungs-Cookie {SESSION_COOKIE_NAME!r} nicht gesendet. "
                 "Die tabgebundene Reload-Sitzung ist ebenfalls nicht vorhanden. "
                 "Öffentliche URL und BBM_SESSION_COOKIE_SECURE prüfen.",
+                headers={"X-BBM-Session-State": "missing"},
             )
         raise HTTPException(401, "Die gespeicherte Sitzung ist ungültig oder abgelaufen. Bitte erneut anmelden.")
     if valid_token is not None:

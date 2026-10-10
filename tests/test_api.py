@@ -985,6 +985,19 @@ def test_auth_status_explains_missing_browser_cookie():
     assert response.status_code == 401
     assert main_module.SESSION_COOKIE_NAME in response.json()["detail"]
     assert "BBM_SESSION_COOKIE_SECURE" in response.json()["detail"]
+    assert response.headers["X-BBM-Session-State"] == "missing"
+
+
+def test_auth_status_does_not_mark_invalid_credentials_as_missing_session():
+    for headers in [
+        {"cookie": f"{main_module.SESSION_COOKIE_NAME}=synthetic-invalid-session"},
+        {"authorization": "BBM-Reload synthetic-invalid-reload"},
+    ]:
+        with TestClient(app, base_url="https://testserver") as client:
+            response = client.get("/api/auth/status", headers=headers)
+        assert response.status_code == 401
+        assert "X-BBM-Session-State" not in response.headers
+        assert "ungültig oder abgelaufen" in response.json()["detail"]
 
 
 def test_auth_status_reissues_valid_cookie_with_current_transport_attributes():

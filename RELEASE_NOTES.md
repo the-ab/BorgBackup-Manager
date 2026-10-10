@@ -1,5 +1,11 @@
 # Release Notes
 
+## v1.3.10 — Login-page session check
+Released: October 10, 2026
+
+- Refreshing the login page before signing in shows the normal login form without a misleading session-cookie warning. Invalid or expired sessions and a browser that does not retain a session after login still produce a useful error. Secure, HttpOnly and SameSite cookie settings are unchanged.
+- Published as an update ZIP with its SHA-256 file. The last published prebuilt GHCR image remains v1.3.9.
+
 ## v1.3.9 — Reliability and release-package compatibility
 Released: September 27, 2026
 

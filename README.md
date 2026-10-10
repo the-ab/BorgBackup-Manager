@@ -1,4 +1,6 @@
-# BorgBackup Manager 1.3.9
+# BorgBackup Manager 1.3.10
+
+Version 1.3.10 is distributed as an update ZIP. The last published prebuilt GHCR image remains v1.3.9.
 
 BorgBackup Manager is a self-hosted web interface for centrally operating BorgBackup 1.x across multiple Linux devices. It manages devices, repositories, backup jobs, schedules, archives, restores, execution history, notifications, users and encrypted manager backups. Source devices do not need their own backup scripts or local cron jobs.
 
@@ -40,7 +42,7 @@ BorgBackup-Manager/
 Only the ZIP filename contains the version, for example:
 
 ```text
-BorgBackup-Manager-1.3.9.zip
+BorgBackup-Manager-1.3.10.zip
 ```
 
 The documentation naming convention is:
@@ -417,7 +419,7 @@ Two separate deployment paths are provided.
 
 ```bash
 cd /opt
-unzip /path/BorgBackup-Manager-1.3.9.zip
+unzip /path/BorgBackup-Manager-1.3.10.zip
 cd BorgBackup-Manager
 chmod +x install.sh update.sh recovery.sh restore-backup.sh
 bash install.sh
@@ -481,17 +483,17 @@ Container:       borgbackup-manager
 
 ## Update
 
-BorgBackup Manager v1.3.9 keeps v1.3.5 as the one-time compatibility boundary. Every regularly started v1.3.5 installation is accepted directly. Harmless surplus tables or columns left by earlier upgrades, including the old `archive_mounts` table, are normalized automatically and no manual SQLite intervention is required. Very old installations may no longer update directly because historical database, API, updater and file-format migrations are no longer shipped.
+BorgBackup Manager v1.3.10 keeps v1.3.5 as the one-time compatibility boundary. Every regularly started v1.3.5 installation is accepted directly. Harmless surplus tables or columns left by earlier upgrades, including the old `archive_mounts` table, are normalized automatically and no manual SQLite intervention is required. Very old installations may no longer update directly because historical database, API, updater and file-format migrations are no longer shipped.
 
 Before updating from v1.3.5, create and verify a fresh encrypted manager backup, verify the release ZIP and SHA-256 file, then run the normal updater. A separate database cleanup or manual table removal is not required for a normally running v1.3.5 installation:
 
 ```bash
 bash update.sh \
-  --file updates/BorgBackup-Manager-1.3.9.zip \
+  --file updates/BorgBackup-Manager-1.3.10.zip \
   --sha256 <SHA-256>
 ```
 
-An installation below v1.3.5 must first be brought to the final v1.3.5 state. If that is not possible, use a clean v1.3.9 installation and restore a supported manager backup created by v1.3.5 or newer. v1.3.9 accepts complete v1.3.5 schemas and removes unused surplus objects only after every current table has been copied and verified; genuinely missing current tables or columns remain unsupported.
+An installation below v1.3.5 must first be brought to the final v1.3.5 state. If that is not possible, use a clean v1.3.10 installation and restore a supported manager backup created by v1.3.5 or newer. v1.3.10 accepts complete v1.3.5 schemas and removes unused surplus objects only after every current table has been copied and verified; genuinely missing current tables or columns remain unsupported.
 
 ## Recovery
 
