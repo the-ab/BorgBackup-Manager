@@ -74,13 +74,16 @@ def client_address(request: Request) -> str:
     peer = request.client.host if request.client else "unknown"
     if not is_trusted_proxy(peer):
         return peer
-    forwarded = request.headers.get("x-forwarded-for", "")
-    for raw in forwarded.split(","):
-        value = raw.strip()
-        try:
-            return str(ipaddress.ip_address(value))
-        except ValueError:
-            continue
+    # Trusted proxies append the address they observed. Walk that chain from
+    # the immediate peer and stop when it leaves the configured proxy networks.
+    for header in reversed(request.headers.getlist("x-forwarded-for")):
+        for raw in reversed(header.split(",")):
+            try:
+                address = str(ipaddress.ip_address(raw.strip()))
+            except ValueError:
+                return peer
+            if not is_trusted_proxy(address):
+                return address
     return peer
 
 

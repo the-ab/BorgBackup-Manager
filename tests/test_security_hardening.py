@@ -7,6 +7,7 @@ import sqlite3
 import stat
 import zipfile
 from datetime import datetime, timedelta, timezone
+from ipaddress import ip_network
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,27 @@ def test_login_rate_limit_is_source_scoped_and_does_not_lock_account(monkeypatch
     assert security_store.consume_login_attempt("admin", "192.0.2.11") == (True, 0)
     assert security_store.authenticate_user("admin", "Security-Test-Password-2026!", "192.0.2.11") is not None
     assert security_store.authentication_readiness()["locked_administrators"] == 0
+
+
+@pytest.mark.parametrize(("peer", "headers", "expected"), [
+    ("198.51.100.10", ["203.0.113.5"], "198.51.100.10"),
+    ("192.0.2.2", ["198.51.100.10"], "198.51.100.10"),
+    ("192.0.2.2", ["198.51.100.10, 192.0.2.1"], "198.51.100.10"),
+    ("192.0.2.2", ["198.51.100.10", "192.0.2.1"], "198.51.100.10"),
+    ("192.0.2.2", ["203.0.113.5, 198.51.100.10, 192.0.2.1"], "198.51.100.10"),
+    ("192.0.2.2", ["192.0.2.1"], "192.0.2.2"),
+    ("192.0.2.2", ["2001:db8::10, 192.0.2.1"], "2001:db8::10"),
+    ("192.0.2.2", ["unknown, 192.0.2.1"], "192.0.2.2"),
+    ("192.0.2.2", [], "192.0.2.2"),
+])
+def test_client_address_resolves_at_trusted_proxy_boundary(monkeypatch, peer, headers, expected):
+    monkeypatch.setattr(request_security, "trusted_proxy_networks", lambda: (ip_network("192.0.2.0/24"),))
+    request = Request({
+        "type": "http",
+        "client": (peer, 4321),
+        "headers": [(b"x-forwarded-for", value.encode("ascii")) for value in headers],
+    })
+    assert request_security.client_address(request) == expected
 
 
 def test_session_idle_timeout_revokes_stale_session(monkeypatch, tmp_path: Path):
@@ -144,7 +166,7 @@ def test_container_and_dependency_hardening_is_present():
     sshd = (root / "docker" / "sshd_config").read_text(encoding="utf-8")
     compose = (root / "compose.yaml").read_text(encoding="utf-8")
     requirements = (root / "requirements.txt").read_text(encoding="utf-8")
-    assert dockerfile.startswith("FROM python:3.13.14-slim-trixie@sha256:6771159")
+    assert dockerfile.startswith("FROM python:3.13.18-slim-trixie@sha256:7249d55")
     assert "fastapi==0.139.2" in requirements
     assert "starlette==1.3.1" in requirements
     assert "--hash=sha256:" in requirements
