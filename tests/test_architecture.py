@@ -237,7 +237,7 @@ def test_server_logs_are_size_rotated():
 def test_container_uses_debian_trixie_and_borg_14():
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "python:3.13.14-slim-trixie" in dockerfile
+    assert "python:3.13.18-slim-trixie" in dockerfile
     assert "bookworm" not in dockerfile
     assert "backports" not in dockerfile
     assert "borgbackup" in dockerfile

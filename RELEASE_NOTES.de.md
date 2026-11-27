@@ -1,5 +1,13 @@
 # Release Notes
 
+## v1.4.0 — Sicherheitsupdate
+Veröffentlicht: 27. November 2026
+
+- Der Container verwendet Python 3.13.18 und installiert beim Build die verfügbaren Debian-Trixie-Updates.
+- Die festgelegte `cryptography`-Version ist jetzt 50.0.2. Sie enthält die Korrektur für [CVE-2026-69247](https://github.com/advisories/GHSA-g6cj-pr64-35w5) und bringt OpenSSL 4.0.3 mit.
+- Die Ermittlung der Client-IP für Login-Limits und Zugriffsprotokolle berücksichtigt die konfigurierten vertrauenswürdigen Reverse-Proxys bis zur Grenze zum Client.
+- Update-ZIP und GHCR-Tags `v1.4.0` und `latest` stammen aus demselben Releasecommit.
+
 ## v1.3.10 — Sitzungsprüfung auf der Loginseite
 Veröffentlicht: 10. Oktober 2026
 
