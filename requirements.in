@@ -3,5 +3,5 @@ uvicorn[standard]==0.51.0
 SQLAlchemy==2.0.51
 APScheduler==3.11.3
 pydantic==2.13.4
-cryptography==50.0.0
+cryptography==50.0.2
 qrcode==8.2

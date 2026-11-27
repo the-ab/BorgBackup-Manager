@@ -4,7 +4,7 @@
 Released: November 27, 2026
 
 - The container uses Python 3.13.18 and applies available Debian Trixie updates during the build.
-- The pinned `cryptography` dependency is now 50.0.0, which includes the fix for [CVE-2026-69247](https://github.com/advisories/GHSA-g6cj-pr64-35w5).
+- The pinned `cryptography` dependency is now 50.0.2. It includes the fix for [CVE-2026-69247](https://github.com/advisories/GHSA-g6cj-pr64-35w5) and bundles OpenSSL 4.0.3.
 - Client address resolution for login limits and access logs now follows the configured trusted reverse proxies up to the client-facing boundary.
 - The update ZIP and the GHCR image tags `v1.4.0` and `latest` use the same release commit.
 
